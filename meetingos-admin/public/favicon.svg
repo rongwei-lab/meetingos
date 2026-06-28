@@ -1,0 +1,16 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" role="img" aria-label="MeetingOS">
+  <defs>
+    <linearGradient id="bolt" x1="15" y1="7" x2="48" y2="57" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#7c3aed"/>
+      <stop offset=".55" stop-color="#5b5cf6"/>
+      <stop offset="1" stop-color="#06b6d4"/>
+    </linearGradient>
+    <linearGradient id="shine" x1="18" y1="13" x2="38" y2="42" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#ffffff" stop-opacity=".72"/>
+      <stop offset="1" stop-color="#ffffff" stop-opacity="0"/>
+    </linearGradient>
+  </defs>
+  <rect width="64" height="64" rx="16" fill="#eef4ff"/>
+  <path fill="url(#bolt)" d="M29.7 7.5h21.8L39.7 27.1h12.2L25.4 56.5l4.8-20H12.5L29.7 7.5Z"/>
+  <path fill="url(#shine)" d="M30.5 11.5h13.4L35.8 25H23.1l7.4-13.5Z"/>
+</svg>

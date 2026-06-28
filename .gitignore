@@ -1,0 +1,35 @@
+.DS_Store
+*.log
+
+# Frontend
+node_modules/
+dist/
+dist-ssr/
+coverage/
+.vite/
+
+# Java / Spring Boot
+target/
+.mvn/wrapper/maven-wrapper.jar
+
+# IDE
+.idea/
+.vscode/
+*.iml
+
+# Runtime data
+data/
+uploads/
+minio-data/
+mysql-data/
+redis-data/
+
+# Third-party source checkouts
+# TDuck 按独立服务部署，本仓库只保留 MeetingOS 集成和部署配置，
+# 避免把本地拉取的第三方源码快照一起发布到 MeetingOS 仓库。
+vendor/
+
+# Local env
+.env
+.env.*
+!.env.example

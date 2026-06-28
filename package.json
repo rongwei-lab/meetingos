@@ -1,0 +1,17 @@
+{
+  "name": "meetingos-monorepo",
+  "private": true,
+  "version": "0.1.0",
+  "description": "MeetingOS 会议管理系统完整 MVP monorepo",
+  "scripts": {
+    "admin:install": "npm --prefix meetingos-admin install",
+    "admin:dev": "npm --prefix meetingos-admin run dev",
+    "admin:build": "npm --prefix meetingos-admin run build",
+    "backend:test": "cd meetingos-backend && ./mvnw test",
+    "backend:dev": "cd meetingos-backend && ./mvnw spring-boot:run",
+    "check": "node scripts/check-workspace.mjs"
+  },
+  "engines": {
+    "node": ">=20"
+  }
+}

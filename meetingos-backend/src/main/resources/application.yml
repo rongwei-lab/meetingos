@@ -1,0 +1,61 @@
+server:
+  port: 8080
+
+spring:
+  application:
+    name: meetingos-backend
+  profiles:
+    active: local
+  datasource:
+    url: jdbc:mysql://localhost:3306/meetingos?useUnicode=true&characterEncoding=utf8&serverTimezone=Asia/Shanghai&useSSL=false&allowPublicKeyRetrieval=true
+    username: meetingos
+    password: meetingos
+    driver-class-name: com.mysql.cj.jdbc.Driver
+  jpa:
+    open-in-view: false
+    hibernate:
+      ddl-auto: validate
+    properties:
+      hibernate:
+        jdbc:
+          time_zone: Asia/Shanghai
+        format_sql: true
+  flyway:
+    enabled: true
+    locations: classpath:db/migration
+
+springdoc:
+  api-docs:
+    path: /v3/api-docs
+  swagger-ui:
+    path: /swagger-ui.html
+
+meetingos:
+  app:
+    public-base-url: "${MEETINGOS_PUBLIC_BASE_URL:http://localhost:5173}"
+    upload-dir: "${MEETINGOS_UPLOAD_DIR:uploads}"
+  security:
+    jwt-secret: "${JWT_SECRET:change-this-secret-to-at-least-32-bytes-before-production}"
+    jwt-issuer: "${JWT_ISSUER:meetingos}"
+    access-token-minutes: ${MEETINGOS_SECURITY_ACCESS_TOKEN_MINUTES:720}
+    secure-cookies: ${MEETINGOS_SECURITY_SECURE_COOKIES:false}
+  tduck:
+    webhook-secret: "${TDUCK_WEBHOOK_TOKEN:change-this-webhook-secret}"
+    # TDuck 容器/后端实际回调 MeetingOS 的地址。容器部署时建议指向 nginx 服务名，
+    # 避免 TDuck 把 127.0.0.1 解析到自己容器导致 Webhook 静默失败。
+    webhook-internal-url: "${MEETINGOS_WEBHOOK_INTERNAL_URL:${MEETINGOS_PUBLIC_BASE_URL:http://localhost:5173}/api/integrations/tduck/webhook}"
+    # TDuck 前端地址仅用于生成跳转链接，TDuck 仍然独立部署。
+    public-base-url: "${TDUCK_PUBLIC_URL:http://localhost:8888}"
+    api-base-url: "${TDUCK_API_PUBLIC_URL:http://localhost:8999}"
+    admin-api-base-url: "${TDUCK_ADMIN_API_URL:${TDUCK_API_PUBLIC_URL:http://localhost:8999}}"
+    admin-email: "${TDUCK_ADMIN_EMAIL:}"
+    admin-password: "${TDUCK_ADMIN_PASSWORD:}"
+  public-query:
+    rate-limit-per-minute: ${PUBLIC_QUERY_RATE_LIMIT_PER_MINUTE:30}
+    captcha-enabled: ${PUBLIC_QUERY_CAPTCHA_ENABLED:false}
+    captcha-ttl-seconds: ${PUBLIC_QUERY_CAPTCHA_TTL_SECONDS:300}
+    trust-forward-headers: ${PUBLIC_QUERY_TRUST_FORWARD_HEADERS:false}
+  init-admin:
+    username: "${MEETINGOS_INIT_ADMIN_USERNAME:admin}"
+    password: "${MEETINGOS_INIT_ADMIN_PASSWORD:}"
+    email: "${MEETINGOS_INIT_ADMIN_EMAIL:admin@example.com}"

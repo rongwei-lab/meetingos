@@ -1,0 +1,245 @@
+<template>
+  <main class="public-page" :style="publicPageStyle(settings)">
+    <section class="public-card public-card-wide">
+      <img v-if="safeLogoUrl" class="public-logo" :src="safeLogoUrl" alt="会议 Logo" />
+      <p v-if="settings?.publisher" class="public-kicker">{{ settings.publisher }}</p>
+      <h1>{{ pageTitle(settings, "座位住宿查询") }}</h1>
+      <p v-if="subtitle" class="public-subtitle">{{ subtitle }}</p>
+
+      <n-alert v-if="!settings" class="public-alert" :type="settingsError ? 'warning' : 'info'" :bordered="false">
+        {{ settingsError || "查询设置加载中" }}
+      </n-alert>
+      <n-alert v-else-if="settings.announcement" class="public-alert" type="info" :bordered="false">
+        {{ settings.announcement }}
+      </n-alert>
+      <n-alert v-if="settings && !anyQueryEnabled" class="public-alert" type="warning" :bordered="false">
+        当前会议暂未开放座位和住宿查询
+      </n-alert>
+      <n-alert v-else-if="settings && !windowState.available" class="public-alert" type="warning" :bordered="false">
+        {{ windowState.message }}
+      </n-alert>
+
+      <n-form v-else-if="settings && !hasSuccessfulResult" label-placement="top" class="public-form">
+        <n-form-item v-for="field in activeFields" :key="field" :label="fieldLabel(field)">
+          <n-input v-model:value="values[field]" :placeholder="`请输入${fieldLabel(field)}`" />
+        </n-form-item>
+        <n-form-item v-if="settings.captchaEnabled" :label="captchaQuestion || '验证码'">
+          <div class="captcha-row">
+            <n-input v-model:value="captchaAnswer" placeholder="请输入计算结果" />
+            <n-button secondary :loading="captchaLoading" @click="loadCaptcha">刷新</n-button>
+          </div>
+        </n-form-item>
+        <n-button type="primary" block :color="settings?.themeColor" :loading="loading" @click="query">
+          {{ settings?.buttonText || "立即查询" }}
+        </n-button>
+      </n-form>
+
+      <div v-if="hasQueried" class="combined-results">
+        <public-result-ticket
+          v-if="seatResult && seatRows.length"
+          kind="seat"
+          :attendee-name="seatResult.attendeeName"
+          :rows="seatRows"
+          :notice="settings?.seatNotice"
+        />
+        <section v-else class="public-result">
+          <n-alert v-if="seatResult" type="info" :bordered="false">当前未配置可展示的座位结果字段</n-alert>
+          <n-alert v-else type="warning" :bordered="false">{{ seatMessage }}</n-alert>
+        </section>
+
+        <public-result-ticket
+          v-if="roomResult && roomRows.length"
+          kind="room"
+          :attendee-name="roomResult.attendeeName"
+          :rows="roomRows"
+          :notice="settings?.roomNotice"
+        />
+        <section v-else class="public-result">
+          <n-alert v-if="roomResult" type="info" :bordered="false">当前未配置可展示的住宿结果字段</n-alert>
+          <n-alert v-else type="warning" :bordered="false">{{ roomMessage }}</n-alert>
+        </section>
+      </div>
+
+      <public-result-checkin-action
+        v-if="hasSuccessfulResult"
+        :settings="settings"
+        :meeting-id="queryMeetingId"
+        :meeting-code="queryMeetingCode || null"
+        :values="values"
+      />
+    </section>
+  </main>
+</template>
+
+<script setup lang="ts">
+import { computed, onBeforeUnmount, onMounted, reactive, ref, watchEffect } from "vue";
+import { useRoute } from "vue-router";
+import { useMessage } from "naive-ui";
+import { useMeetingStore } from "@/stores/meeting";
+import type { MeetingQuerySettings, PublicQueryField, RoomQueryResult, SeatQueryResult } from "@/utils/types";
+import { sanitizeImageUrl } from "@/utils/safeUrl";
+import PublicResultCheckinAction from "./PublicResultCheckinAction.vue";
+import PublicResultTicket from "./PublicResultTicket.vue";
+import {
+  buildRoomRows,
+  buildSeatRows,
+  normalizePublicQueryError,
+  pageTitle,
+  publicPageStyle,
+  queryWindowState
+} from "./queryDisplay";
+
+const route = useRoute();
+const store = useMeetingStore();
+const message = useMessage();
+const loading = ref(false);
+const hasQueried = ref(false);
+const settings = ref<MeetingQuerySettings | null>(null);
+const settingsError = ref("");
+const seatResult = ref<SeatQueryResult | null>(null);
+const roomResult = ref<RoomQueryResult | null>(null);
+const seatMessage = ref("尚未查询座位");
+const roomMessage = ref("尚未查询住宿");
+const captchaId = ref<string | null>(null);
+const captchaQuestion = ref("");
+const captchaAnswer = ref("");
+const captchaLoading = ref(false);
+const values = reactive<Record<PublicQueryField, string>>({
+  NAME: "",
+  PHONE: "",
+  PHONE_LAST4: "",
+  ATTENDEE_CODE: "",
+  ORGANIZATION: "",
+  TITLE: "",
+  EMAIL: ""
+});
+
+const queryMeetingId = computed(() => {
+  const raw = route.query.meetingId ?? route.query.mid;
+  const parsed = Number(Array.isArray(raw) ? raw[0] : raw);
+  return Number.isFinite(parsed) ? parsed : null;
+});
+const queryMeetingCode = computed(() => String(route.query.meetingCode || route.params.meetingCode || ""));
+const activeFields = computed(() => settings.value?.fields || []);
+const anyQueryEnabled = computed(() => Boolean(settings.value?.seatQueryEnabled || settings.value?.roomQueryEnabled));
+const subtitle = computed(() => settings.value?.pageDescription || settings.value?.meetingName || "");
+const windowState = computed(() => queryWindowState(settings.value));
+const seatRows = computed(() => buildSeatRows(settings.value, seatResult.value));
+const roomRows = computed(() => buildRoomRows(settings.value, roomResult.value));
+const hasSuccessfulResult = computed(() => Boolean((seatResult.value && seatRows.value.length) || (roomResult.value && roomRows.value.length)));
+const safeLogoUrl = computed(() => sanitizeImageUrl(settings.value?.logoUrl));
+
+onMounted(loadSettings);
+
+watchEffect(() => {
+  // 综合查询只要有一类结果成功，就进入结果展示模式，减少外层导航对票据视觉的干扰。
+  document.body.classList.toggle("public-result-mode", hasSuccessfulResult.value);
+});
+
+onBeforeUnmount(() => {
+  document.body.classList.remove("public-result-mode");
+});
+
+async function loadSettings() {
+  try {
+    settings.value = await store.loadPublicQuerySettings({
+      meetingId: queryMeetingId.value,
+      meetingCode: queryMeetingCode.value || undefined
+    });
+    if (settings.value.captchaEnabled) {
+      await loadCaptcha();
+    }
+  } catch (error) {
+    const text = error instanceof Error ? error.message : "查询设置加载失败";
+    settingsError.value = text;
+    message.error(text);
+  }
+}
+
+async function query() {
+  if (!settings.value || !anyQueryEnabled.value) return;
+  for (const field of activeFields.value) {
+    if (!values[field].trim()) {
+      message.warning(`请输入${fieldLabel(field)}`);
+      return;
+    }
+  }
+  if (settings.value.captchaEnabled && !captchaAnswer.value.trim()) {
+    message.warning("请输入验证码");
+    return;
+  }
+
+  loading.value = true;
+  hasQueried.value = true;
+  seatResult.value = null;
+  roomResult.value = null;
+  seatMessage.value = settings.value.seatQueryEnabled ? "座位查询中" : "座位查询尚未开放";
+  roomMessage.value = settings.value.roomQueryEnabled ? "住宿查询中" : "住宿查询尚未开放";
+
+  /*
+   * 综合查询页允许座位和住宿各自成功或失败。比如会议只安排座位没有住宿时，
+   * 座位结果仍应展示，住宿区域则显示后端返回的明确原因。
+   */
+  const payload = {
+    meetingId: queryMeetingId.value,
+    meetingCode: queryMeetingCode.value || undefined,
+    values,
+    captchaId: captchaId.value,
+    captchaAnswer: captchaAnswer.value
+  };
+  const tasks: Promise<void>[] = [];
+
+  if (settings.value.seatQueryEnabled) {
+    tasks.push(
+      store.publicSeatQuery(payload)
+        .then((result) => {
+          seatResult.value = result;
+        })
+        .catch((error) => {
+          const rawMessage = error instanceof Error ? error.message : "座位查询失败";
+          seatMessage.value = normalizePublicQueryError(rawMessage, settings.value);
+        })
+    );
+  }
+
+  if (settings.value.roomQueryEnabled) {
+    tasks.push(
+      store.publicRoomQuery(payload)
+        .then((result) => {
+          roomResult.value = result;
+        })
+        .catch((error) => {
+          const rawMessage = error instanceof Error ? error.message : "住宿查询失败";
+          roomMessage.value = normalizePublicQueryError(rawMessage, settings.value);
+        })
+    );
+  }
+
+  await Promise.allSettled(tasks);
+  if (settings.value.captchaEnabled && (!seatResult.value || !roomResult.value)) {
+    await loadCaptcha();
+  }
+  loading.value = false;
+}
+
+async function loadCaptcha() {
+  captchaLoading.value = true;
+  try {
+    const captcha = await store.loadPublicCaptcha();
+    captchaId.value = captcha.captchaId || null;
+    captchaQuestion.value = captcha.question || "验证码";
+    captchaAnswer.value = "";
+  } catch (error) {
+    const text = error instanceof Error ? error.message : "验证码加载失败";
+    settingsError.value = text;
+  } finally {
+    captchaLoading.value = false;
+  }
+}
+
+function fieldLabel(field: PublicQueryField) {
+  return settings.value?.fieldOptions.find((item) => item.field === field)?.label || field;
+}
+</script>
+
+<style scoped src="./public.css"></style>

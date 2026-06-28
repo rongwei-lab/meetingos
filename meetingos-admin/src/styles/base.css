@@ -1,0 +1,246 @@
+* {
+  box-sizing: border-box;
+}
+
+:root {
+  --app-bg: #f7fbff;
+  --surface-bg: #ffffff;
+  --surface-muted: #f2f8ff;
+  --text-primary: #102033;
+  --text-secondary: #5f7185;
+  --text-muted: #90a4b0;
+  --border-color: #dbe8f7;
+  --shadow-soft: 0 8px 22px rgba(59, 130, 246, 0.065);
+  --accent-color: #3b82f6;
+  --accent-hover: #60a5fa;
+  --accent-pressed: #2563eb;
+  --accent-soft: #eaf4ff;
+  --accent-border: #bfdbfe;
+  --sidebar-bg: #ffffff;
+  --sidebar-text: #475569;
+  --sidebar-muted: #91a3b0;
+  --sidebar-active-bg: #eaf4ff;
+  --sidebar-active-text: #2563eb;
+  --sidebar-border: #dbe8f7;
+}
+
+html,
+body,
+#app {
+  width: 100%;
+  min-height: 100%;
+  margin: 0;
+}
+
+body {
+  background: var(--app-bg);
+  color: var(--text-primary);
+  font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  letter-spacing: 0;
+}
+
+a {
+  color: inherit;
+  text-decoration: none;
+}
+
+.page-title {
+  margin: 0;
+  font-size: 24px;
+  line-height: 32px;
+  font-weight: 700;
+}
+
+.page-subtitle {
+  margin: 4px 0 0;
+  color: var(--text-secondary);
+  font-size: 14px;
+  line-height: 22px;
+}
+
+.surface {
+  background: var(--surface-bg);
+  border: 1px solid var(--border-color);
+  border-radius: 8px;
+  box-shadow: var(--shadow-soft);
+}
+
+.stat-grid {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 16px;
+}
+
+.stat-card {
+  padding: 20px;
+}
+
+.stat-value {
+  font-size: 28px;
+  line-height: 36px;
+  font-weight: 750;
+}
+
+.stat-label {
+  color: var(--text-secondary);
+  font-size: 14px;
+}
+
+.content-grid {
+  display: grid;
+  grid-template-columns: minmax(0, 2fr) minmax(320px, 1fr);
+  gap: 16px;
+}
+
+.status-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 999px;
+  display: inline-block;
+}
+
+@media (max-width: 1024px) {
+  .stat-grid,
+  .content-grid {
+    grid-template-columns: 1fr 1fr;
+  }
+}
+
+@media (max-width: 720px) {
+  .stat-grid,
+  .content-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .page-title {
+    font-size: 21px;
+    line-height: 29px;
+  }
+}
+
+@media (max-width: 800px) {
+  body {
+    overscroll-behavior: none;
+  }
+
+  .page-title {
+    font-size: 21px;
+    line-height: 28px;
+  }
+
+  .page-subtitle {
+    font-size: 13px;
+    line-height: 20px;
+  }
+
+  .surface {
+    box-shadow: 0 6px 18px rgba(59, 130, 246, 0.055);
+  }
+
+  .n-card.surface > .n-card-header,
+  .n-card.surface > .n-card__content,
+  .n-card.surface > .n-card__footer {
+    padding-left: 14px;
+    padding-right: 14px;
+  }
+
+  .n-modal .n-card {
+    max-width: calc(100vw - 20px);
+  }
+
+  .mobile-table {
+    display: none;
+  }
+
+  .mobile-card-list {
+    display: grid;
+    gap: 10px;
+  }
+
+  .mobile-data-card {
+    min-width: 0;
+    border: 1px solid var(--border-color);
+    border-radius: 8px;
+    padding: 12px;
+    display: grid;
+    gap: 10px;
+    background: var(--surface-bg);
+  }
+
+  .mobile-card-head {
+    min-width: 0;
+    display: flex;
+    align-items: flex-start;
+    justify-content: space-between;
+    gap: 10px;
+  }
+
+  .mobile-card-title {
+    min-width: 0;
+    display: grid;
+    gap: 2px;
+  }
+
+  .mobile-card-title strong,
+  .mobile-card-title span {
+    overflow-wrap: anywhere;
+  }
+
+  .mobile-card-title strong {
+    color: var(--text-primary);
+    font-size: 15px;
+    line-height: 22px;
+  }
+
+  .mobile-card-title span,
+  .mobile-field span {
+    color: var(--text-secondary);
+    font-size: 12px;
+    line-height: 18px;
+  }
+
+  .mobile-card-fields {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 8px 10px;
+  }
+
+  .mobile-field {
+    min-width: 0;
+    display: grid;
+    gap: 2px;
+  }
+
+  .mobile-field strong {
+    min-width: 0;
+    color: var(--text-primary);
+    font-size: 13px;
+    line-height: 20px;
+    overflow-wrap: anywhere;
+  }
+
+  .mobile-card-actions {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    flex-wrap: wrap;
+  }
+
+  .mobile-filter-panel {
+    display: grid;
+    gap: 10px;
+    margin-bottom: 12px;
+  }
+}
+
+@media (min-width: 801px) {
+  .mobile-only {
+    display: none !important;
+  }
+}
+
+@media (max-width: 800px) {
+  .desktop-only {
+    display: none !important;
+  }
+}
