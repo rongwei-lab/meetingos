@@ -201,6 +201,7 @@ import {
   MenuOutline,
   PeopleOutline,
   ReaderOutline,
+  RestaurantOutline,
   SearchOutline,
   SettingsOutline
 } from "@vicons/ionicons5";
@@ -239,6 +240,7 @@ const navItems: NavItem[] = [
   { key: "attendees", label: "参会人管理", routeName: "meeting-attendees", scope: "meeting", icon: PeopleOutline },
   { key: "seating", label: "座位管理", routeName: "meeting-seating", scope: "meeting", icon: BusinessOutline },
   { key: "rooms", label: "住宿管理", routeName: "meeting-rooms", scope: "meeting", icon: BedOutline },
+  { key: "dinner", label: "晚宴管理", routeName: "meeting-dinner", scope: "meeting", icon: RestaurantOutline },
   { key: "detail", label: "查询设置", routeName: "meeting-detail", scope: "meeting", icon: SettingsOutline },
   { key: "statistics", label: "数据统计", routeName: "meeting-statistics", scope: "meeting", icon: BarChartOutline },
   { key: "exports", label: "数据导出", routeName: "meeting-exports", scope: "meeting", icon: DownloadOutline },

@@ -6,6 +6,7 @@ import com.meetingos.checkin.CheckinRequest;
 import com.meetingos.checkin.CheckinResponse;
 import com.meetingos.checkin.CheckinService;
 import com.meetingos.checkin.CheckinType;
+import com.meetingos.dinner.DinnerQueryResult;
 import com.meetingos.settings.BrandingResponse;
 import com.meetingos.settings.SystemSettingsService;
 import com.meetingos.seating.SeatQueryResult;
@@ -128,6 +129,14 @@ public class PublicController {
         publicRateLimitService.check(request);
         verifyCaptcha(queryRequest);
         return ApiResponse.ok(publicQueryService.publicRoomQuery(queryRequest, clientIp(request), request.getHeader(HttpHeaders.USER_AGENT)));
+    }
+
+    @PostMapping("/dinner-query")
+    public ApiResponse<DinnerQueryResult> dinnerQuery(@Valid @RequestBody PublicQueryRequest queryRequest,
+                                                      HttpServletRequest request) {
+        publicRateLimitService.check(request);
+        verifyCaptcha(queryRequest);
+        return ApiResponse.ok(publicQueryService.publicDinnerQuery(queryRequest, clientIp(request), request.getHeader(HttpHeaders.USER_AGENT)));
     }
 
     @GetMapping("/checkin-code")

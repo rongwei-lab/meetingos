@@ -21,6 +21,7 @@ const router = createRouter({
         { path: "query", name: "combined-query", component: () => import("@/views/public/CombinedQueryView.vue") },
         { path: "seat-query", name: "seat-query", component: () => import("@/views/public/SeatQueryView.vue") },
         { path: "room-query", name: "room-query", component: () => import("@/views/public/RoomQueryView.vue") },
+        { path: "dinner-query", name: "dinner-query", component: () => import("@/views/public/DinnerQueryView.vue") },
         { path: "checkin", name: "public-checkin", component: () => import("@/views/public/SelfCheckinView.vue") },
         { path: "checkin-code", name: "checkin-code", component: () => import("@/views/public/CheckinCodeView.vue") }
       ]
@@ -76,6 +77,12 @@ const router = createRouter({
           component: () => import("@/views/room/RoomView.vue")
         },
         {
+          path: "meetings/:meetingId/dinner",
+          name: "meeting-dinner",
+          meta: { requiresMeeting: true },
+          component: () => import("@/views/dinner/DinnerView.vue")
+        },
+        {
           path: "meetings/:meetingId/statistics",
           name: "meeting-statistics",
           meta: { requiresMeeting: true },
@@ -104,6 +111,7 @@ const router = createRouter({
         { path: "attendees", redirect: redirectToCurrentMeeting("attendees") },
         { path: "seating", redirect: redirectToCurrentMeeting("seating") },
         { path: "rooms", redirect: redirectToCurrentMeeting("rooms") },
+        { path: "dinner", redirect: redirectToCurrentMeeting("dinner") },
         { path: "statistics", redirect: redirectToCurrentMeeting("statistics") },
         { path: "exports", redirect: redirectToCurrentMeeting("exports") },
         { path: "logs", redirect: redirectToCurrentMeeting("logs") }

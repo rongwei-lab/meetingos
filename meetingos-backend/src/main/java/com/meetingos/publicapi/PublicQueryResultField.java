@@ -15,7 +15,11 @@ public enum PublicQueryResultField {
     ROOM_TYPE("房型"),
     ROOM_NO("房间号"),
     ROOM_REMARK("房间备注"),
-    CHECKIN_TIPS("入住提示");
+    CHECKIN_TIPS("入住提示"),
+    DINNER_TABLE_NO("晚宴桌号"),
+    DINNER_VENUE("晚宴地点"),
+    DINNER_TIME("晚宴时间"),
+    DINNER_REMARK("晚宴备注");
 
     private final String label;
 

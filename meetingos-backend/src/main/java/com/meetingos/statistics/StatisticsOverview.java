@@ -20,6 +20,7 @@ public record StatisticsOverview(
         long roomUnassignedRequiredCount,
         long roomAssignedCount,
         long roomUnassignedCount,
+        long dinnerAssignedCount,
         long checkedInCount,
         long notCheckedInCount,
         double checkinRate,

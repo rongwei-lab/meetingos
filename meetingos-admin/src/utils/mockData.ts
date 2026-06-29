@@ -1,4 +1,4 @@
-import type { Attendee, Meeting, Room, Seat, SyncLog } from "./types";
+import type { Attendee, DinnerAssignment, Meeting, Room, Seat, SyncLog } from "./types";
 
 export const mockMeetings: Meeting[] = [
   {
@@ -7,6 +7,8 @@ export const mockMeetings: Meeting[] = [
     name: "2026年全国数字经济发展论坛",
     organizer: "数字经济产业联盟",
     venue: "北京国家会议中心",
+    dinnerVenue: "北京会议中心三层宴会厅",
+    dinnerTime: "2026-07-15 18:30",
     startTime: "2026-07-15 09:00",
     endTime: "2026-07-15 18:00",
     status: "REGISTRATION_OPEN",
@@ -15,12 +17,14 @@ export const mockMeetings: Meeting[] = [
     approvedCount: 9,
     seatedCount: 5,
     roomedCount: 4,
+    dinneredCount: 6,
     checkedInCount: 2,
     tduckFormKey: "ndef2026",
     tduckFormName: "数字经济论坛报名表",
     registrationUrl: "https://tduck.example.com/s/ndef2026",
     seatQueryEnabled: true,
     roomQueryEnabled: true,
+    dinnerQueryEnabled: true,
     checkinEnabled: true,
     publicQueryFields: ["PHONE", "NAME"],
     publicQueryMatchMode: "FUZZY"
@@ -39,12 +43,14 @@ export const mockMeetings: Meeting[] = [
     approvedCount: 520,
     seatedCount: 320,
     roomedCount: 160,
+    dinneredCount: 0,
     checkedInCount: 0,
     tduckFormKey: "ai-summit-2026",
     tduckFormName: "人工智能产业峰会报名表",
     registrationUrl: "https://tduck.example.com/s/ai-summit-2026",
     seatQueryEnabled: false,
     roomQueryEnabled: false,
+    dinnerQueryEnabled: false,
     checkinEnabled: true,
     publicQueryFields: ["PHONE", "NAME"],
     publicQueryMatchMode: "FUZZY"
@@ -63,12 +69,14 @@ export const mockMeetings: Meeting[] = [
     approvedCount: 138,
     seatedCount: 138,
     roomedCount: 0,
+    dinneredCount: 0,
     checkedInCount: 127,
     tduckFormKey: "q2-allhands",
     tduckFormName: "Q2 全员大会签到报名表",
     registrationUrl: "https://tduck.example.com/s/q2-allhands",
     seatQueryEnabled: false,
     roomQueryEnabled: false,
+    dinnerQueryEnabled: false,
     checkinEnabled: true,
     publicQueryFields: ["PHONE", "NAME"],
     publicQueryMatchMode: "FUZZY"
@@ -137,6 +145,20 @@ export const mockRooms: Room[] = [
   { id: "r-004", meetingId: "m-001", roomNo: "1804", hotelName: "北京会议中心酒店", building: "A座", floorNo: "18", roomType: "套房", capacity: 2, checkinTips: "VIP 嘉宾专用通道", status: "ASSIGNED" },
   { id: "r-005", meetingId: "m-001", roomNo: "1901", hotelName: "北京会议中心酒店", building: "B座", floorNo: "19", roomType: "双床房", capacity: 2, checkinTips: "早餐在二楼", status: "AVAILABLE" }
 ];
+
+export const mockDinnerAssignments: DinnerAssignment[] = mockAttendees.slice(0, 6).map((attendee, index) => ({
+  id: `d-${String(index + 1).padStart(3, "0")}`,
+  meetingId: attendee.meetingId,
+  attendeeId: attendee.id,
+  attendeeName: attendee.name,
+  attendeePhone: attendee.phone,
+  organization: attendee.company,
+  title: attendee.title,
+  attendeeType: attendee.attendeeType,
+  tableNo: `${Math.floor(index / 2) + 1}号桌`,
+  remark: index === 0 ? "主桌" : "",
+  assignedBy: "demo"
+}));
 
 export const mockSyncLogs: SyncLog[] = [
   { id: "log-001", meetingId: "m-001", formKey: "ndef2026", dataId: "td-001", eventType: "form_data_add", status: "SUCCESS", createdAt: "2026-06-23 10:01" },

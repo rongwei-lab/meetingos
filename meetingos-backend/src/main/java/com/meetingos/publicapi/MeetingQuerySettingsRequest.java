@@ -8,6 +8,7 @@ import java.util.List;
 public record MeetingQuerySettingsRequest(
         boolean seatQueryEnabled,
         boolean roomQueryEnabled,
+        Boolean dinnerQueryEnabled,
         Boolean checkinEnabled,
         boolean queryPaused,
         @NotEmpty List<PublicQueryField> fields,
@@ -22,6 +23,7 @@ public record MeetingQuerySettingsRequest(
         String emptyMessage,
         String seatNotice,
         String roomNotice,
+        String dinnerNotice,
         String themeColor,
         String logoUrl,
         String backgroundUrl,
@@ -34,7 +36,10 @@ public record MeetingQuerySettingsRequest(
         List<PublicQueryResultField> seatHighlightResultFields,
         List<PublicQueryResultField> roomVisibleResultFields,
         List<PublicQueryResultField> roomMaskedResultFields,
-        List<PublicQueryResultField> roomHighlightResultFields
+        List<PublicQueryResultField> roomHighlightResultFields,
+        List<PublicQueryResultField> dinnerVisibleResultFields,
+        List<PublicQueryResultField> dinnerMaskedResultFields,
+        List<PublicQueryResultField> dinnerHighlightResultFields
 ) {
     public MeetingQuerySettingsRequest {
         /*
@@ -43,6 +48,9 @@ public record MeetingQuerySettingsRequest(
          */
         if (checkinEnabled == null) {
             checkinEnabled = true;
+        }
+        if (dinnerQueryEnabled == null) {
+            dinnerQueryEnabled = false;
         }
     }
 
@@ -72,6 +80,7 @@ public record MeetingQuerySettingsRequest(
         this(
                 seatQueryEnabled,
                 roomQueryEnabled,
+                false,
                 checkinEnabled,
                 queryPaused,
                 fields,
@@ -86,6 +95,7 @@ public record MeetingQuerySettingsRequest(
                 emptyMessage,
                 seatNotice,
                 roomNotice,
+                null,
                 themeColor,
                 logoUrl,
                 backgroundUrl,
@@ -93,6 +103,9 @@ public record MeetingQuerySettingsRequest(
                 visibleResultFields,
                 maskedResultFields,
                 highlightResultFields,
+                null,
+                null,
+                null,
                 null,
                 null,
                 null,
@@ -127,6 +140,7 @@ public record MeetingQuerySettingsRequest(
         this(
                 seatQueryEnabled,
                 roomQueryEnabled,
+                false,
                 true,
                 queryPaused,
                 fields,
@@ -141,6 +155,7 @@ public record MeetingQuerySettingsRequest(
                 emptyMessage,
                 seatNotice,
                 roomNotice,
+                null,
                 themeColor,
                 logoUrl,
                 backgroundUrl,
@@ -148,6 +163,9 @@ public record MeetingQuerySettingsRequest(
                 visibleResultFields,
                 maskedResultFields,
                 highlightResultFields,
+                null,
+                null,
+                null,
                 null,
                 null,
                 null,
@@ -181,6 +199,7 @@ public record MeetingQuerySettingsRequest(
         this(
                 seatQueryEnabled,
                 roomQueryEnabled,
+                false,
                 checkinEnabled,
                 queryPaused,
                 fields,
@@ -195,6 +214,7 @@ public record MeetingQuerySettingsRequest(
                 emptyMessage,
                 null,
                 null,
+                null,
                 themeColor,
                 logoUrl,
                 backgroundUrl,
@@ -202,6 +222,9 @@ public record MeetingQuerySettingsRequest(
                 visibleResultFields,
                 maskedResultFields,
                 highlightResultFields,
+                null,
+                null,
+                null,
                 null,
                 null,
                 null,
@@ -234,6 +257,7 @@ public record MeetingQuerySettingsRequest(
         this(
                 seatQueryEnabled,
                 roomQueryEnabled,
+                false,
                 true,
                 queryPaused,
                 fields,
@@ -248,6 +272,7 @@ public record MeetingQuerySettingsRequest(
                 emptyMessage,
                 null,
                 null,
+                null,
                 themeColor,
                 logoUrl,
                 backgroundUrl,
@@ -255,6 +280,9 @@ public record MeetingQuerySettingsRequest(
                 visibleResultFields,
                 maskedResultFields,
                 highlightResultFields,
+                null,
+                null,
+                null,
                 null,
                 null,
                 null,
@@ -271,10 +299,15 @@ public record MeetingQuerySettingsRequest(
         this(
                 seatQueryEnabled,
                 roomQueryEnabled,
+                false,
                 true,
                 false,
                 fields,
                 matchMode,
+                null,
+                null,
+                null,
+                null,
                 null,
                 null,
                 null,

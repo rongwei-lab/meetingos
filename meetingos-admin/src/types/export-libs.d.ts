@@ -9,8 +9,15 @@ declare module 'html2canvas' {
     scale?: number;
     useCORS?: boolean;
     logging?: boolean;
+    width?: number;
+    height?: number;
+    x?: number;
+    y?: number;
+    scrollX?: number;
+    scrollY?: number;
     windowWidth?: number;
     windowHeight?: number;
+    onclone?: (document: Document, element: HTMLElement) => void;
   }
 
   function html2canvas(element: HTMLElement, options?: Options): Promise<HTMLCanvasElement>;
@@ -43,6 +50,7 @@ declare module 'jspdf' {
       compression?: 'NONE' | 'FAST' | 'MEDIUM' | 'SLOW',
       rotation?: number
     ): jsPDF;
+    addPage(format?: Format | number[], orientation?: Orientation): jsPDF;
     save(filename: string): jsPDF;
   }
 }

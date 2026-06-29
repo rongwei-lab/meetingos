@@ -9,6 +9,7 @@ import com.meetingos.common.CsvFiles;
 import com.meetingos.common.ExportTable;
 import com.meetingos.common.SensitiveDataMasker;
 import com.meetingos.common.SpreadsheetFiles;
+import com.meetingos.dinner.DinnerService;
 import com.meetingos.meeting.Meeting;
 import com.meetingos.meeting.MeetingRepository;
 import com.meetingos.room.RoomService;
@@ -37,6 +38,7 @@ public class ExportTaskService {
 
     private final AttendeeService attendeeService;
     private final RoomService roomService;
+    private final DinnerService dinnerService;
     private final SeatRepository seatRepository;
     private final SeatAssignmentRepository seatAssignmentRepository;
     private final CheckinRecordRepository checkinRecordRepository;
@@ -47,6 +49,7 @@ public class ExportTaskService {
 
     public ExportTaskService(AttendeeService attendeeService,
                              RoomService roomService,
+                             DinnerService dinnerService,
                              SeatRepository seatRepository,
                              SeatAssignmentRepository seatAssignmentRepository,
                              CheckinRecordRepository checkinRecordRepository,
@@ -56,6 +59,7 @@ public class ExportTaskService {
                              StatisticsService statisticsService) {
         this.attendeeService = attendeeService;
         this.roomService = roomService;
+        this.dinnerService = dinnerService;
         this.seatRepository = seatRepository;
         this.seatAssignmentRepository = seatAssignmentRepository;
         this.checkinRecordRepository = checkinRecordRepository;
@@ -126,6 +130,7 @@ public class ExportTaskService {
             case "no-checkin" -> List.of(attendeeService.exportTable(meetingId, "no-checkin"));
             case "rooms", "accommodations" -> List.of(roomService.exportRoomsTable(meetingId));
             case "room-inventory" -> List.of(roomService.exportRoomInventoryTable(meetingId));
+            case "dinner" -> List.of(dinnerService.exportDinnerTable(meetingId));
             case "seats" -> List.of(exportSeatsTable(meetingId));
             case "checkin", "checkin-records" -> List.of(exportCheckinTable(meetingId));
             case "statistics" -> exportStatisticsTables(meetingId, startDate, endDate);
@@ -150,7 +155,7 @@ public class ExportTaskService {
 
     private void ensureSupportedType(String normalizedType, String originalType) {
         switch (normalizedType) {
-            case "attendees", "approved", "no-checkin", "rooms", "accommodations", "room-inventory", "seats", "checkin", "checkin-records", "statistics" -> {
+            case "attendees", "approved", "no-checkin", "rooms", "accommodations", "room-inventory", "dinner", "seats", "checkin", "checkin-records", "statistics" -> {
             }
             default -> throw BusinessException.badRequest("暂不支持的导出类型: " + originalType);
         }
@@ -286,6 +291,7 @@ public class ExportTaskService {
                 row("住宿统计", "需住宿人数", overview.accommodationRequiredCount(), ""),
                 row("住宿统计", "需住宿已安排", overview.roomAssignedRequiredCount(), ""),
                 row("住宿统计", "需住宿未安排", overview.roomUnassignedRequiredCount(), ""),
+                row("晚宴统计", "已安排桌号", overview.dinnerAssignedCount(), ""),
                 row("签到统计", "已签到", overview.checkedInCount(), ""),
                 row("签到统计", "未签到", overview.notCheckedInCount(), ""),
                 row("签到统计", "签到率", percent(overview.checkinRate()), ""),

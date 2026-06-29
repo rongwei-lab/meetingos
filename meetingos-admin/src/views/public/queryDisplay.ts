@@ -1,8 +1,8 @@
 import type { CSSProperties } from "vue";
-import type { MeetingQuerySettings, PublicQueryResultField, RoomQueryResult, SeatQueryResult } from "@/utils/types";
+import type { DinnerQueryResult, MeetingQuerySettings, PublicQueryResultField, RoomQueryResult, SeatQueryResult } from "@/utils/types";
 import { sanitizeImageUrl } from "@/utils/safeUrl";
 
-export type QueryResultKind = "seat" | "room";
+export type QueryResultKind = "seat" | "room" | "dinner";
 
 export interface QueryDisplayRow {
   field: PublicQueryResultField;
@@ -19,6 +19,7 @@ export interface QueryWindowState {
 const sharedFields = new Set<PublicQueryResultField>(["ATTENDEE_NAME", "ATTENDEE_PHONE", "ORGANIZATION", "TITLE", "EMAIL", "MEETING_NAME"]);
 const seatFields = new Set<PublicQueryResultField>(["SEAT_AREA", "SEAT_ROW", "SEAT_NO", "SEAT_CODE"]);
 const roomFields = new Set<PublicQueryResultField>(["HOTEL_NAME", "ROOM_TYPE", "ROOM_NO", "ROOM_REMARK", "CHECKIN_TIPS"]);
+const dinnerFields = new Set<PublicQueryResultField>(["DINNER_TABLE_NO", "DINNER_VENUE", "DINNER_TIME", "DINNER_REMARK"]);
 
 export function pageTitle(settings: MeetingQuerySettings | null, fallback: string) {
   return settings?.pageTitle?.trim() || fallback;
@@ -80,15 +81,23 @@ export function buildRoomRows(settings: MeetingQuerySettings | null, result: Roo
   return buildResultRows(settings, result, "room");
 }
 
+export function buildDinnerRows(settings: MeetingQuerySettings | null, result: DinnerQueryResult | null) {
+  return buildResultRows(settings, result, "dinner");
+}
+
 function buildResultRows(
   settings: MeetingQuerySettings | null,
-  result: SeatQueryResult | RoomQueryResult | null,
+  result: SeatQueryResult | RoomQueryResult | DinnerQueryResult | null,
   kind: QueryResultKind
 ): QueryDisplayRow[] {
   if (!settings || !result) return [];
-  const fields = kind === "seat" ? settings.seatVisibleResultFields : settings.roomVisibleResultFields;
-  const maskedFields = kind === "seat" ? settings.seatMaskedResultFields : settings.roomMaskedResultFields;
-  const highlightFields = kind === "seat" ? settings.seatHighlightResultFields : settings.roomHighlightResultFields;
+	  const fields = kind === "seat"
+	    ? settings.seatVisibleResultFields
+	    : kind === "room"
+	      ? settings.roomVisibleResultFields
+	      : settings.dinnerVisibleResultFields;
+	  const maskedFields = kind === "seat" ? settings.seatMaskedResultFields : kind === "room" ? settings.roomMaskedResultFields : settings.dinnerMaskedResultFields;
+	  const highlightFields = kind === "seat" ? settings.seatHighlightResultFields : kind === "room" ? settings.roomHighlightResultFields : settings.dinnerHighlightResultFields;
   return fields
     .filter((field) => isFieldAvailableForKind(field, kind))
     .map((field) => {
@@ -106,21 +115,23 @@ function buildResultRows(
 
 function isFieldAvailableForKind(field: PublicQueryResultField, kind: QueryResultKind) {
   if (sharedFields.has(field)) return true;
-  return kind === "seat" ? seatFields.has(field) : roomFields.has(field);
+  if (kind === "seat") return seatFields.has(field);
+  if (kind === "room") return roomFields.has(field);
+  return dinnerFields.has(field);
 }
 
-function resultValue(result: SeatQueryResult | RoomQueryResult, field: PublicQueryResultField) {
+function resultValue(result: SeatQueryResult | RoomQueryResult | DinnerQueryResult, field: PublicQueryResultField) {
   switch (field) {
     case "ATTENDEE_NAME":
       return result.attendeeName || "";
     case "ATTENDEE_PHONE":
-      return result.attendeePhone || "";
+      return "attendeePhone" in result ? result.attendeePhone || "" : "";
     case "ORGANIZATION":
-      return result.organization || "";
+      return "organization" in result ? result.organization || "" : "";
     case "TITLE":
-      return result.title || "";
+      return "title" in result ? result.title || "" : "";
     case "EMAIL":
-      return result.email || "";
+      return "email" in result ? result.email || "" : "";
     case "MEETING_NAME":
       return result.meetingName || "";
     case "SEAT_AREA":
@@ -141,6 +152,14 @@ function resultValue(result: SeatQueryResult | RoomQueryResult, field: PublicQue
       return "roomRemark" in result ? result.roomRemark || "" : "";
     case "CHECKIN_TIPS":
       return "checkinTips" in result ? result.checkinTips || "" : "";
+    case "DINNER_TABLE_NO":
+      return "tableNo" in result ? result.tableNo || "" : "";
+    case "DINNER_VENUE":
+      return "venue" in result ? result.venue || "" : "";
+    case "DINNER_TIME":
+      return "dinnerTime" in result ? result.dinnerTime || "" : "";
+    case "DINNER_REMARK":
+      return "remark" in result ? result.remark || "" : "";
   }
 }
 

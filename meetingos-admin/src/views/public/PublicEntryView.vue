@@ -4,7 +4,7 @@
       <img v-if="safeLogoUrl" class="public-logo" :src="safeLogoUrl" alt="会议 Logo" />
       <p v-if="settings?.publisher" class="public-kicker">{{ settings.publisher }}</p>
       <h1>{{ pageTitle(settings, "参会人入口") }}</h1>
-      <p class="public-subtitle">{{ settings?.pageDescription || "查询座位、住宿房间，或打开个人签到码。" }}</p>
+      <p class="public-subtitle">{{ settings?.pageDescription || "查询座位、住宿、晚宴桌号，或完成自助签到。" }}</p>
 
       <n-alert v-if="settings?.announcement" class="public-alert" type="info" :bordered="false">
         {{ settings.announcement }}
@@ -19,10 +19,10 @@
           block
           size="large"
           :color="settings?.themeColor"
-          :disabled="queryDisabled || !settings || (!settings.seatQueryEnabled && !settings.roomQueryEnabled)"
+          :disabled="queryDisabled || !anyPublicEntryEnabled"
           @click="goPublic('query')"
         >
-          查询座位和房间号
+          综合查询
         </n-button>
         <n-button
           block
@@ -43,6 +43,14 @@
         <n-button
           block
           size="large"
+          :disabled="queryDisabled || !settings?.dinnerQueryEnabled"
+          @click="goPublic('dinner-query')"
+        >
+          查询晚宴桌号
+        </n-button>
+        <n-button
+          block
+          size="large"
           :disabled="queryDisabled || !settings?.checkinEnabled"
           @click="goPublic('checkin')"
         >
@@ -51,8 +59,8 @@
         <n-button block size="large" @click="$router.push({ path: '/public/checkin-code', query: $route.query })">查看签到码</n-button>
       </n-space>
 
-      <n-alert v-if="settings && !settings.seatQueryEnabled && !settings.roomQueryEnabled && !settings.checkinEnabled" type="warning" :bordered="false" class="public-alert">
-        当前会议暂未开放座位、住宿查询和自助签到。
+      <n-alert v-if="settings && !anyPublicEntryEnabled" type="warning" :bordered="false" class="public-alert">
+        当前会议暂未开放公开查询和自助签到。
       </n-alert>
     </section>
   </main>
@@ -80,6 +88,12 @@ const meetingId = computed(() => {
 });
 const windowState = computed(() => queryWindowState(settings.value));
 const queryDisabled = computed(() => Boolean(settings.value && !windowState.value.available));
+const anyPublicEntryEnabled = computed(() => Boolean(
+  settings.value?.seatQueryEnabled ||
+  settings.value?.roomQueryEnabled ||
+  settings.value?.dinnerQueryEnabled ||
+  settings.value?.checkinEnabled
+));
 const safeLogoUrl = computed(() => sanitizeImageUrl(settings.value?.logoUrl));
 
 onMounted(async () => {
@@ -93,7 +107,7 @@ onMounted(async () => {
   }
 });
 
-function goPublic(target: "query" | "seat-query" | "room-query" | "checkin") {
+function goPublic(target: "query" | "seat-query" | "room-query" | "dinner-query" | "checkin") {
   void router.push({
     path: `/public/${target}`,
     query: {

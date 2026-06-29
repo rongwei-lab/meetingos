@@ -102,29 +102,72 @@
       </div>
     </n-card>
 
-    <n-card class="surface section-card" :bordered="false" title="已安排住宿参会人">
-      <n-data-table v-if="!isMobile" :columns="assignmentColumns" :data="assignedAttendees" :pagination="{ pageSize: 8 }" />
+    <n-card class="surface section-card" :bordered="false">
+      <template #header>
+        <div class="card-header-row">
+          <span>住宿参会人列表</span>
+          <n-button secondary :disabled="!filteredRoomAttendeeRows.length" @click="exportRoomAttendeeList">
+            <template #icon><n-icon :component="DownloadOutline" /></template>
+            导出当前列表
+          </n-button>
+        </div>
+      </template>
+
+      <div class="room-attendee-filter-bar">
+        <n-input v-model:value="attendeeFilters.keyword" clearable placeholder="搜索姓名 / 手机号 / 单位 / 房间号">
+          <template #prefix><n-icon :component="SearchOutline" /></template>
+        </n-input>
+        <n-select v-model:value="attendeeFilters.status" placeholder="状态" :options="assignmentStatusFilterOptions" />
+        <n-select
+          v-model:value="attendeeFilters.roomNo"
+          clearable
+          placeholder="房间号"
+          :disabled="attendeeFilters.status === 'UNASSIGNED'"
+          :options="assignedRoomFilterOptions"
+        />
+      </div>
+
+      <n-data-table
+        v-if="!isMobile"
+        :columns="roomAttendeeColumns"
+        :data="filteredRoomAttendeeRows"
+        :pagination="{ pageSize: 10 }"
+        :row-key="roomAttendeeRowKey"
+      >
+        <template #empty>
+          <n-empty description="暂无符合条件的参会人" />
+        </template>
+      </n-data-table>
       <div v-else class="mobile-card-list assignment-card-list">
-        <article v-for="attendee in assignedAttendees" :key="attendee.id" class="mobile-data-card">
+        <article v-for="row in filteredRoomAttendeeRows" :key="row.attendeeId" class="mobile-data-card">
           <div class="mobile-card-head">
             <div class="mobile-card-title">
-              <strong>{{ attendee.name }}</strong>
-              <span>{{ attendee.phone || "-" }}</span>
+              <strong>{{ row.attendeeName }}</strong>
+              <span>{{ row.organization || "-" }} · {{ row.attendeePhone || "-" }}</span>
             </div>
-            <n-tag size="small" round>{{ attendee.roomNo }}</n-tag>
+            <n-tag round size="small" :type="row.assigned ? 'success' : 'warning'">
+              {{ row.assigned ? row.roomNo : "未安排" }}
+            </n-tag>
           </div>
           <div class="mobile-card-fields">
             <div class="mobile-field">
-              <span>单位</span>
-              <strong>{{ attendee.company || "-" }}</strong>
+              <span>职务</span>
+              <strong>{{ row.title || "-" }}</strong>
             </div>
             <div class="mobile-field">
               <span>备注</span>
-              <strong>{{ attendee.roomRemark || "-" }}</strong>
+              <strong>{{ row.roomRemark || "-" }}</strong>
             </div>
           </div>
+          <div class="mobile-card-actions">
+            <template v-if="row.assigned">
+              <n-button size="small" type="primary" secondary @click="openAssignRoomForAttendee(row)">编辑</n-button>
+              <n-button size="small" type="error" secondary :loading="clearingAttendeeId === row.attendeeId" @click="clearRoomAssignmentByRow(row)">清空</n-button>
+            </template>
+            <n-button v-else size="small" type="primary" secondary @click="openAssignRoomForAttendee(row)">安排房间</n-button>
+          </div>
         </article>
-        <n-empty v-if="!assignedAttendees.length" description="暂无住宿安排" />
+        <n-empty v-if="!filteredRoomAttendeeRows.length" description="暂无符合条件的参会人" />
       </div>
     </n-card>
 
@@ -210,6 +253,46 @@
           <n-button :disabled="batchSavingRooms" @click="batchRoomModalVisible = false">取消</n-button>
           <n-button type="primary" :disabled="batchPreview.total === 0" :loading="batchSavingRooms" @click="saveBatchRooms">
             生成房间
+          </n-button>
+        </n-space>
+      </template>
+    </n-modal>
+
+    <n-modal
+      v-model:show="assignModalVisible"
+      preset="card"
+      title="住宿安排"
+      class="room-modal"
+      style="width: min(560px, calc(100vw - 32px))"
+      :mask-closable="!assigningRoom"
+    >
+      <n-form label-placement="top" :show-feedback="false">
+        <n-form-item label="参会人">
+          <n-input :value="assignForm.attendeeLabel" readonly placeholder="请选择参会人" />
+        </n-form-item>
+        <n-form-item label="房间号">
+          <n-select
+            v-model:value="assignForm.roomId"
+            filterable
+            clearable
+            placeholder="选择房间号"
+            :options="assignRoomOptions"
+          />
+        </n-form-item>
+        <n-form-item label="住宿备注">
+          <n-input
+            v-model:value="assignForm.roomRemark"
+            type="textarea"
+            :autosize="{ minRows: 2, maxRows: 4 }"
+            placeholder="可填写入住说明、同住人或前台备注；留空则使用房间入住提示"
+          />
+        </n-form-item>
+      </n-form>
+      <template #footer>
+        <n-space justify="end">
+          <n-button :disabled="assigningRoom" @click="assignModalVisible = false">取消</n-button>
+          <n-button type="primary" :disabled="!assignForm.attendeeId || !assignForm.roomId" :loading="assigningRoom" @click="saveRoomAssignment">
+            保存
           </n-button>
         </n-space>
       </template>
@@ -316,6 +399,20 @@ type BatchRoomFormState = Omit<RoomFormState, "roomNo"> & {
 };
 
 type ImportTemplateKey = "rooms" | "assignments";
+type AssignmentStatusFilter = "ALL" | "ASSIGNED" | "UNASSIGNED";
+
+interface RoomAttendeeRow {
+  attendeeId: string;
+  attendeeName: string;
+  attendeePhone?: string;
+  organization?: string;
+  title?: string;
+  attendeeType?: string;
+  roomNo?: string;
+  roomRemark?: string;
+  assigned: boolean;
+  attendee: Attendee;
+}
 
 const store = useMeetingStore();
 const message = useMessage();
@@ -328,10 +425,12 @@ const importingAssignments = ref(false);
 const assigningRoom = ref(false);
 const createRoomModalVisible = ref(false);
 const batchRoomModalVisible = ref(false);
+const assignModalVisible = ref(false);
 const occupancyModalVisible = ref(false);
 const savingRoom = ref(false);
 const batchSavingRooms = ref(false);
 const clearingRoom = ref(false);
+const clearingAttendeeId = ref("");
 const activeRoomId = ref<string | null>(null);
 
 const filters = reactive({
@@ -339,6 +438,12 @@ const filters = reactive({
   hotelName: null as string | null,
   roomType: null as string | null,
   status: null as RoomStatus | null
+});
+
+const attendeeFilters = reactive({
+  keyword: "",
+  roomNo: null as string | null,
+  status: "ALL" as AssignmentStatusFilter
 });
 
 const roomForm = reactive<RoomFormState>({
@@ -360,6 +465,13 @@ const batchForm = reactive<BatchRoomFormState>({
   remark: "",
   capacity: 2,
   status: "AVAILABLE"
+});
+
+const assignForm = reactive({
+  attendeeId: null as string | null,
+  attendeeLabel: "",
+  roomId: null as string | null,
+  roomRemark: ""
 });
 
 const { routeMeetingId } = useRouteMeeting({ loadWorkspace: false });
@@ -399,12 +511,18 @@ const importTemplateOptions: DropdownOption[] = [
   { label: "房间号模板", key: "rooms" },
   { label: "分配模板", key: "assignments" }
 ];
+const assignmentStatusFilterOptions = [
+  { label: "全部", value: "ALL" },
+  { label: "已安排", value: "ASSIGNED" },
+  { label: "未安排", value: "UNASSIGNED" }
+] satisfies SelectOption[];
 
 const approvedAttendees = computed(() => store.currentAttendees.filter((attendee) => attendee.auditStatus === "APPROVED"));
 
 const activeRoom = computed(() => store.currentRooms.find((room) => room.id === activeRoomId.value) || null);
 
 const assignedAttendees = computed(() => store.currentAttendees.filter((attendee) => attendee.roomNo));
+const unassignedAttendees = computed(() => approvedAttendees.value.filter((attendee) => !attendee.roomNo));
 
 const activeRoomOccupants = computed(() => (activeRoom.value ? occupantsForRoom(activeRoom.value) : []));
 
@@ -428,12 +546,24 @@ const roomStats = computed(() => {
     { label: "可分配房间", value: availableRooms, tone: "success" },
     { label: "已分配房间", value: assignedRooms, tone: "warning" },
     { label: "停用房间", value: disabledRooms, tone: "muted" },
-    { label: "已安排嘉宾", value: assignedAttendees.value.length, tone: "primary" }
+    { label: "已安排嘉宾", value: assignedAttendees.value.length, tone: "primary" },
+    { label: "未安排嘉宾", value: unassignedAttendees.value.length, tone: "warning" }
   ];
 });
 
 const hotelFilterOptions = computed(() => distinctOptions(store.currentRooms.map((room) => room.hotelName).filter(Boolean)));
 const roomTypeFilterOptions = computed(() => distinctOptions(store.currentRooms.map((room) => room.roomType).filter(Boolean)));
+const assignedRoomFilterOptions = computed(() => distinctOptions(assignedAttendees.value.map((attendee) => attendee.roomNo).filter(Boolean) as string[]));
+const assignRoomOptions = computed<SelectOption[]>(() => store.currentRooms
+  .filter((room) => room.status !== "DISABLED")
+  .map((room) => {
+    const occupancy = roomOccupancy(room);
+    return {
+      label: `${room.roomNo} · ${room.hotelName || "会议酒店"} · ${room.roomType || "房间"} · ${occupancy.occupied}/${occupancy.capacity}`,
+      value: room.id,
+      disabled: room.id !== assignForm.roomId && occupancy.occupied >= occupancy.capacity
+    };
+  }));
 
 const filteredRooms = computed(() => {
   const keyword = filters.keyword.trim().toLowerCase();
@@ -455,6 +585,39 @@ const batchPreview = computed(() => {
     total: roomNos.length,
     examples: [...roomNos.slice(0, 4), ...(roomNos.length > 4 ? ["..."] : [])]
   };
+});
+
+const roomAttendeeRows = computed<RoomAttendeeRow[]>(() => approvedAttendees.value.map((attendee) => ({
+  attendeeId: attendee.id,
+  attendeeName: attendee.name,
+  attendeePhone: attendee.phone,
+  organization: attendee.company,
+  title: attendee.title,
+  attendeeType: attendee.attendeeType,
+  roomNo: attendee.roomNo,
+  roomRemark: attendee.roomRemark,
+  assigned: Boolean(attendee.roomNo),
+  attendee
+})));
+
+const filteredRoomAttendeeRows = computed(() => {
+  const keyword = attendeeFilters.keyword.trim().toLowerCase();
+  return roomAttendeeRows.value.filter((row) => {
+    const searchable = [
+      row.attendeeName,
+      row.attendeePhone,
+      row.organization,
+      row.title,
+      row.attendeeType,
+      row.roomNo,
+      row.roomRemark
+    ].filter(Boolean).join(" ").toLowerCase();
+    return (
+      (!keyword || searchable.includes(keyword)) &&
+      (attendeeFilters.status === "ALL" || (attendeeFilters.status === "ASSIGNED" ? row.assigned : !row.assigned)) &&
+      (!attendeeFilters.roomNo || row.roomNo === attendeeFilters.roomNo)
+    );
+  });
 });
 
 const roomColumns: DataTableColumns<Room> = [
@@ -499,12 +662,37 @@ const roomColumns: DataTableColumns<Room> = [
   { title: "入住提示", key: "checkinTips", minWidth: 200 }
 ];
 
-const assignmentColumns: DataTableColumns<Attendee> = [
-  { title: "姓名", key: "name" },
-  { title: "手机号", key: "phone" },
-  { title: "单位", key: "company" },
-  { title: "房间号", key: "roomNo" },
-  { title: "房间备注", key: "roomRemark" }
+const roomAttendeeColumns: DataTableColumns<RoomAttendeeRow> = [
+  { title: "姓名", key: "attendeeName", minWidth: 100 },
+  { title: "手机号", key: "attendeePhone", minWidth: 130 },
+  { title: "单位", key: "organization", minWidth: 150 },
+  { title: "职务", key: "title", minWidth: 120 },
+  {
+    title: "状态",
+    key: "assigned",
+    width: 100,
+    render(row) {
+      return h(NTag, { type: row.assigned ? "success" : "warning", size: "small" }, {
+        default: () => row.assigned ? "已安排" : "未安排"
+      });
+    }
+  },
+  { title: "房间号", key: "roomNo", width: 110 },
+  { title: "房间备注", key: "roomRemark", minWidth: 140 },
+  {
+    title: "操作",
+    key: "actions",
+    width: 150,
+    render(row) {
+      if (!row.assigned) {
+        return h(NButton, { size: "small", type: "primary", secondary: true, onClick: () => openAssignRoomForAttendee(row) }, { default: () => "安排房间" });
+      }
+      return h("div", actionCellProps(), [
+        h(NButton, { text: true, type: "primary", size: "small", onClick: () => openAssignRoomForAttendee(row) }, { default: () => "编辑" }),
+        h(NButton, { text: true, type: "error", size: "small", loading: clearingAttendeeId.value === row.attendeeId, onClick: () => clearRoomAssignmentByRow(row) }, { default: () => "清空" })
+      ]);
+    }
+  }
 ];
 
 const roomOccupantColumns: DataTableColumns<Attendee> = [
@@ -557,6 +745,26 @@ function roomRowKey(row: Room) {
   return row.id;
 }
 
+function roomAttendeeRowKey(row: RoomAttendeeRow) {
+  return row.attendeeId;
+}
+
+function actionCellProps() {
+  /*
+   * DataTable 的操作列由运行时渲染，给按钮包一层稳定的 inline-flex，
+   * 避免“编辑/清空”在窄列或弹窗中挤成粘连文本。
+   */
+  return {
+    class: "table-action-cell",
+    style: {
+      display: "inline-flex",
+      alignItems: "center",
+      gap: "10px",
+      whiteSpace: "nowrap"
+    }
+  };
+}
+
 function openCreateRoomModal() {
   resetRoomForm();
   createRoomModalVisible.value = true;
@@ -572,6 +780,14 @@ function openOccupancyModal(room: Room) {
   selectedAttendeeId.value = null;
   assignmentRemark.value = room.checkinTips || room.remark || "";
   occupancyModalVisible.value = true;
+}
+
+function openAssignRoomForAttendee(row: RoomAttendeeRow) {
+  assignForm.attendeeId = row.attendeeId;
+  assignForm.attendeeLabel = [row.attendeeName, row.attendeePhone, row.organization].filter(Boolean).join(" · ");
+  assignForm.roomId = row.attendee.roomId || roomByNo(row.roomNo)?.id || null;
+  assignForm.roomRemark = row.roomRemark || roomByNo(row.roomNo)?.checkinTips || roomByNo(row.roomNo)?.remark || "";
+  assignModalVisible.value = true;
 }
 
 async function saveRoom() {
@@ -652,6 +868,23 @@ async function assignRoom() {
   }
 }
 
+async function saveRoomAssignment() {
+  if (!assignForm.attendeeId || !assignForm.roomId) {
+    message.warning("请选择参会人和房间号");
+    return;
+  }
+  assigningRoom.value = true;
+  try {
+    await store.assignRoom(assignForm.attendeeId, assignForm.roomId, assignForm.roomRemark);
+    assignModalVisible.value = false;
+    message.success("住宿安排已保存");
+  } catch (error) {
+    message.error(error instanceof Error ? error.message : "保存住宿安排失败");
+  } finally {
+    assigningRoom.value = false;
+  }
+}
+
 async function clearRoomAssignment(attendee: Attendee) {
   clearingRoom.value = true;
   try {
@@ -661,6 +894,18 @@ async function clearRoomAssignment(attendee: Attendee) {
     message.error(error instanceof Error ? error.message : "移出入住人员失败");
   } finally {
     clearingRoom.value = false;
+  }
+}
+
+async function clearRoomAssignmentByRow(row: RoomAttendeeRow) {
+  clearingAttendeeId.value = row.attendeeId;
+  try {
+    await store.clearRoomAssignment(row.attendeeId);
+    message.success("住宿安排已清空");
+  } catch (error) {
+    message.error(error instanceof Error ? error.message : "清空住宿安排失败");
+  } finally {
+    clearingAttendeeId.value = "";
   }
 }
 
@@ -712,6 +957,29 @@ function exportRooms() {
   }).catch((error) => {
     message.error(error instanceof Error ? error.message : "导出失败，请确认后端服务已启动");
   });
+}
+
+function exportRoomAttendeeList() {
+  /*
+   * 顶部“导出住宿安排”保留原后端完整导出；这里导出当前统一参会人列表，
+   * 会保留搜索、状态和房间号筛选结果，便于按页面视图核对或现场临时分发。
+   */
+  downloadXlsxTemplate(
+    `${currentMeetingName()}-住宿参会人列表`,
+    ["姓名", "手机号", "单位", "职务", "参会类型", "状态", "房间号", "房间备注"],
+    filteredRoomAttendeeRows.value.map((row) => [
+      row.attendeeName || "",
+      row.attendeePhone || "",
+      row.organization || "",
+      row.title || "",
+      row.attendeeType || "",
+      row.assigned ? "已安排" : "未安排",
+      row.roomNo || "",
+      row.roomRemark || ""
+    ]),
+    "住宿参会人"
+  );
+  message.success("住宿参会人列表 XLSX 已开始下载");
 }
 
 function downloadImportTemplate(key: string | number) {
@@ -780,6 +1048,14 @@ function formatAttendeeLabel(attendee: Attendee) {
   return [attendee.name, attendee.phone, attendee.company].filter(Boolean).join(" · ");
 }
 
+function currentMeetingName() {
+  return (store.currentMeeting?.name || "住宿安排").replace(/[\\/:*?"<>|]/g, "_");
+}
+
+function roomByNo(roomNo?: string) {
+  return roomNo ? store.currentRooms.find((room) => room.roomNo === roomNo) : undefined;
+}
+
 function occupantsForRoom(room: Room) {
   return store.currentAttendees.filter((attendee) => attendee.roomId === room.id || attendee.roomNo === room.roomNo);
 }
@@ -819,7 +1095,7 @@ const importTemplates: Record<ImportTemplateKey, { filename: string; headers: st
 <style scoped>
 .room-stats {
   display: grid;
-  grid-template-columns: repeat(5, minmax(0, 1fr));
+  grid-template-columns: repeat(6, minmax(0, 1fr));
   gap: 16px;
   margin-bottom: 16px;
 }
@@ -868,6 +1144,19 @@ const importTemplates: Record<ImportTemplateKey, { filename: string; headers: st
   grid-template-columns: minmax(180px, 1.4fr) minmax(120px, 0.9fr) minmax(120px, 0.8fr) minmax(120px, 0.7fr);
   gap: 10px;
   margin-bottom: 14px;
+}
+
+.room-attendee-filter-bar {
+  display: grid;
+  grid-template-columns: minmax(280px, 1.5fr) minmax(140px, 0.45fr) minmax(140px, 0.7fr);
+  gap: 10px;
+  margin-bottom: 14px;
+}
+
+.table-action-cell {
+  display: flex;
+  align-items: center;
+  gap: 10px;
 }
 
 .occupant-action-cell {
@@ -950,6 +1239,7 @@ const importTemplates: Record<ImportTemplateKey, { filename: string; headers: st
 @media (max-width: 720px) {
   .room-stats,
   .room-filter-bar,
+  .room-attendee-filter-bar,
   .batch-grid {
     grid-template-columns: 1fr;
   }

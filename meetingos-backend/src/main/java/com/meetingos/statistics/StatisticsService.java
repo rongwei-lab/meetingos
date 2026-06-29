@@ -6,6 +6,7 @@ import com.meetingos.attendee.ReviewStatus;
 import com.meetingos.checkin.CheckinRecordRepository;
 import com.meetingos.checkin.CheckinResultStatus;
 import com.meetingos.common.BusinessException;
+import com.meetingos.dinner.DinnerAssignmentRepository;
 import com.meetingos.room.RoomRepository;
 import com.meetingos.seating.SeatAssignmentRepository;
 import com.meetingos.seating.SeatRepository;
@@ -25,17 +26,20 @@ public class StatisticsService {
     private final SeatAssignmentRepository seatAssignmentRepository;
     private final SeatRepository seatRepository;
     private final RoomRepository roomRepository;
+    private final DinnerAssignmentRepository dinnerAssignmentRepository;
     private final CheckinRecordRepository checkinRecordRepository;
 
     public StatisticsService(AttendeeRepository attendeeRepository,
                              SeatAssignmentRepository seatAssignmentRepository,
                              SeatRepository seatRepository,
                              RoomRepository roomRepository,
+                             DinnerAssignmentRepository dinnerAssignmentRepository,
                              CheckinRecordRepository checkinRecordRepository) {
         this.attendeeRepository = attendeeRepository;
         this.seatAssignmentRepository = seatAssignmentRepository;
         this.seatRepository = seatRepository;
         this.roomRepository = roomRepository;
+        this.dinnerAssignmentRepository = dinnerAssignmentRepository;
         this.checkinRecordRepository = checkinRecordRepository;
     }
 
@@ -65,6 +69,7 @@ public class StatisticsService {
         long accommodationRequired = attendeeRepository.countByMeetingIdAndAccommodationRequiredTrue(meetingId);
         long roomAssignedRequired = attendeeRepository.countByMeetingIdAndAccommodationRequiredTrueAndRoomNoIsNotNull(meetingId);
         long roomUnassignedRequired = attendeeRepository.countByMeetingIdAndAccommodationRequiredTrueAndRoomNoIsNull(meetingId);
+        long dinnerAssigned = dinnerAssignmentRepository.countByMeetingId(meetingId);
         long checkedIn = attendeeRepository.countByMeetingIdAndCheckinStatus(meetingId, CheckinStatus.CHECKED_IN);
         long notCheckedIn = Math.max(0, approved - checkedIn);
         double rate = approved == 0 ? 0 : (double) checkedIn / approved;
@@ -93,6 +98,7 @@ public class StatisticsService {
                 roomUnassignedRequired,
                 roomAssigned,
                 roomUnassigned,
+                dinnerAssigned,
                 checkedIn,
                 notCheckedIn,
                 rate,

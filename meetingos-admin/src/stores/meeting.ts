@@ -1,12 +1,15 @@
 import { defineStore } from "pinia";
 import { canUseDemoFallback, extractErrorMessage, http, type PagePayload, isAuthFailure, unwrapApi } from "@/api/http";
-import { mockAttendees, mockMeetings, mockRooms, mockSeats, mockSyncLogs } from "@/utils/mockData";
+import { mockAttendees, mockDinnerAssignments, mockMeetings, mockRooms, mockSeats, mockSyncLogs } from "@/utils/mockData";
 import { formatDateTimeLabel } from "@/utils/meetingDisplay";
 import { sanitizeImageUrl } from "@/utils/safeUrl";
 import type {
   AdminQueryCandidate,
   Attendee,
   CheckinRecord,
+  DinnerAssignment,
+  DinnerTable,
+  DinnerQueryResult,
   Meeting,
   MeetingQuerySettings,
   PublicCheckinResult,
@@ -33,14 +36,18 @@ interface MeetingSummaryDto {
   startTime?: string;
   endTime?: string;
   location?: string;
+  dinnerVenue?: string;
+  dinnerTime?: string;
   registrationCount?: number;
   approvedCount?: number;
   seatedCount?: number;
   roomAssignedCount?: number;
+  dinnerAssignedCount?: number;
   checkedInCount?: number;
   status: Meeting["status"];
   seatQueryEnabled?: boolean;
   roomQueryEnabled?: boolean;
+  dinnerQueryEnabled?: boolean;
   checkinEnabled?: boolean;
   publicQueryFields?: string;
   publicQueryMatchMode?: PublicQueryMatchMode;
@@ -59,6 +66,8 @@ interface MeetingDetailDto {
     registrationEndTime?: string;
     location?: string;
     venueName?: string;
+    dinnerVenue?: string;
+    dinnerTime?: string;
     capacity?: number;
     description?: string;
     agenda?: string;
@@ -68,6 +77,7 @@ interface MeetingDetailDto {
     status: Meeting["status"];
     seatQueryEnabled?: boolean;
     roomQueryEnabled?: boolean;
+    dinnerQueryEnabled?: boolean;
     checkinEnabled?: boolean;
     publicQueryFields?: string;
     publicQueryMatchMode?: PublicQueryMatchMode;
@@ -76,6 +86,7 @@ interface MeetingDetailDto {
   approvedCount?: number;
   seatedCount?: number;
   roomAssignedCount?: number;
+  dinnerAssignedCount?: number;
   checkedInCount?: number;
 }
 
@@ -104,6 +115,40 @@ interface AttendeeDto {
   attendeeCode?: string;
   tduckDataId?: string;
   formValues?: Record<string, unknown>;
+}
+
+interface DinnerAssignmentDto {
+  id: number;
+  meetingId: number;
+  attendeeId: number;
+  attendeeName: string;
+  attendeePhone?: string;
+  organization?: string;
+  title?: string;
+  attendeeType?: string;
+  tableNo: string;
+  venue?: string;
+  dinnerTime?: string;
+  remark?: string;
+  assignedBy?: string;
+}
+
+interface DinnerSettingsDto {
+  meetingId: number;
+  venue?: string;
+  dinnerTime?: string;
+}
+
+interface DinnerTableDto {
+  id: number;
+  meetingId: number;
+  tableNo: string;
+  capacity: number;
+  occupiedCount: number;
+  remainingCount: number;
+  overCapacityCount: number;
+  remark?: string;
+  createdBy?: string;
 }
 
 interface SeatViewDto {
@@ -147,6 +192,7 @@ interface MeetingQuerySettingsDto {
   meetingName: string;
   seatQueryEnabled: boolean;
   roomQueryEnabled: boolean;
+  dinnerQueryEnabled?: boolean;
   checkinEnabled?: boolean;
   queryPaused?: boolean;
   fields: PublicQueryField[];
@@ -161,6 +207,7 @@ interface MeetingQuerySettingsDto {
   emptyMessage?: string;
   seatNotice?: string;
   roomNotice?: string;
+  dinnerNotice?: string;
   themeColor?: string;
   logoUrl?: string;
   backgroundUrl?: string;
@@ -174,6 +221,9 @@ interface MeetingQuerySettingsDto {
   roomVisibleResultFields?: PublicQueryResultField[];
   roomMaskedResultFields?: PublicQueryResultField[];
   roomHighlightResultFields?: PublicQueryResultField[];
+  dinnerVisibleResultFields?: PublicQueryResultField[];
+  dinnerMaskedResultFields?: PublicQueryResultField[];
+  dinnerHighlightResultFields?: PublicQueryResultField[];
   captchaEnabled?: boolean;
   fieldOptions: Array<{ field: PublicQueryField; label: string }>;
   resultFieldOptions?: Array<{ field: PublicQueryResultField; label: string }>;
@@ -237,6 +287,24 @@ export interface CreateRoomPayload {
   remark?: string;
   capacity?: number;
   status?: Room["status"];
+}
+
+export interface DinnerAssignPayload {
+  attendeeId: string;
+  tableNo: string;
+  remark?: string;
+}
+
+export interface DinnerTablePayload {
+  id?: string;
+  tableNo: string;
+  capacity: number;
+  remark?: string;
+}
+
+export interface DinnerSettingsPayload {
+  venue?: string;
+  dinnerTime?: string;
 }
 
 interface SyncLogDto {
@@ -349,6 +417,7 @@ export interface StatisticsOverviewDto {
   roomAssignedRequiredCount?: number;
   roomUnassignedRequiredCount?: number;
   roomAssignedCount: number;
+  dinnerAssignedCount?: number;
   roomUnassignedCount?: number;
   checkedInCount: number;
   notCheckedInCount?: number;
@@ -547,6 +616,8 @@ function meetingRequestFrom(meeting: Partial<Meeting>, fallback?: Meeting) {
     coOrganizer: blankToUndefined(meeting.coOrganizer ?? fallback?.coOrganizer),
     location: venue,
     venueName: venue,
+    dinnerVenue: blankToUndefined(meeting.dinnerVenue ?? fallback?.dinnerVenue),
+    dinnerTime: blankToUndefined(meeting.dinnerTime ?? fallback?.dinnerTime),
     startTime: blankToUndefined(meeting.startTime ?? fallback?.startTime),
     endTime: blankToUndefined(meeting.endTime ?? fallback?.endTime),
     registrationStartTime: blankToUndefined(meeting.registrationStartTime ?? fallback?.registrationStartTime),
@@ -560,6 +631,7 @@ function meetingRequestFrom(meeting: Partial<Meeting>, fallback?: Meeting) {
     status: meeting.status || fallback?.status || "DRAFT",
     seatQueryEnabled: meeting.seatQueryEnabled ?? fallback?.seatQueryEnabled ?? false,
     roomQueryEnabled: meeting.roomQueryEnabled ?? fallback?.roomQueryEnabled ?? false,
+    dinnerQueryEnabled: meeting.dinnerQueryEnabled ?? fallback?.dinnerQueryEnabled ?? false,
     checkinEnabled: meeting.checkinEnabled ?? fallback?.checkinEnabled ?? true,
     publicQueryFields: meeting.publicQueryFields || fallback?.publicQueryFields || (["PHONE", "NAME"] as PublicQueryField[]),
     publicQueryMatchMode: meeting.publicQueryMatchMode || fallback?.publicQueryMatchMode || "FUZZY"
@@ -605,7 +677,11 @@ const defaultResultFieldOptions: MeetingQuerySettings["resultFieldOptions"] = [
   { field: "ROOM_TYPE", label: "房型" },
   { field: "ROOM_NO", label: "房间号" },
   { field: "ROOM_REMARK", label: "房间备注" },
-  { field: "CHECKIN_TIPS", label: "入住提示" }
+  { field: "CHECKIN_TIPS", label: "入住提示" },
+  { field: "DINNER_TABLE_NO", label: "晚宴桌号" },
+  { field: "DINNER_VENUE", label: "晚宴地点" },
+  { field: "DINNER_TIME", label: "晚宴时间" },
+  { field: "DINNER_REMARK", label: "晚宴备注" }
 ];
 
 const defaultVisibleResultFields: PublicQueryResultField[] = [
@@ -618,7 +694,11 @@ const defaultVisibleResultFields: PublicQueryResultField[] = [
   "ROOM_TYPE",
   "ROOM_NO",
   "ROOM_REMARK",
-  "CHECKIN_TIPS"
+  "CHECKIN_TIPS",
+  "DINNER_TABLE_NO",
+  "DINNER_VENUE",
+  "DINNER_TIME",
+  "DINNER_REMARK"
 ];
 
 const defaultSeatVisibleResultFields: PublicQueryResultField[] = ["ATTENDEE_NAME", "SEAT_AREA", "SEAT_ROW", "SEAT_NO", "SEAT_CODE"];
@@ -630,12 +710,15 @@ const defaultRoomVisibleResultFields: PublicQueryResultField[] = [
   "ROOM_REMARK",
   "CHECKIN_TIPS"
 ];
+const defaultDinnerVisibleResultFields: PublicQueryResultField[] = ["ATTENDEE_NAME", "DINNER_TABLE_NO", "DINNER_VENUE", "DINNER_TIME", "DINNER_REMARK"];
 
 let bootstrapPromise: Promise<void> | null = null;
 const workspaceLoadPromises = new Map<string, Promise<void>>();
 const attendeesLoadPromises = new Map<string, Promise<void>>();
 const seatsLoadPromises = new Map<string, Promise<void>>();
 const roomsLoadPromises = new Map<string, Promise<void>>();
+const dinnerLoadPromises = new Map<string, Promise<void>>();
+const dinnerTablesLoadPromises = new Map<string, Promise<void>>();
 const statisticsLoadPromises = new Map<string, Promise<void>>();
 const ADMIN_PAGE_SIZE = 200;
 
@@ -660,6 +743,8 @@ export const useMeetingStore = defineStore("meeting", {
     attendees: [] as Attendee[],
     seats: [] as Seat[],
     rooms: [] as Room[],
+    dinnerAssignments: [] as DinnerAssignment[],
+    dinnerTables: [] as DinnerTable[],
     syncLogs: [] as SyncLog[],
     checkinRecords: [] as CheckinRecord[],
     overview: null as StatisticsOverviewDto | null,
@@ -680,6 +765,12 @@ export const useMeetingStore = defineStore("meeting", {
     },
     currentRooms(state) {
       return state.rooms.filter((room) => room.meetingId === state.currentMeetingId);
+    },
+    currentDinnerAssignments(state) {
+      return state.dinnerAssignments.filter((assignment) => assignment.meetingId === state.currentMeetingId);
+    },
+    currentDinnerTables(state) {
+      return state.dinnerTables.filter((table) => table.meetingId === state.currentMeetingId);
     }
   },
   actions: {
@@ -748,6 +839,7 @@ export const useMeetingStore = defineStore("meeting", {
       this.attendees = [...mockAttendees];
       this.seats = [...mockSeats];
       this.rooms = [...mockRooms];
+      this.dinnerAssignments = [...mockDinnerAssignments];
       this.syncLogs = [...mockSyncLogs];
       const fallbackMeetingId = this.meetings.some((meeting) => meeting.id === preferredMeetingId)
         ? preferredMeetingId
@@ -822,6 +914,7 @@ export const useMeetingStore = defineStore("meeting", {
         MeetingQuerySettings,
         | "seatQueryEnabled"
         | "roomQueryEnabled"
+        | "dinnerQueryEnabled"
         | "checkinEnabled"
         | "queryPaused"
         | "fields"
@@ -836,6 +929,7 @@ export const useMeetingStore = defineStore("meeting", {
         | "emptyMessage"
         | "seatNotice"
         | "roomNotice"
+        | "dinnerNotice"
         | "themeColor"
         | "logoUrl"
         | "backgroundUrl"
@@ -849,6 +943,9 @@ export const useMeetingStore = defineStore("meeting", {
         | "roomVisibleResultFields"
         | "roomMaskedResultFields"
         | "roomHighlightResultFields"
+        | "dinnerVisibleResultFields"
+        | "dinnerMaskedResultFields"
+        | "dinnerHighlightResultFields"
       >
     ) {
       const targetMeetingId = requireMeetingId(meetingId);
@@ -858,6 +955,7 @@ export const useMeetingStore = defineStore("meeting", {
             await http.put<MeetingQuerySettingsDto>(`/admin/meetings/${backendId(targetMeetingId)}/query-settings`, {
               seatQueryEnabled: settings.seatQueryEnabled,
               roomQueryEnabled: settings.roomQueryEnabled,
+              dinnerQueryEnabled: settings.dinnerQueryEnabled,
               checkinEnabled: settings.checkinEnabled,
               queryPaused: settings.queryPaused,
               fields: settings.fields,
@@ -872,6 +970,7 @@ export const useMeetingStore = defineStore("meeting", {
               emptyMessage: settings.emptyMessage,
               seatNotice: settings.seatNotice,
               roomNotice: settings.roomNotice,
+              dinnerNotice: settings.dinnerNotice,
               themeColor: settings.themeColor,
               logoUrl: settings.logoUrl,
               backgroundUrl: settings.backgroundUrl,
@@ -884,7 +983,10 @@ export const useMeetingStore = defineStore("meeting", {
               seatHighlightResultFields: settings.seatHighlightResultFields,
               roomVisibleResultFields: settings.roomVisibleResultFields,
               roomMaskedResultFields: settings.roomMaskedResultFields,
-              roomHighlightResultFields: settings.roomHighlightResultFields
+              roomHighlightResultFields: settings.roomHighlightResultFields,
+              dinnerVisibleResultFields: settings.dinnerVisibleResultFields,
+              dinnerMaskedResultFields: settings.dinnerMaskedResultFields,
+              dinnerHighlightResultFields: settings.dinnerHighlightResultFields
             })
           )
         );
@@ -897,6 +999,7 @@ export const useMeetingStore = defineStore("meeting", {
           ...local,
           seatQueryEnabled: settings.seatQueryEnabled,
           roomQueryEnabled: settings.roomQueryEnabled,
+          dinnerQueryEnabled: settings.dinnerQueryEnabled,
           checkinEnabled: settings.checkinEnabled,
           queryPaused: settings.queryPaused,
           fields: [...settings.fields],
@@ -911,6 +1014,7 @@ export const useMeetingStore = defineStore("meeting", {
           emptyMessage: settings.emptyMessage,
           seatNotice: settings.seatNotice,
           roomNotice: settings.roomNotice,
+          dinnerNotice: settings.dinnerNotice,
           themeColor: settings.themeColor,
           logoUrl: settings.logoUrl,
           backgroundUrl: settings.backgroundUrl,
@@ -923,7 +1027,10 @@ export const useMeetingStore = defineStore("meeting", {
           seatHighlightResultFields: [...settings.seatHighlightResultFields],
           roomVisibleResultFields: [...settings.roomVisibleResultFields],
           roomMaskedResultFields: [...settings.roomMaskedResultFields],
-          roomHighlightResultFields: [...settings.roomHighlightResultFields]
+          roomHighlightResultFields: [...settings.roomHighlightResultFields],
+          dinnerVisibleResultFields: [...settings.dinnerVisibleResultFields],
+          dinnerMaskedResultFields: [...settings.dinnerMaskedResultFields],
+          dinnerHighlightResultFields: [...settings.dinnerHighlightResultFields]
         };
         this.applyMeetingQuerySettings(saved);
         return saved;
@@ -985,6 +1092,20 @@ export const useMeetingStore = defineStore("meeting", {
       } catch (error) {
         if (!canUseDemoFallback(error)) throw new Error(extractErrorMessage(error, "住宿查询失败"));
         return localRoomQuery(this, payload);
+      }
+    },
+    async publicDinnerQuery(payload: {
+      meetingId?: string | number | null;
+      meetingCode?: string | null;
+      values: Record<PublicQueryField, string>;
+      captchaId?: string | null;
+      captchaAnswer?: string | null;
+    }) {
+      try {
+        return unwrapApi(await http.post<DinnerQueryResult>("/public/dinner-query", payload));
+      } catch (error) {
+        if (!canUseDemoFallback(error)) throw new Error(extractErrorMessage(error, "晚宴查询失败"));
+        return localDinnerQuery(this, payload);
       }
     },
     async publicSelfCheckin(payload: {
@@ -1052,6 +1173,7 @@ export const useMeetingStore = defineStore("meeting", {
       if (!meeting) return;
       meeting.seatQueryEnabled = settings.seatQueryEnabled;
       meeting.roomQueryEnabled = settings.roomQueryEnabled;
+      meeting.dinnerQueryEnabled = settings.dinnerQueryEnabled;
       meeting.checkinEnabled = settings.checkinEnabled;
       meeting.publicQueryFields = [...settings.fields];
       meeting.publicQueryMatchMode = settings.matchMode;
@@ -1074,6 +1196,9 @@ export const useMeetingStore = defineStore("meeting", {
           this.loadAttendees(meetingId),
           this.loadSeats(meetingId),
           this.loadRooms(meetingId),
+          this.loadDinnerTables(meetingId),
+          this.loadDinnerAssignments(meetingId),
+          this.loadDinnerSettings(meetingId),
           this.loadSyncLogs(meetingId),
           this.loadCheckinRecords(meetingId),
           this.loadStatistics(meetingId)
@@ -1206,6 +1331,105 @@ export const useMeetingStore = defineStore("meeting", {
         this.rooms = [...this.rooms.filter((room) => room.meetingId !== meetingId), ...rooms.map((item) => mapRoom(item, meetingId))];
       });
     },
+    async loadDinnerAssignments(meetingId?: string) {
+      meetingId = requireMeetingId(meetingId || this.currentMeetingId);
+      return singleFlight(dinnerLoadPromises, meetingId, async () => {
+        const assignments = unwrapApi(await http.get<DinnerAssignmentDto[]>("/admin/dinner", { params: { meetingId: backendId(meetingId) } }));
+        this.dinnerAssignments = [
+          ...this.dinnerAssignments.filter((assignment) => assignment.meetingId !== meetingId),
+          ...assignments.map(mapDinnerAssignment)
+        ];
+      });
+    },
+    async loadDinnerTables(meetingId?: string) {
+      meetingId = requireMeetingId(meetingId || this.currentMeetingId);
+      return singleFlight(dinnerTablesLoadPromises, meetingId, async () => {
+        const tables = unwrapApi(await http.get<DinnerTableDto[]>("/admin/dinner/tables", { params: { meetingId: backendId(meetingId) } }));
+        this.dinnerTables = [
+          ...this.dinnerTables.filter((table) => table.meetingId !== meetingId),
+          ...tables.map(mapDinnerTable)
+        ];
+      });
+    },
+    async loadDinnerSettings(meetingId?: string) {
+      meetingId = requireMeetingId(meetingId || this.currentMeetingId);
+      if (!isBackendMeetingId(meetingId)) {
+        const meeting = this.meetings.find((item) => item.id === meetingId);
+        return {
+          meetingId: 0,
+          venue: meeting?.dinnerVenue,
+          dinnerTime: meeting?.dinnerTime
+        } as DinnerSettingsDto;
+      }
+      try {
+        const settings = unwrapApi(await http.get<DinnerSettingsDto>("/admin/dinner/settings", { params: { meetingId: backendId(meetingId) } }));
+        this.patchMeetingDinnerSettings(idOf(settings.meetingId), settings.venue, settings.dinnerTime);
+        return settings;
+      } catch (error) {
+        if (this.apiAvailable || !canUseDemoFallback(error)) throw error;
+        const meeting = this.meetings.find((item) => item.id === meetingId);
+        return {
+          meetingId: Number(meetingId),
+          venue: meeting?.dinnerVenue,
+          dinnerTime: meeting?.dinnerTime
+        } as DinnerSettingsDto;
+      }
+    },
+    async saveDinnerSettings(payload: DinnerSettingsPayload) {
+      const meetingId = requireMeetingId(this.currentMeetingId);
+      if (!isBackendMeetingId(meetingId)) {
+        this.patchMeetingDinnerSettings(meetingId, payload.venue?.trim() || "", payload.dinnerTime?.trim() || "");
+        return {
+          meetingId: 0,
+          venue: payload.venue?.trim() || "",
+          dinnerTime: payload.dinnerTime?.trim() || ""
+        } as DinnerSettingsDto;
+      }
+      const request = {
+        meetingId: backendId(meetingId),
+        venue: blankToUndefined(payload.venue),
+        dinnerTime: blankToUndefined(payload.dinnerTime)
+      };
+      try {
+        const settings = unwrapApi(await http.put<DinnerSettingsDto>("/admin/dinner/settings", request));
+        this.patchMeetingDinnerSettings(idOf(settings.meetingId), settings.venue, settings.dinnerTime);
+        return settings;
+      } catch (error) {
+        if (this.apiAvailable || !canUseDemoFallback(error)) throw error;
+        this.patchMeetingDinnerSettings(meetingId, payload.venue?.trim() || "", payload.dinnerTime?.trim() || "");
+        return {
+          meetingId: Number(meetingId),
+          venue: payload.venue?.trim() || "",
+          dinnerTime: payload.dinnerTime?.trim() || ""
+        } as DinnerSettingsDto;
+      }
+    },
+    async saveDinnerTable(payload: DinnerTablePayload) {
+      const meetingId = requireMeetingId(this.currentMeetingId);
+      const tableNo = payload.tableNo.trim();
+      if (!tableNo) throw new Error("桌号不能为空");
+      const request = {
+        meetingId: backendId(meetingId),
+        tableNo,
+        capacity: Math.max(1, Math.floor(payload.capacity || 1)),
+        remark: blankToUndefined(payload.remark)
+      };
+      const saved = payload.id
+        ? unwrapApi(await http.put<DinnerTableDto>(`/admin/dinner/tables/${backendId(payload.id)}`, request))
+        : unwrapApi(await http.post<DinnerTableDto>("/admin/dinner/tables", request));
+      const table = mapDinnerTable(saved);
+      this.dinnerTables = [
+        ...this.dinnerTables.filter((item) => item.id !== table.id),
+        table
+      ];
+      await this.loadDinnerAssignments(meetingId);
+      return table;
+    },
+    async deleteDinnerTable(tableId: string) {
+      const meetingId = requireMeetingId(this.currentMeetingId);
+      await http.delete(`/admin/dinner/tables/${backendId(tableId)}`, { params: { meetingId: backendId(meetingId) } });
+      this.dinnerTables = this.dinnerTables.filter((table) => table.id !== tableId);
+    },
     async createRoom(payload: CreateRoomPayload) {
       const meetingId = requireMeetingId(this.currentMeetingId);
       const roomNo = payload.roomNo.trim();
@@ -1295,6 +1519,8 @@ export const useMeetingStore = defineStore("meeting", {
           name: request.name,
           organizer: request.organizer,
           venue: request.venueName || "",
+          dinnerVenue: request.dinnerVenue || "",
+          dinnerTime: request.dinnerTime || "",
           startTime: request.startTime || "",
           endTime: request.endTime || "",
           status: request.status as Meeting["status"],
@@ -1309,6 +1535,7 @@ export const useMeetingStore = defineStore("meeting", {
           registrationUrl: payload.registrationUrl || "",
           seatQueryEnabled: payload.seatQueryEnabled || false,
           roomQueryEnabled: payload.roomQueryEnabled || false,
+          dinnerQueryEnabled: payload.dinnerQueryEnabled || false,
           checkinEnabled: payload.checkinEnabled ?? true,
           publicQueryFields: payload.publicQueryFields || ["PHONE", "NAME"],
           publicQueryMatchMode: payload.publicQueryMatchMode || "FUZZY"
@@ -1334,6 +1561,8 @@ export const useMeetingStore = defineStore("meeting", {
           organizer: request.organizer,
           coOrganizer: request.coOrganizer,
           venue: request.venueName || "",
+          dinnerVenue: request.dinnerVenue || "",
+          dinnerTime: request.dinnerTime || "",
           startTime: request.startTime || "",
           endTime: request.endTime || "",
           registrationStartTime: request.registrationStartTime || "",
@@ -1347,6 +1576,7 @@ export const useMeetingStore = defineStore("meeting", {
           status: request.status as Meeting["status"],
           seatQueryEnabled: request.seatQueryEnabled,
           roomQueryEnabled: request.roomQueryEnabled,
+          dinnerQueryEnabled: request.dinnerQueryEnabled,
           checkinEnabled: request.checkinEnabled,
           publicQueryFields: request.publicQueryFields,
           publicQueryMatchMode: request.publicQueryMatchMode
@@ -1687,6 +1917,59 @@ export const useMeetingStore = defineStore("meeting", {
       this.reconcileAssignments();
       this.refreshMeetingCounters();
     },
+    async assignDinner(payload: DinnerAssignPayload) {
+      const meetingId = requireMeetingId(this.currentMeetingId);
+      const attendee = this.attendees.find((item) => item.id === payload.attendeeId);
+      if (!attendee) throw new Error("参会人不存在");
+      const tableNo = payload.tableNo.trim();
+      if (!tableNo) throw new Error("请填写晚宴桌号");
+      const request = {
+        attendeeId: backendId(payload.attendeeId),
+        tableNo,
+        remark: blankToUndefined(payload.remark)
+      };
+      try {
+        const saved = unwrapApi(await http.post<DinnerAssignmentDto>("/admin/dinner/assign", request));
+        const assignment = mapDinnerAssignment(saved);
+        this.dinnerAssignments = [
+          ...this.dinnerAssignments.filter((item) => !(item.meetingId === assignment.meetingId && item.attendeeId === assignment.attendeeId)),
+          assignment
+        ];
+        await this.loadDinnerTables(meetingId);
+        return assignment;
+      } catch (error) {
+        if (this.apiAvailable || !canUseDemoFallback(error)) throw error;
+        const assignment: DinnerAssignment = {
+          id: `local-dinner-${Date.now()}`,
+          meetingId,
+          attendeeId: attendee.id,
+          attendeeName: attendee.name,
+          attendeePhone: attendee.phone,
+          organization: attendee.company,
+          title: attendee.title,
+          attendeeType: attendee.attendeeType,
+          tableNo,
+          remark: payload.remark?.trim() || "",
+          assignedBy: "local"
+        };
+        this.dinnerAssignments = [
+          ...this.dinnerAssignments.filter((item) => !(item.meetingId === meetingId && item.attendeeId === attendee.id)),
+          assignment
+        ];
+        return assignment;
+      }
+    },
+    async clearDinnerAssignment(attendeeId: string) {
+      const meetingId = requireMeetingId(this.currentMeetingId);
+      try {
+        await http.post("/admin/dinner/clear", undefined, { params: { attendeeId: backendId(attendeeId) } });
+        this.dinnerAssignments = this.dinnerAssignments.filter((item) => !(item.meetingId === meetingId && item.attendeeId === attendeeId));
+        await this.loadDinnerTables(meetingId);
+      } catch (error) {
+        if (this.apiAvailable || !canUseDemoFallback(error)) throw error;
+        this.dinnerAssignments = this.dinnerAssignments.filter((item) => !(item.meetingId === meetingId && item.attendeeId === attendeeId));
+      }
+    },
     async importAttendees(file: File) {
       const meetingId = requireMeetingId(this.currentMeetingId);
       const result = await this.uploadImport("/admin/attendees/import", file, "参会人");
@@ -1707,6 +1990,20 @@ export const useMeetingStore = defineStore("meeting", {
       this.reconcileAssignments();
       this.refreshMeetingCounters();
       return result;
+    },
+    async importDinnerAssignments(file: File) {
+      const meetingId = requireMeetingId(this.currentMeetingId);
+      const result = await this.uploadImport("/admin/dinner/import", file, "晚宴分配");
+      await Promise.allSettled([this.loadDinnerAssignments(meetingId), this.loadDinnerTables(meetingId), this.loadDinnerSettings(meetingId)]);
+      return result;
+    },
+    async downloadDinnerExport() {
+      const meetingId = requireMeetingId(this.currentMeetingId);
+      const response = await http.get<Blob>("/admin/dinner/export", {
+        params: { meetingId: backendId(meetingId) },
+        responseType: "blob"
+      });
+      downloadBlob(response.data, filenameFromDisposition(response.headers["content-disposition"], "meetingos-dinner.xlsx"));
     },
     async createExportTask(type: string) {
       const meetingId = requireMeetingId(this.currentMeetingId);
@@ -1960,6 +2257,12 @@ export const useMeetingStore = defineStore("meeting", {
       if (index >= 0) this.meetings[index] = { ...this.meetings[index], ...meeting };
       else this.meetings.unshift(meeting);
     },
+    patchMeetingDinnerSettings(meetingId: string, dinnerVenue?: string, dinnerTime?: string) {
+      const meeting = this.meetings.find((item) => item.id === meetingId);
+      if (!meeting) return;
+      meeting.dinnerVenue = dinnerVenue || "";
+      meeting.dinnerTime = dinnerTime || "";
+    },
     upsertRoom(room: Room) {
       const index = this.rooms.findIndex((item) => item.id === room.id);
       if (index >= 0) this.rooms[index] = { ...this.rooms[index], ...room };
@@ -2201,6 +2504,8 @@ function mapMeetingSummary(item: MeetingSummaryDto): Meeting {
     name: item.name,
     organizer: "主办方",
     venue: item.location || "",
+    dinnerVenue: item.dinnerVenue || "",
+    dinnerTime: item.dinnerTime || "",
     startTime: item.startTime || "",
     endTime: item.endTime || "",
     status: item.status,
@@ -2209,12 +2514,14 @@ function mapMeetingSummary(item: MeetingSummaryDto): Meeting {
     approvedCount: item.approvedCount || 0,
     seatedCount: item.seatedCount || 0,
     roomedCount: item.roomAssignedCount || 0,
+    dinneredCount: item.dinnerAssignedCount || 0,
     checkedInCount: item.checkedInCount || 0,
     tduckFormKey: "",
     tduckFormName: "",
     registrationUrl: "",
     seatQueryEnabled: Boolean(item.seatQueryEnabled),
     roomQueryEnabled: Boolean(item.roomQueryEnabled),
+    dinnerQueryEnabled: Boolean(item.dinnerQueryEnabled),
     checkinEnabled: item.checkinEnabled ?? true,
     publicQueryFields: parseQueryFields(item.publicQueryFields),
     publicQueryMatchMode: item.publicQueryMatchMode || "FUZZY"
@@ -2228,6 +2535,7 @@ function mapMeetingDetail(item: MeetingDetailDto): Meeting {
     approvedCount: item.approvedCount || 0,
     seatedCount: item.seatedCount || 0,
     roomedCount: item.roomAssignedCount || 0,
+    dinneredCount: item.dinnerAssignedCount || 0,
     checkedInCount: item.checkedInCount || 0
   };
 }
@@ -2240,6 +2548,8 @@ function mapMeetingEntity(item: MeetingDetailDto["meeting"]): Meeting {
     organizer: item.organizer || "主办方",
     coOrganizer: item.coOrganizer || "",
     venue: item.venueName || item.location || "",
+    dinnerVenue: item.dinnerVenue || "",
+    dinnerTime: item.dinnerTime || "",
     startTime: item.startTime || "",
     endTime: item.endTime || "",
     registrationStartTime: item.registrationStartTime || "",
@@ -2255,12 +2565,14 @@ function mapMeetingEntity(item: MeetingDetailDto["meeting"]): Meeting {
     approvedCount: 0,
     seatedCount: 0,
     roomedCount: 0,
+    dinneredCount: 0,
     checkedInCount: 0,
     tduckFormKey: "",
     tduckFormName: "",
     registrationUrl: "",
     seatQueryEnabled: Boolean(item.seatQueryEnabled),
     roomQueryEnabled: Boolean(item.roomQueryEnabled),
+    dinnerQueryEnabled: Boolean(item.dinnerQueryEnabled),
     checkinEnabled: item.checkinEnabled ?? true,
     publicQueryFields: parseQueryFields(item.publicQueryFields),
     publicQueryMatchMode: item.publicQueryMatchMode || "FUZZY"
@@ -2332,6 +2644,36 @@ function mapRoom(item: RoomDto, meetingId: string): Room {
   };
 }
 
+function mapDinnerAssignment(item: DinnerAssignmentDto): DinnerAssignment {
+  return {
+    id: idOf(item.id),
+    meetingId: idOf(item.meetingId),
+    attendeeId: idOf(item.attendeeId),
+    attendeeName: item.attendeeName,
+    attendeePhone: item.attendeePhone,
+    organization: item.organization,
+    title: item.title,
+    attendeeType: item.attendeeType,
+    tableNo: item.tableNo,
+    remark: item.remark,
+    assignedBy: item.assignedBy
+  };
+}
+
+function mapDinnerTable(item: DinnerTableDto): DinnerTable {
+  return {
+    id: idOf(item.id),
+    meetingId: idOf(item.meetingId),
+    tableNo: item.tableNo,
+    capacity: Math.max(1, Math.floor(item.capacity || 1)),
+    occupiedCount: Math.max(0, Math.floor(item.occupiedCount || 0)),
+    remainingCount: Math.max(0, Math.floor(item.remainingCount || 0)),
+    overCapacityCount: Math.max(0, Math.floor(item.overCapacityCount || 0)),
+    remark: item.remark,
+    createdBy: item.createdBy
+  };
+}
+
 function parseQueryFields(value?: string | PublicQueryField[]) {
   if (Array.isArray(value)) return value.length ? value : (["PHONE", "NAME"] as PublicQueryField[]);
   const fields = (value || "PHONE,NAME")
@@ -2387,26 +2729,52 @@ function roomResultFields(fields: PublicQueryResultField[]) {
   return fields.filter((field) => allowed.has(field));
 }
 
-function mergeResultFields(primary: PublicQueryResultField[], secondary: PublicQueryResultField[]) {
-  return Array.from(new Set([...primary, ...secondary]));
+function dinnerResultFields(fields: PublicQueryResultField[]) {
+  const allowed = new Set<PublicQueryResultField>([
+    "ATTENDEE_NAME",
+    "ATTENDEE_PHONE",
+    "ORGANIZATION",
+    "TITLE",
+    "EMAIL",
+    "MEETING_NAME",
+    "DINNER_TABLE_NO",
+    "DINNER_VENUE",
+    "DINNER_TIME",
+    "DINNER_REMARK"
+  ]);
+  return fields.filter((field) => allowed.has(field));
+}
+
+function mergeResultFields(...groups: PublicQueryResultField[][]) {
+  return Array.from(new Set(groups.flat()));
 }
 
 function mapQuerySettings(item: MeetingQuerySettingsDto): MeetingQuerySettings {
   const visibleResultFields = parseResultFields(item.visibleResultFields, defaultVisibleResultFields);
   const maskedResultFields = parseResultFields(item.maskedResultFields, []);
-  const highlightResultFields = parseResultFields(item.highlightResultFields, ["SEAT_CODE", "ROOM_NO"]);
+  const highlightResultFields = parseResultFields(item.highlightResultFields, ["SEAT_CODE", "ROOM_NO", "DINNER_TABLE_NO"]);
   const seatVisibleResultFields = parseResultFields(item.seatVisibleResultFields, seatResultFields(visibleResultFields).length ? seatResultFields(visibleResultFields) : defaultSeatVisibleResultFields);
   const seatMaskedResultFields = parseResultFields(item.seatMaskedResultFields, seatResultFields(maskedResultFields));
   const seatHighlightResultFields = parseResultFields(item.seatHighlightResultFields, seatResultFields(highlightResultFields).length ? seatResultFields(highlightResultFields) : ["SEAT_CODE"]);
   const roomVisibleResultFields = parseResultFields(item.roomVisibleResultFields, roomResultFields(visibleResultFields).length ? roomResultFields(visibleResultFields) : defaultRoomVisibleResultFields);
   const roomMaskedResultFields = parseResultFields(item.roomMaskedResultFields, roomResultFields(maskedResultFields));
   const roomHighlightResultFields = parseResultFields(item.roomHighlightResultFields, roomResultFields(highlightResultFields).length ? roomResultFields(highlightResultFields) : ["ROOM_NO"]);
+  const dinnerVisibleResultFields = parseResultFields(
+    item.dinnerVisibleResultFields,
+    dinnerResultFields(visibleResultFields).length ? dinnerResultFields(visibleResultFields) : defaultDinnerVisibleResultFields
+  );
+  const dinnerMaskedResultFields = parseResultFields(item.dinnerMaskedResultFields, dinnerResultFields(maskedResultFields));
+  const dinnerHighlightResultFields = parseResultFields(
+    item.dinnerHighlightResultFields,
+    dinnerResultFields(highlightResultFields).length ? dinnerResultFields(highlightResultFields) : ["DINNER_TABLE_NO"]
+  );
   return {
     meetingId: idOf(item.meetingId),
     meetingCode: item.meetingCode,
     meetingName: item.meetingName,
     seatQueryEnabled: item.seatQueryEnabled,
     roomQueryEnabled: item.roomQueryEnabled,
+    dinnerQueryEnabled: item.dinnerQueryEnabled ?? false,
     checkinEnabled: item.checkinEnabled ?? true,
     queryPaused: Boolean(item.queryPaused),
     fields: parseQueryFields(item.fields),
@@ -2421,19 +2789,23 @@ function mapQuerySettings(item: MeetingQuerySettingsDto): MeetingQuerySettings {
     emptyMessage: item.emptyMessage || "未查询到结果，请核对信息后重试",
     seatNotice: item.seatNotice || "请按会议通知时间到达会场，凭会议证件从指定入口进入，对号入座。",
     roomNotice: item.roomNotice || "凭会议证件及身份证办理入住，接待台位于酒店大堂。",
+    dinnerNotice: item.dinnerNotice || "请按现场指引前往晚宴区域入座，如有调整请以会务组通知为准。",
     themeColor: item.themeColor || "#2563eb",
     logoUrl: item.logoUrl,
     backgroundUrl: item.backgroundUrl,
     resultLayout: normalizeResultLayout(item.resultLayout),
-    visibleResultFields: mergeResultFields(seatVisibleResultFields, roomVisibleResultFields),
-    maskedResultFields: mergeResultFields(seatMaskedResultFields, roomMaskedResultFields),
-    highlightResultFields: mergeResultFields(seatHighlightResultFields, roomHighlightResultFields),
+    visibleResultFields: mergeResultFields(seatVisibleResultFields, roomVisibleResultFields, dinnerVisibleResultFields),
+    maskedResultFields: mergeResultFields(seatMaskedResultFields, roomMaskedResultFields, dinnerMaskedResultFields),
+    highlightResultFields: mergeResultFields(seatHighlightResultFields, roomHighlightResultFields, dinnerHighlightResultFields),
     seatVisibleResultFields,
     seatMaskedResultFields,
     seatHighlightResultFields,
     roomVisibleResultFields,
     roomMaskedResultFields,
     roomHighlightResultFields,
+    dinnerVisibleResultFields,
+    dinnerMaskedResultFields,
+    dinnerHighlightResultFields,
     captchaEnabled: Boolean(item.captchaEnabled),
     fieldOptions: item.fieldOptions?.length ? item.fieldOptions : defaultQueryFieldOptions,
     resultFieldOptions: item.resultFieldOptions?.length ? item.resultFieldOptions : defaultResultFieldOptions
@@ -2448,6 +2820,7 @@ function meetingToQuerySettings(meeting?: Meeting | null): MeetingQuerySettings 
     meetingName,
     seatQueryEnabled: meeting?.seatQueryEnabled ?? true,
     roomQueryEnabled: meeting?.roomQueryEnabled ?? true,
+    dinnerQueryEnabled: meeting?.dinnerQueryEnabled ?? false,
     checkinEnabled: meeting?.checkinEnabled ?? true,
     queryPaused: false,
     fields: meeting?.publicQueryFields?.length ? meeting.publicQueryFields : ["PHONE", "NAME"],
@@ -2460,17 +2833,21 @@ function meetingToQuerySettings(meeting?: Meeting | null): MeetingQuerySettings 
     emptyMessage: "未查询到结果，请核对信息后重试",
     seatNotice: "请按会议通知时间到达会场，凭会议证件从指定入口进入，对号入座。",
     roomNotice: "凭会议证件及身份证办理入住，接待台位于酒店大堂。",
+    dinnerNotice: "请按现场指引前往晚宴区域入座，如有调整请以会务组通知为准。",
     themeColor: "#2563eb",
     resultLayout: "CARD",
     visibleResultFields: [...defaultVisibleResultFields],
     maskedResultFields: [],
-    highlightResultFields: ["SEAT_CODE", "ROOM_NO"],
+    highlightResultFields: ["SEAT_CODE", "ROOM_NO", "DINNER_TABLE_NO"],
     seatVisibleResultFields: [...defaultSeatVisibleResultFields],
     seatMaskedResultFields: [],
     seatHighlightResultFields: ["SEAT_CODE"],
     roomVisibleResultFields: [...defaultRoomVisibleResultFields],
     roomMaskedResultFields: [],
     roomHighlightResultFields: ["ROOM_NO"],
+    dinnerVisibleResultFields: [...defaultDinnerVisibleResultFields],
+    dinnerMaskedResultFields: [],
+    dinnerHighlightResultFields: ["DINNER_TABLE_NO"],
     captchaEnabled: false,
     fieldOptions: defaultQueryFieldOptions,
     resultFieldOptions: defaultResultFieldOptions
@@ -2526,6 +2903,10 @@ function localSeatQuery(
   return {
     attendeeId: Number(attendee.id),
     attendeeName: attendee.name,
+    attendeePhone: attendee.phone,
+    organization: attendee.company,
+    title: attendee.title,
+    email: attendee.email,
     meetingName: meeting.name,
     areaName: seat.areaName,
     rowNo: seat.rowNo,
@@ -2562,6 +2943,27 @@ function localRoomQuery(
     hotelName: room?.hotelName,
     roomType: room?.roomType,
     checkinTips: room?.checkinTips
+  };
+}
+
+function localDinnerQuery(
+  store: ReturnType<typeof useMeetingStore>,
+  payload: { meetingId?: string | number | null; meetingCode?: string | null; values: Record<PublicQueryField, string> }
+): DinnerQueryResult {
+  const meeting = resolveLocalMeeting(store, payload);
+  if (!meeting.dinnerQueryEnabled) throw new Error("晚宴查询尚未开放");
+  const attendee = resolveSingleLocalAttendee(store, meeting, payload.values);
+  if (attendee.auditStatus !== "APPROVED") throw new Error("报名尚未审核通过，暂不能查询");
+  const assignment = store.dinnerAssignments.find((item) => item.meetingId === meeting.id && item.attendeeId === attendee.id);
+  if (!assignment) throw new Error("尚未安排晚宴桌号");
+  return {
+    attendeeId: Number(attendee.id),
+    attendeeName: attendee.name,
+    meetingName: meeting.name,
+    tableNo: assignment.tableNo,
+    venue: meeting.dinnerVenue,
+    dinnerTime: meeting.dinnerTime,
+    remark: assignment.remark
   };
 }
 

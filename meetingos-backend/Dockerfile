@@ -8,6 +8,6 @@ RUN mvn -q -DskipTests package
 FROM eclipse-temurin:17-jre
 WORKDIR /app
 ENV JAVA_OPTS=""
-COPY --from=build /app/target/meetingos-backend-0.1.0-SNAPSHOT.jar /app/meetingos-backend.jar
+COPY --from=build /app/target/meetingos-backend-*.jar /app/meetingos-backend.jar
 EXPOSE 8080
 ENTRYPOINT ["sh", "-c", "java $JAVA_OPTS -jar /app/meetingos-backend.jar"]

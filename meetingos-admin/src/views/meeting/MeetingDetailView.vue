@@ -88,6 +88,12 @@
                         </n-tag>
                       </div>
                       <div class="status-row">
+                        <span>晚宴查询</span>
+                        <n-tag size="small" :type="queryForm.dinnerQueryEnabled ? 'success' : 'default'">
+                          {{ queryForm.dinnerQueryEnabled ? "已开放" : "未开放" }}
+                        </n-tag>
+                      </div>
+                      <div class="status-row">
                         <span>签到</span>
                         <n-tag size="small" :type="queryForm.checkinEnabled ? 'success' : 'default'">
                           {{ queryForm.checkinEnabled ? "已开放" : "未开放" }}
@@ -125,6 +131,13 @@
                           <span>查询房间号</span>
                         </div>
                         <n-switch v-model:value="queryForm.roomQueryEnabled" />
+                      </div>
+                      <div class="toggle-row">
+                        <div>
+                          <strong>晚宴查询</strong>
+                          <span>查询晚宴桌号</span>
+                        </div>
+                        <n-switch v-model:value="queryForm.dinnerQueryEnabled" />
                       </div>
                       <div class="toggle-row">
                         <div>
@@ -259,19 +272,28 @@
                           />
                         </n-form-item>
                       </div>
+                      <n-form-item label="晚宴结果提示">
+                        <n-input
+                          v-model:value="queryForm.dinnerNotice"
+                          type="textarea"
+                          clearable
+                          :autosize="{ minRows: 2, maxRows: 4 }"
+                          placeholder="例如：请按现场指引前往晚宴区域入座，如有调整请以会务组通知为准。"
+                        />
+                      </n-form-item>
                     </n-form>
                   </section>
                 </div>
               </n-tab-pane>
 
               <n-tab-pane name="result" tab="结果展示">
-                <div v-if="activeSettingsTab === 'result'" class="settings-pane settings-pane-grid">
-                  <section class="settings-panel">
+                <div v-if="activeSettingsTab === 'result'" class="settings-pane result-settings-pane">
+                  <section class="settings-panel result-appearance-panel">
                     <div class="section-heading">
                       <strong>外观</strong>
                       <span>配置公开查询页的基础视觉</span>
                     </div>
-                    <n-form label-placement="top" :show-feedback="false" class="query-form">
+                    <n-form label-placement="top" :show-feedback="false" class="query-form result-appearance-form">
                       <div class="query-form-row">
                         <n-form-item label="主题色">
                           <div class="theme-color-field">
@@ -287,43 +309,45 @@
                           </n-radio-group>
                         </n-form-item>
                       </div>
-                      <n-form-item label="Logo URL">
-                        <div class="asset-url-field">
-                          <n-input v-model:value="queryForm.logoUrl" clearable placeholder="https://..." />
-                          <n-upload
-                            :show-file-list="false"
-                            accept=".png,.jpg,.jpeg,.webp,.gif"
-                            :custom-request="uploadLogoAsset"
-                          >
-                            <n-button secondary :loading="uploadingAsset === 'logo'">
-                              <template #icon><n-icon :component="CloudUploadOutline" /></template>
-                              上传
-                            </n-button>
-                          </n-upload>
-                        </div>
-                      </n-form-item>
-                      <n-form-item label="背景图 URL">
-                        <div class="asset-url-field">
-                          <n-input v-model:value="queryForm.backgroundUrl" clearable placeholder="https://..." />
-                          <n-upload
-                            :show-file-list="false"
-                            accept=".png,.jpg,.jpeg,.webp,.gif"
-                            :custom-request="uploadBackgroundAsset"
-                          >
-                            <n-button secondary :loading="uploadingAsset === 'background'">
-                              <template #icon><n-icon :component="CloudUploadOutline" /></template>
-                              上传
-                            </n-button>
-                          </n-upload>
-                        </div>
-                      </n-form-item>
+                      <div class="query-form-row asset-fields-row">
+                        <n-form-item label="Logo URL">
+                          <div class="asset-url-field">
+                            <n-input v-model:value="queryForm.logoUrl" clearable placeholder="https://..." />
+                            <n-upload
+                              :show-file-list="false"
+                              accept=".png,.jpg,.jpeg,.webp,.gif"
+                              :custom-request="uploadLogoAsset"
+                            >
+                              <n-button secondary :loading="uploadingAsset === 'logo'">
+                                <template #icon><n-icon :component="CloudUploadOutline" /></template>
+                                上传
+                              </n-button>
+                            </n-upload>
+                          </div>
+                        </n-form-item>
+                        <n-form-item label="背景图 URL">
+                          <div class="asset-url-field">
+                            <n-input v-model:value="queryForm.backgroundUrl" clearable placeholder="https://..." />
+                            <n-upload
+                              :show-file-list="false"
+                              accept=".png,.jpg,.jpeg,.webp,.gif"
+                              :custom-request="uploadBackgroundAsset"
+                            >
+                              <n-button secondary :loading="uploadingAsset === 'background'">
+                                <template #icon><n-icon :component="CloudUploadOutline" /></template>
+                                上传
+                              </n-button>
+                            </n-upload>
+                          </div>
+                        </n-form-item>
+                      </div>
                     </n-form>
                   </section>
 
                   <section class="settings-panel settings-panel-wide">
                     <div class="section-heading">
                       <strong>结果字段</strong>
-                      <span>座位入口和住宿入口分别配置；综合查询页会分别使用两套配置</span>
+                      <span>座位、住宿和晚宴入口分别配置；综合查询页会按结果类型使用对应配置</span>
                     </div>
                     <div class="result-field-config-grid">
                       <div class="result-field-config">
@@ -387,6 +411,39 @@
                               multiple
                               :options="visibleRoomResultFieldSelectOptions"
                               placeholder="选择住宿结果需要高亮的字段"
+                            />
+                          </n-form-item>
+                        </n-form>
+                      </div>
+
+                      <div class="result-field-config">
+                        <div class="section-heading compact-heading">
+                          <strong>晚宴结果字段</strong>
+                          <span>用于晚宴查询入口和综合页晚宴结果</span>
+                        </div>
+                        <n-form label-placement="top" :show-feedback="false" class="query-form">
+                          <n-form-item label="展示字段">
+                            <n-select
+                              v-model:value="queryForm.dinnerVisibleResultFields"
+                              multiple
+                              :options="dinnerResultFieldSelectOptions"
+                              placeholder="选择晚宴结果中展示的字段"
+                            />
+                          </n-form-item>
+                          <n-form-item label="脱敏字段">
+                            <n-select
+                              v-model:value="queryForm.dinnerMaskedResultFields"
+                              multiple
+                              :options="visibleDinnerResultFieldSelectOptions"
+                              placeholder="选择晚宴结果需要脱敏的字段"
+                            />
+                          </n-form-item>
+                          <n-form-item label="重点字段">
+                            <n-select
+                              v-model:value="queryForm.dinnerHighlightResultFields"
+                              multiple
+                              :options="visibleDinnerResultFieldSelectOptions"
+                              placeholder="选择晚宴结果需要高亮的字段"
                             />
                           </n-form-item>
                         </n-form>
@@ -572,7 +629,7 @@ const loadingQuerySummary = ref(false);
 const uploadingAsset = ref<"logo" | "background" | null>(null);
 const queryHistoryRows = ref<PublicQueryHistory[]>([]);
 const querySummaryRows = ref<PublicQuerySummary[]>([]);
-type PublicQueryLinkKey = "combined" | "seat" | "room" | "checkin";
+type PublicQueryLinkKey = "combined" | "seat" | "room" | "dinner" | "checkin";
 
 interface PublicQueryLink {
   key: PublicQueryLinkKey;
@@ -586,6 +643,7 @@ interface PublicQueryLink {
 const queryForm = reactive({
   seatQueryEnabled: false,
   roomQueryEnabled: false,
+  dinnerQueryEnabled: false,
   checkinEnabled: true,
   queryPaused: false,
   fields: ["PHONE", "NAME"] as PublicQueryField[],
@@ -600,6 +658,7 @@ const queryForm = reactive({
   emptyMessage: "未查询到结果，请核对信息后重试",
   seatNotice: "请按会议通知时间到达会场，凭会议证件从指定入口进入，对号入座。",
   roomNotice: "凭会议证件及身份证办理入住，接待台位于酒店大堂。",
+  dinnerNotice: "请按现场指引前往晚宴区域入座，如有调整请以会务组通知为准。",
   themeColor: "#2563eb",
   logoUrl: "",
   backgroundUrl: "",
@@ -614,16 +673,23 @@ const queryForm = reactive({
     "ROOM_TYPE",
     "ROOM_NO",
     "ROOM_REMARK",
-    "CHECKIN_TIPS"
+    "CHECKIN_TIPS",
+    "DINNER_TABLE_NO",
+    "DINNER_VENUE",
+    "DINNER_TIME",
+    "DINNER_REMARK"
   ] as PublicQueryResultField[],
   maskedResultFields: [] as PublicQueryResultField[],
-  highlightResultFields: ["SEAT_CODE", "ROOM_NO"] as PublicQueryResultField[],
+  highlightResultFields: ["SEAT_CODE", "ROOM_NO", "DINNER_TABLE_NO"] as PublicQueryResultField[],
   seatVisibleResultFields: ["ATTENDEE_NAME", "SEAT_AREA", "SEAT_ROW", "SEAT_NO", "SEAT_CODE"] as PublicQueryResultField[],
   seatMaskedResultFields: [] as PublicQueryResultField[],
   seatHighlightResultFields: ["SEAT_CODE"] as PublicQueryResultField[],
   roomVisibleResultFields: ["ATTENDEE_NAME", "HOTEL_NAME", "ROOM_TYPE", "ROOM_NO", "ROOM_REMARK", "CHECKIN_TIPS"] as PublicQueryResultField[],
   roomMaskedResultFields: [] as PublicQueryResultField[],
-  roomHighlightResultFields: ["ROOM_NO"] as PublicQueryResultField[]
+  roomHighlightResultFields: ["ROOM_NO"] as PublicQueryResultField[],
+  dinnerVisibleResultFields: ["ATTENDEE_NAME", "DINNER_TABLE_NO", "DINNER_VENUE", "DINNER_TIME", "DINNER_REMARK"] as PublicQueryResultField[],
+  dinnerMaskedResultFields: [] as PublicQueryResultField[],
+  dinnerHighlightResultFields: ["DINNER_TABLE_NO"] as PublicQueryResultField[]
 });
 const queryValues = reactive<Record<PublicQueryField, string>>({
   NAME: "",
@@ -689,11 +755,26 @@ const roomResultFields = new Set<PublicQueryResultField>([
   "ROOM_REMARK",
   "CHECKIN_TIPS"
 ]);
+const dinnerResultFields = new Set<PublicQueryResultField>([
+  "ATTENDEE_NAME",
+  "ATTENDEE_PHONE",
+  "ORGANIZATION",
+  "TITLE",
+  "EMAIL",
+  "MEETING_NAME",
+  "DINNER_TABLE_NO",
+  "DINNER_VENUE",
+  "DINNER_TIME",
+  "DINNER_REMARK"
+]);
 const seatResultFieldSelectOptions = computed(() =>
   resultFieldOptions.value.filter((item) => seatResultFields.has(item.field)).map((item) => ({ label: item.label, value: item.field }))
 );
 const roomResultFieldSelectOptions = computed(() =>
   resultFieldOptions.value.filter((item) => roomResultFields.has(item.field)).map((item) => ({ label: item.label, value: item.field }))
+);
+const dinnerResultFieldSelectOptions = computed(() =>
+  resultFieldOptions.value.filter((item) => dinnerResultFields.has(item.field)).map((item) => ({ label: item.label, value: item.field }))
 );
 const visibleResultFieldSelectOptions = computed(() => {
   const visible = new Set(queryForm.visibleResultFields);
@@ -707,9 +788,14 @@ const visibleRoomResultFieldSelectOptions = computed(() => {
   const visible = new Set(queryForm.roomVisibleResultFields);
   return resultFieldOptions.value.filter((item) => visible.has(item.field)).map((item) => ({ label: item.label, value: item.field }));
 });
+const visibleDinnerResultFieldSelectOptions = computed(() => {
+  const visible = new Set(queryForm.dinnerVisibleResultFields);
+  return resultFieldOptions.value.filter((item) => visible.has(item.field)).map((item) => ({ label: item.label, value: item.field }));
+});
 const queryTypeFilterOptions = [
   { label: "座位查询", value: "SEAT" as PublicQueryType },
   { label: "住宿查询", value: "ROOM" as PublicQueryType },
+  { label: "晚宴查询", value: "DINNER" as PublicQueryType },
   { label: "签到", value: "CHECKIN" as PublicQueryType }
 ];
 const queryStatusFilterOptions = [
@@ -741,6 +827,13 @@ const publicQueryLinks = computed<PublicQueryLink[]>(() => {
       shortLabel: "住宿",
       description: "仅查询住宿结果，适合酒店入住通知单独使用。",
       url: `${window.location.origin}/public/room-query?${query}`
+    },
+    {
+      key: "dinner" as const,
+      label: "晚宴查询入口",
+      shortLabel: "晚宴",
+      description: "仅查询晚宴桌号，适合晚宴入座指引单独使用。",
+      url: `${window.location.origin}/public/dinner-query?${query}`
     },
     {
       key: "checkin" as const,
@@ -873,6 +966,7 @@ function loadQuerySettings(targetMeetingId = meetingId.value) {
   void store.loadMeetingQuerySettings(targetMeetingId).then((settings) => {
     queryForm.seatQueryEnabled = settings.seatQueryEnabled;
     queryForm.roomQueryEnabled = settings.roomQueryEnabled;
+    queryForm.dinnerQueryEnabled = settings.dinnerQueryEnabled;
     queryForm.checkinEnabled = settings.checkinEnabled;
     queryForm.queryPaused = settings.queryPaused;
     queryForm.fields = [...settings.fields];
@@ -887,6 +981,7 @@ function loadQuerySettings(targetMeetingId = meetingId.value) {
     queryForm.emptyMessage = settings.emptyMessage;
     queryForm.seatNotice = settings.seatNotice;
     queryForm.roomNotice = settings.roomNotice;
+    queryForm.dinnerNotice = settings.dinnerNotice;
     queryForm.themeColor = settings.themeColor;
     queryForm.logoUrl = settings.logoUrl || "";
     queryForm.backgroundUrl = settings.backgroundUrl || "";
@@ -900,6 +995,9 @@ function loadQuerySettings(targetMeetingId = meetingId.value) {
     queryForm.roomVisibleResultFields = [...settings.roomVisibleResultFields];
     queryForm.roomMaskedResultFields = [...settings.roomMaskedResultFields];
     queryForm.roomHighlightResultFields = [...settings.roomHighlightResultFields];
+    queryForm.dinnerVisibleResultFields = [...settings.dinnerVisibleResultFields];
+    queryForm.dinnerMaskedResultFields = [...settings.dinnerMaskedResultFields];
+    queryForm.dinnerHighlightResultFields = [...settings.dinnerHighlightResultFields];
     fieldOptions.value = settings.fieldOptions;
     resultFieldOptions.value = settings.resultFieldOptions;
   }).catch((error) => {
@@ -1003,6 +1101,7 @@ function saveQuerySettings() {
     .saveMeetingQuerySettings(meetingId.value, {
       seatQueryEnabled: queryForm.seatQueryEnabled,
       roomQueryEnabled: queryForm.roomQueryEnabled,
+      dinnerQueryEnabled: queryForm.dinnerQueryEnabled,
       checkinEnabled: queryForm.checkinEnabled,
       queryPaused: queryForm.queryPaused,
       fields: queryForm.fields,
@@ -1017,6 +1116,7 @@ function saveQuerySettings() {
       emptyMessage: queryForm.emptyMessage,
       seatNotice: queryForm.seatNotice,
       roomNotice: queryForm.roomNotice,
+      dinnerNotice: queryForm.dinnerNotice,
       themeColor: queryForm.themeColor,
       logoUrl: queryForm.logoUrl,
       backgroundUrl: queryForm.backgroundUrl,
@@ -1029,7 +1129,10 @@ function saveQuerySettings() {
       seatHighlightResultFields: queryForm.seatHighlightResultFields,
       roomVisibleResultFields: queryForm.roomVisibleResultFields,
       roomMaskedResultFields: queryForm.roomMaskedResultFields,
-      roomHighlightResultFields: queryForm.roomHighlightResultFields
+      roomHighlightResultFields: queryForm.roomHighlightResultFields,
+      dinnerVisibleResultFields: queryForm.dinnerVisibleResultFields,
+      dinnerMaskedResultFields: queryForm.dinnerMaskedResultFields,
+      dinnerHighlightResultFields: queryForm.dinnerHighlightResultFields
     })
     .then(() => message.success("查询设置已保存"))
     .catch((error) => message.error(error instanceof Error ? error.message : "查询设置保存失败"))
@@ -1075,7 +1178,7 @@ async function refreshQueryQrcodes() {
   }
   /*
    * 只生成当前正在预览的入口二维码。
-   * 旧实现会在详情页首屏一次性生成 4 个 DataURL；在快速切页或浏览器刚解析完主包时，
+   * 旧实现会在详情页首屏一次性生成多个 DataURL；在快速切页或浏览器刚解析完主包时，
    * 这类同步计算会和 Naive UI 表单、Tabs、DataTable 的挂载挤在同一主线程窗口里。
    * 这里保留已有二维码缓存，并通过 token 丢弃过期任务，避免用户切换入口时写回旧结果。
    */
@@ -1126,10 +1229,13 @@ function setResultFieldsIfChanged(target: PublicQueryResultField[], next: Public
 function syncResultFieldSelections() {
   const seatVisible = new Set(queryForm.seatVisibleResultFields);
   const roomVisible = new Set(queryForm.roomVisibleResultFields);
+  const dinnerVisible = new Set(queryForm.dinnerVisibleResultFields);
   const seatMaskedResultFields = queryForm.seatMaskedResultFields.filter((field) => seatVisible.has(field));
   const seatHighlightResultFields = queryForm.seatHighlightResultFields.filter((field) => seatVisible.has(field));
   const roomMaskedResultFields = queryForm.roomMaskedResultFields.filter((field) => roomVisible.has(field));
   const roomHighlightResultFields = queryForm.roomHighlightResultFields.filter((field) => roomVisible.has(field));
+  const dinnerMaskedResultFields = queryForm.dinnerMaskedResultFields.filter((field) => dinnerVisible.has(field));
+  const dinnerHighlightResultFields = queryForm.dinnerHighlightResultFields.filter((field) => dinnerVisible.has(field));
 
   /*
    * 这个同步函数由 deep watch 触发，回写同一个被监听的数组时必须先做内容相等判断。
@@ -1140,29 +1246,33 @@ function syncResultFieldSelections() {
   queryForm.seatHighlightResultFields = setResultFieldsIfChanged(queryForm.seatHighlightResultFields, seatHighlightResultFields);
   queryForm.roomMaskedResultFields = setResultFieldsIfChanged(queryForm.roomMaskedResultFields, roomMaskedResultFields);
   queryForm.roomHighlightResultFields = setResultFieldsIfChanged(queryForm.roomHighlightResultFields, roomHighlightResultFields);
+  queryForm.dinnerMaskedResultFields = setResultFieldsIfChanged(queryForm.dinnerMaskedResultFields, dinnerMaskedResultFields);
+  queryForm.dinnerHighlightResultFields = setResultFieldsIfChanged(queryForm.dinnerHighlightResultFields, dinnerHighlightResultFields);
   queryForm.visibleResultFields = setResultFieldsIfChanged(
     queryForm.visibleResultFields,
-    Array.from(new Set([...queryForm.seatVisibleResultFields, ...queryForm.roomVisibleResultFields]))
+    Array.from(new Set([...queryForm.seatVisibleResultFields, ...queryForm.roomVisibleResultFields, ...queryForm.dinnerVisibleResultFields]))
   );
   queryForm.maskedResultFields = setResultFieldsIfChanged(
     queryForm.maskedResultFields,
-    Array.from(new Set([...queryForm.seatMaskedResultFields, ...queryForm.roomMaskedResultFields]))
+    Array.from(new Set([...queryForm.seatMaskedResultFields, ...queryForm.roomMaskedResultFields, ...queryForm.dinnerMaskedResultFields]))
   );
   queryForm.highlightResultFields = setResultFieldsIfChanged(
     queryForm.highlightResultFields,
-    Array.from(new Set([...queryForm.seatHighlightResultFields, ...queryForm.roomHighlightResultFields]))
+    Array.from(new Set([...queryForm.seatHighlightResultFields, ...queryForm.roomHighlightResultFields, ...queryForm.dinnerHighlightResultFields]))
   );
 }
 
 function queryTypeLabel(type: PublicQueryType) {
   if (type === "SEAT") return "座位";
   if (type === "ROOM") return "住宿";
+  if (type === "DINNER") return "晚宴";
   return "签到";
 }
 
 function queryTypeTagType(type: PublicQueryType) {
   if (type === "SEAT") return "info";
   if (type === "ROOM") return "warning";
+  if (type === "DINNER") return "success";
   return "success";
 }
 
@@ -1227,7 +1337,10 @@ watch(
     queryForm.seatHighlightResultFields,
     queryForm.roomVisibleResultFields,
     queryForm.roomMaskedResultFields,
-    queryForm.roomHighlightResultFields
+    queryForm.roomHighlightResultFields,
+    queryForm.dinnerVisibleResultFields,
+    queryForm.dinnerMaskedResultFields,
+    queryForm.dinnerHighlightResultFields
   ],
   syncResultFieldSelections,
   { deep: true }
@@ -1310,6 +1423,11 @@ watch(activePublicQueryLinkUrl, (url) => {
   align-items: start;
 }
 
+.result-settings-pane {
+  grid-template-columns: 1fr;
+  gap: 18px;
+}
+
 .entry-settings-grid {
   grid-template-columns: minmax(420px, 1fr) minmax(280px, 0.55fr);
 }
@@ -1328,20 +1446,54 @@ watch(activePublicQueryLinkUrl, (url) => {
   grid-column: 1 / -1;
 }
 
+.result-appearance-panel {
+  grid-template-columns: minmax(160px, 0.22fr) minmax(0, 1fr);
+  align-items: center;
+  padding: 14px 16px;
+}
+
+.result-appearance-form {
+  min-width: 0;
+  grid-template-columns: minmax(360px, 0.85fr) minmax(0, 1.15fr);
+  gap: 12px;
+  align-items: start;
+}
+
+.result-appearance-form > .query-form-row {
+  min-width: 0;
+}
+
+.result-appearance-form > .query-form-row:first-child {
+  grid-template-columns: minmax(130px, 0.55fr) minmax(210px, 0.9fr);
+}
+
 .result-field-config-grid {
   display: grid;
-  grid-template-columns: repeat(2, minmax(280px, 1fr));
-  gap: 14px;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 12px;
 }
 
 .result-field-config {
   display: grid;
   gap: 12px;
+  align-content: start;
   min-width: 0;
   padding: 14px;
   border: 1px solid var(--border-color);
   border-radius: 8px;
   background: #ffffff;
+}
+
+.result-field-config .query-form {
+  gap: 10px;
+}
+
+.result-field-config :deep(.n-base-selection-label) {
+  min-height: 36px;
+}
+
+.result-field-config :deep(.n-base-select-tags) {
+  row-gap: 4px;
 }
 
 .section-heading {
@@ -1429,11 +1581,47 @@ watch(activePublicQueryLinkUrl, (url) => {
   width: 44px;
 }
 
+.theme-color-field :deep(.n-color-picker-trigger) {
+  width: 44px;
+  min-width: 44px;
+  height: 34px;
+  padding: 4px;
+}
+
+.theme-color-field :deep(.n-color-picker-trigger__value) {
+  display: none;
+}
+
+.theme-color-field :deep(.n-color-picker-checkboard),
+.theme-color-field :deep(.n-color-picker-trigger__fill) {
+  width: 100%;
+  height: 100%;
+}
+
 .asset-url-field {
   display: grid;
   grid-template-columns: minmax(0, 1fr) auto;
   gap: 8px;
   align-items: center;
+}
+
+.asset-fields-row {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+@media (max-width: 1180px) {
+  .result-appearance-panel {
+    grid-template-columns: 1fr;
+    align-items: start;
+  }
+
+  .result-appearance-form {
+    grid-template-columns: 1fr;
+  }
+
+  .result-field-config-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
 }
 
 .compact-toggle-list .toggle-row {
@@ -1649,6 +1837,11 @@ watch(activePublicQueryLinkUrl, (url) => {
   .settings-pane-grid,
   .entry-settings-grid,
   .result-field-config-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .result-appearance-panel,
+  .asset-fields-row {
     grid-template-columns: 1fr;
   }
 

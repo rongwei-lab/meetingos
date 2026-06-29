@@ -8,7 +8,7 @@
 
     <div class="result-ticket-body">
       <div class="result-ticket-number">
-        <span>{{ kind === "seat" ? "您的座位号" : "您的房间号" }}</span>
+        <span>{{ primaryLabel }}</span>
         <strong>{{ primaryValue }}</strong>
       </div>
 
@@ -39,7 +39,8 @@ const props = defineProps<{
   notice?: string;
 }>();
 
-const primaryField = computed(() => (props.kind === "seat" ? "SEAT_CODE" : "ROOM_NO"));
+const primaryField = computed(() => (props.kind === "seat" ? "SEAT_CODE" : props.kind === "room" ? "ROOM_NO" : "DINNER_TABLE_NO"));
+const primaryLabel = computed(() => (props.kind === "seat" ? "您的座位号" : props.kind === "room" ? "您的房间号" : "您的晚宴桌号"));
 
 const primaryValue = computed(() => {
   const preferred = props.rows.find((row) => row.field === primaryField.value)?.value;
@@ -52,6 +53,9 @@ const noticeText = computed(() => {
   if (configuredNotice) return configuredNotice;
   if (props.kind === "seat") {
     return "请按会议通知时间到达会场，凭会议证件从指定入口进入，对号入座。";
+  }
+  if (props.kind === "dinner") {
+    return "请按现场指引前往晚宴区域入座，如有调整请以会务组通知为准。";
   }
   const tips = props.rows.find((row) => row.field === "CHECKIN_TIPS")?.value;
   return tips || "凭会议证件及身份证办理入住，接待台位于酒店大堂。";
@@ -85,6 +89,10 @@ const detailRows = computed(() => {
 
 .result-ticket-room .result-ticket-hero {
   background: linear-gradient(135deg, #ad4ff0 0%, #7128e9 100%);
+}
+
+.result-ticket-dinner .result-ticket-hero {
+  background: linear-gradient(135deg, #0f9f8f 0%, #0b6f83 100%);
 }
 
 .result-ticket-icon {
@@ -124,6 +132,10 @@ const detailRows = computed(() => {
   background: #f7efff;
 }
 
+.result-ticket-dinner .result-ticket-number {
+  background: #e9fbf7;
+}
+
 .result-ticket-number span {
   color: #8a8cf5;
   font-size: 19px;
@@ -133,6 +145,10 @@ const detailRows = computed(() => {
 
 .result-ticket-room .result-ticket-number span {
   color: #ba70ff;
+}
+
+.result-ticket-dinner .result-ticket-number span {
+  color: #138d80;
 }
 
 .result-ticket-number strong {
@@ -146,6 +162,10 @@ const detailRows = computed(() => {
 
 .result-ticket-room .result-ticket-number strong {
   color: #8600e8;
+}
+
+.result-ticket-dinner .result-ticket-number strong {
+  color: #086e72;
 }
 
 .result-ticket-details {
@@ -196,6 +216,12 @@ const detailRows = computed(() => {
   border-color: #ead8ff;
   background: #fbf5ff;
   color: #8000e8;
+}
+
+.result-ticket-dinner .result-ticket-notice {
+  border-color: #b8eee5;
+  background: #effdfa;
+  color: #08756e;
 }
 
 @media (max-width: 720px) {

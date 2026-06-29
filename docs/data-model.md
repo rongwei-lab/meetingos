@@ -28,6 +28,8 @@
 | `registration_end_time` | datetime | 报名截止时间 |
 | `location` | varchar(300) | 会议地点 |
 | `venue_name` | varchar(200) | 会场名称 |
+| `dinner_venue` | varchar(160) | 晚宴地点，整场晚宴共用 |
+| `dinner_time` | varchar(120) | 晚宴时间，整场晚宴共用 |
 | `capacity` | int | 人数上限 |
 | `status` | varchar(32) | 会议状态 |
 | `description` | text | 会议简介 |
@@ -36,6 +38,8 @@
 | `contact_name` | varchar(100) | 联系人 |
 | `contact_phone` | varchar(50) | 联系电话 |
 | `created_by` | bigint | 创建人 |
+| `dinner_query_enabled` | tinyint | 是否开放晚宴查询 |
+| `public_query_dinner_notice` | text | 晚宴查询结果提示 |
 | `created_at` | datetime | 创建时间 |
 | `updated_at` | datetime | 更新时间 |
 
@@ -181,6 +185,40 @@ TDuck 字段到 MeetingOS 标准字段的映射。
 | `remark` | varchar(500) | 备注 |
 
 房间变更必须记录操作日志，包含原房间、新房间、操作人和修改原因。
+
+### dinner_assignments
+
+晚宴桌号分配表。
+
+| 字段 | 类型建议 | 说明 |
+| --- | --- | --- |
+| `id` | bigint | 主键 |
+| `meeting_id` | bigint | 会议 ID |
+| `attendee_id` | bigint | 参会人 ID |
+| `table_no` | varchar(80) | 晚宴桌号 |
+| `remark` | varchar(500) | 备注 |
+| `assigned_by` | varchar(64) | 最近分配人 |
+| `created_at` | datetime | 创建时间 |
+| `updated_at` | datetime | 更新时间 |
+
+建议唯一约束：`meeting_id + attendee_id`，确保同一会议同一参会人只有一条晚宴安排。晚宴地点和时间保存在会议主表，避免同一场晚宴在不同桌号或参会人记录里出现不一致。晚宴桌号变更必须记录操作日志，包含原桌号、新桌号、参会人和来源；重复导入同一参会人应更新原记录，不创建重复记录。
+
+### dinner_tables
+
+晚宴桌号容量表，用于维护每桌可就餐人数，并支撑“已安排人数 / 还缺人数 / 超员人数”统计。
+
+| 字段 | 类型建议 | 说明 |
+| --- | --- | --- |
+| `id` | bigint | 主键 |
+| `meeting_id` | bigint | 会议 ID |
+| `table_no` | varchar(80) | 晚宴桌号 |
+| `capacity` | int | 可就餐人数，最小为 1 |
+| `remark` | varchar(500) | 桌号备注 |
+| `created_by` | varchar(64) | 创建人 |
+| `created_at` | datetime | 创建时间 |
+| `updated_at` | datetime | 更新时间 |
+
+唯一约束：`meeting_id + table_no`。桌号容量不能小于当前已安排到该桌的人数；删除桌号前必须先清空或调整该桌的晚宴安排。为兼容历史导入数据，`dinner_assignments.table_no` 仍保存桌号字符串，不强制外键关联；导入或手动安排到新桌号时会自动补建默认 10 人桌。
 
 ### checkin_record
 

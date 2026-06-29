@@ -3,7 +3,7 @@
     <section class="public-card public-card-wide">
       <img v-if="safeLogoUrl" class="public-logo" :src="safeLogoUrl" alt="会议 Logo" />
       <p v-if="settings?.publisher" class="public-kicker">{{ settings.publisher }}</p>
-      <h1>{{ pageTitle(settings, "座位住宿查询") }}</h1>
+      <h1>{{ pageTitle(settings, "综合查询") }}</h1>
       <p v-if="subtitle" class="public-subtitle">{{ subtitle }}</p>
 
       <n-alert v-if="!settings" class="public-alert" :type="settingsError ? 'warning' : 'info'" :bordered="false">
@@ -12,14 +12,14 @@
       <n-alert v-else-if="settings.announcement" class="public-alert" type="info" :bordered="false">
         {{ settings.announcement }}
       </n-alert>
-      <n-alert v-if="settings && !anyQueryEnabled" class="public-alert" type="warning" :bordered="false">
-        当前会议暂未开放座位和住宿查询
+      <n-alert v-if="settings && !anyPublicEntryEnabled" class="public-alert" type="warning" :bordered="false">
+        当前会议暂未开放公开查询和自助签到
       </n-alert>
       <n-alert v-else-if="settings && !windowState.available" class="public-alert" type="warning" :bordered="false">
         {{ windowState.message }}
       </n-alert>
 
-      <n-form v-else-if="settings && !hasSuccessfulResult" label-placement="top" class="public-form">
+      <n-form v-else-if="settings && !hasFinalResult" label-placement="top" class="public-form">
         <n-form-item v-for="field in activeFields" :key="field" :label="fieldLabel(field)">
           <n-input v-model:value="values[field]" :placeholder="`请输入${fieldLabel(field)}`" />
         </n-form-item>
@@ -30,43 +30,84 @@
           </div>
         </n-form-item>
         <n-button type="primary" block :color="settings?.themeColor" :loading="loading" @click="query">
-          {{ settings?.buttonText || "立即查询" }}
+          {{ primaryButtonText }}
         </n-button>
       </n-form>
 
-      <div v-if="hasQueried" class="combined-results">
-        <public-result-ticket
-          v-if="seatResult && seatRows.length"
-          kind="seat"
-          :attendee-name="seatResult.attendeeName"
-          :rows="seatRows"
-          :notice="settings?.seatNotice"
-        />
-        <section v-else class="public-result">
-          <n-alert v-if="seatResult" type="info" :bordered="false">当前未配置可展示的座位结果字段</n-alert>
-          <n-alert v-else type="warning" :bordered="false">{{ seatMessage }}</n-alert>
-        </section>
+      <div v-if="hasQueried && queryResultEnabled" class="combined-results">
+        <template v-if="settings?.seatQueryEnabled">
+          <public-result-ticket
+            v-if="seatResult && seatRows.length"
+            kind="seat"
+            :attendee-name="seatResult.attendeeName"
+            :rows="seatRows"
+            :notice="settings?.seatNotice"
+          />
+          <section v-else class="public-result">
+            <n-alert v-if="seatResult" type="info" :bordered="false">当前未配置可展示的座位结果字段</n-alert>
+            <n-alert v-else type="warning" :bordered="false">{{ seatMessage }}</n-alert>
+          </section>
+        </template>
 
-        <public-result-ticket
-          v-if="roomResult && roomRows.length"
-          kind="room"
-          :attendee-name="roomResult.attendeeName"
-          :rows="roomRows"
-          :notice="settings?.roomNotice"
-        />
-        <section v-else class="public-result">
-          <n-alert v-if="roomResult" type="info" :bordered="false">当前未配置可展示的住宿结果字段</n-alert>
-          <n-alert v-else type="warning" :bordered="false">{{ roomMessage }}</n-alert>
-        </section>
+        <template v-if="settings?.roomQueryEnabled">
+          <public-result-ticket
+            v-if="roomResult && roomRows.length"
+            kind="room"
+            :attendee-name="roomResult.attendeeName"
+            :rows="roomRows"
+            :notice="settings?.roomNotice"
+          />
+          <section v-else class="public-result">
+            <n-alert v-if="roomResult" type="info" :bordered="false">当前未配置可展示的住宿结果字段</n-alert>
+            <n-alert v-else type="warning" :bordered="false">{{ roomMessage }}</n-alert>
+          </section>
+        </template>
+
+        <template v-if="settings?.dinnerQueryEnabled">
+          <public-result-ticket
+            v-if="dinnerResult && dinnerRows.length"
+            kind="dinner"
+            :attendee-name="dinnerResult.attendeeName"
+            :rows="dinnerRows"
+            :notice="settings?.dinnerNotice"
+          />
+          <section v-else class="public-result">
+            <n-alert v-if="dinnerResult" type="info" :bordered="false">当前未配置可展示的晚宴结果字段</n-alert>
+            <n-alert v-else type="warning" :bordered="false">{{ dinnerMessage }}</n-alert>
+          </section>
+        </template>
       </div>
 
       <public-result-checkin-action
-        v-if="hasSuccessfulResult"
+        v-if="hasQueryResult && settings?.checkinEnabled"
         :settings="settings"
         :meeting-id="queryMeetingId"
         :meeting-code="queryMeetingCode || null"
         :values="values"
       />
+
+      <section v-if="checkinResult" class="self-checkin-result" :class="`self-checkin-result-${checkinResultTone}`">
+        <div class="self-checkin-icon">{{ checkinResultIcon }}</div>
+        <h2>{{ checkinResultTitle }}</h2>
+        <p>{{ checkinResultMessage }}</p>
+        <div class="self-checkin-meta">
+          <div v-if="checkinResult.attendeeName">
+            <span>参会人</span>
+            <strong>{{ checkinResult.attendeeName }}</strong>
+          </div>
+          <div v-if="checkinResult.phone">
+            <span>手机号</span>
+            <strong>{{ checkinResult.phone }}</strong>
+          </div>
+          <div v-if="checkinResult.checkedInAt">
+            <span>签到时间</span>
+            <strong>{{ formatDateTimeSecondLabel(checkinResult.checkedInAt) }}</strong>
+          </div>
+        </div>
+        <n-button block secondary :color="settings?.themeColor" @click="resetCheckinResult">
+          返回
+        </n-button>
+      </section>
     </section>
   </main>
 </template>
@@ -76,11 +117,13 @@ import { computed, onBeforeUnmount, onMounted, reactive, ref, watchEffect } from
 import { useRoute } from "vue-router";
 import { useMessage } from "naive-ui";
 import { useMeetingStore } from "@/stores/meeting";
-import type { MeetingQuerySettings, PublicQueryField, RoomQueryResult, SeatQueryResult } from "@/utils/types";
+import { formatDateTimeSecondLabel } from "@/utils/meetingDisplay";
+import type { DinnerQueryResult, MeetingQuerySettings, PublicCheckinResult, PublicQueryField, RoomQueryResult, SeatQueryResult } from "@/utils/types";
 import { sanitizeImageUrl } from "@/utils/safeUrl";
 import PublicResultCheckinAction from "./PublicResultCheckinAction.vue";
 import PublicResultTicket from "./PublicResultTicket.vue";
 import {
+  buildDinnerRows,
   buildRoomRows,
   buildSeatRows,
   normalizePublicQueryError,
@@ -98,8 +141,11 @@ const settings = ref<MeetingQuerySettings | null>(null);
 const settingsError = ref("");
 const seatResult = ref<SeatQueryResult | null>(null);
 const roomResult = ref<RoomQueryResult | null>(null);
+const dinnerResult = ref<DinnerQueryResult | null>(null);
+const checkinResult = ref<PublicCheckinResult | null>(null);
 const seatMessage = ref("尚未查询座位");
 const roomMessage = ref("尚未查询住宿");
+const dinnerMessage = ref("尚未查询晚宴");
 const captchaId = ref<string | null>(null);
 const captchaQuestion = ref("");
 const captchaAnswer = ref("");
@@ -121,19 +167,45 @@ const queryMeetingId = computed(() => {
 });
 const queryMeetingCode = computed(() => String(route.query.meetingCode || route.params.meetingCode || ""));
 const activeFields = computed(() => settings.value?.fields || []);
-const anyQueryEnabled = computed(() => Boolean(settings.value?.seatQueryEnabled || settings.value?.roomQueryEnabled));
-const subtitle = computed(() => settings.value?.pageDescription || settings.value?.meetingName || "");
+const queryResultEnabled = computed(() => Boolean(settings.value?.seatQueryEnabled || settings.value?.roomQueryEnabled || settings.value?.dinnerQueryEnabled));
+const anyPublicEntryEnabled = computed(() => Boolean(queryResultEnabled.value || settings.value?.checkinEnabled));
+const checkinOnlyEnabled = computed(() => Boolean(settings.value?.checkinEnabled && !queryResultEnabled.value));
+const subtitle = computed(() => settings.value?.pageDescription || settings.value?.meetingName || "查询会议安排，或完成自助签到");
 const windowState = computed(() => queryWindowState(settings.value));
 const seatRows = computed(() => buildSeatRows(settings.value, seatResult.value));
 const roomRows = computed(() => buildRoomRows(settings.value, roomResult.value));
-const hasSuccessfulResult = computed(() => Boolean((seatResult.value && seatRows.value.length) || (roomResult.value && roomRows.value.length)));
+const dinnerRows = computed(() => buildDinnerRows(settings.value, dinnerResult.value));
+const hasQueryResult = computed(() => Boolean(
+  (seatResult.value && seatRows.value.length) ||
+  (roomResult.value && roomRows.value.length) ||
+  (dinnerResult.value && dinnerRows.value.length)
+));
+const hasFinalResult = computed(() => Boolean(hasQueryResult.value || checkinResult.value));
 const safeLogoUrl = computed(() => sanitizeImageUrl(settings.value?.logoUrl));
+const primaryButtonText = computed(() => (checkinOnlyEnabled.value ? "自助签到" : settings.value?.buttonText || "立即查询"));
+const checkinResultTone = computed(() => {
+  if (checkinResult.value?.status === "SUCCESS") return "success";
+  if (checkinResult.value?.status === "DUPLICATE") return "warning";
+  return "error";
+});
+const checkinResultIcon = computed(() => (checkinResultTone.value === "success" ? "✓" : checkinResultTone.value === "warning" ? "!" : "×"));
+const checkinResultTitle = computed(() => {
+  if (checkinResult.value?.status === "SUCCESS") return "签到成功";
+  if (checkinResult.value?.status === "DUPLICATE") return "已签到";
+  if (checkinResult.value?.status === "NOT_APPROVED") return "暂不能签到";
+  return "签到失败";
+});
+const checkinResultMessage = computed(() => {
+  if (checkinResult.value?.status === "SUCCESS") return "您已完成签到，请按现场安排入场。";
+  if (checkinResult.value?.status === "DUPLICATE") return "您已完成签到，请勿重复提交。";
+  return checkinResult.value?.message || "请联系现场工作人员处理。";
+});
 
 onMounted(loadSettings);
 
 watchEffect(() => {
   // 综合查询只要有一类结果成功，就进入结果展示模式，减少外层导航对票据视觉的干扰。
-  document.body.classList.toggle("public-result-mode", hasSuccessfulResult.value);
+  document.body.classList.toggle("public-result-mode", hasFinalResult.value);
 });
 
 onBeforeUnmount(() => {
@@ -157,7 +229,7 @@ async function loadSettings() {
 }
 
 async function query() {
-  if (!settings.value || !anyQueryEnabled.value) return;
+  if (!settings.value || !anyPublicEntryEnabled.value) return;
   for (const field of activeFields.value) {
     if (!values[field].trim()) {
       message.warning(`请输入${fieldLabel(field)}`);
@@ -173,8 +245,11 @@ async function query() {
   hasQueried.value = true;
   seatResult.value = null;
   roomResult.value = null;
+  dinnerResult.value = null;
+  checkinResult.value = null;
   seatMessage.value = settings.value.seatQueryEnabled ? "座位查询中" : "座位查询尚未开放";
   roomMessage.value = settings.value.roomQueryEnabled ? "住宿查询中" : "住宿查询尚未开放";
+  dinnerMessage.value = settings.value.dinnerQueryEnabled ? "晚宴查询中" : "晚宴查询尚未开放";
 
   /*
    * 综合查询页允许座位和住宿各自成功或失败。比如会议只安排座位没有住宿时，
@@ -188,6 +263,34 @@ async function query() {
     captchaAnswer: captchaAnswer.value
   };
   const tasks: Promise<void>[] = [];
+
+  if (checkinOnlyEnabled.value) {
+    try {
+      checkinResult.value = await store.publicSelfCheckin(payload);
+      if (checkinResult.value.status === "SUCCESS") {
+        message.success("签到成功");
+      } else if (checkinResult.value.status === "DUPLICATE") {
+        message.warning("您已完成签到");
+      } else {
+        message.warning(checkinResult.value.message || "暂不能签到");
+      }
+    } catch (error) {
+      const rawMessage = error instanceof Error ? error.message : "签到失败";
+      const failedResult = toFailedCheckinResult(rawMessage);
+      if (failedResult) {
+        checkinResult.value = failedResult;
+        message.warning(failedResult.message || "暂不能签到");
+      } else {
+        message.error(normalizePublicQueryError(rawMessage, settings.value));
+        if (settings.value.captchaEnabled) {
+          await loadCaptcha();
+        }
+      }
+    } finally {
+      loading.value = false;
+    }
+    return;
+  }
 
   if (settings.value.seatQueryEnabled) {
     tasks.push(
@@ -215,11 +318,37 @@ async function query() {
     );
   }
 
+  if (settings.value.dinnerQueryEnabled) {
+    tasks.push(
+      store.publicDinnerQuery(payload)
+        .then((result) => {
+          dinnerResult.value = result;
+        })
+        .catch((error) => {
+          const rawMessage = error instanceof Error ? error.message : "晚宴查询失败";
+          dinnerMessage.value = normalizePublicQueryError(rawMessage, settings.value);
+        })
+    );
+  }
+
   await Promise.allSettled(tasks);
-  if (settings.value.captchaEnabled && (!seatResult.value || !roomResult.value)) {
+  const enabledResults = [
+    settings.value.seatQueryEnabled ? seatResult.value : true,
+    settings.value.roomQueryEnabled ? roomResult.value : true,
+    settings.value.dinnerQueryEnabled ? dinnerResult.value : true
+  ];
+  if (settings.value.captchaEnabled && enabledResults.some((result) => !result)) {
     await loadCaptcha();
   }
   loading.value = false;
+}
+
+async function resetCheckinResult() {
+  checkinResult.value = null;
+  hasQueried.value = false;
+  if (settings.value?.captchaEnabled) {
+    await loadCaptcha();
+  }
 }
 
 async function loadCaptcha() {
@@ -239,6 +368,16 @@ async function loadCaptcha() {
 
 function fieldLabel(field: PublicQueryField) {
   return settings.value?.fieldOptions.find((item) => item.field === field)?.label || field;
+}
+
+function toFailedCheckinResult(message: string): PublicCheckinResult | null {
+  if (message.includes("审核")) {
+    return { status: "NOT_APPROVED", message };
+  }
+  if (message.includes("未找到匹配") || message.includes("未找到参会人") || message.includes("未查询到")) {
+    return { status: "NOT_FOUND", message: normalizePublicQueryError(message, settings.value) };
+  }
+  return null;
 }
 </script>
 

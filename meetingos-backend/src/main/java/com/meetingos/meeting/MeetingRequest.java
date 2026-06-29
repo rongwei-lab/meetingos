@@ -18,6 +18,8 @@ public record MeetingRequest(
         LocalDateTime registrationEndTime,
         String location,
         String venueName,
+        String dinnerVenue,
+        String dinnerTime,
         Integer capacity,
         String description,
         String agenda,
@@ -27,6 +29,7 @@ public record MeetingRequest(
         MeetingStatus status,
         Boolean seatQueryEnabled,
         Boolean roomQueryEnabled,
+        Boolean dinnerQueryEnabled,
         Boolean checkinEnabled,
         List<PublicQueryField> publicQueryFields,
         PublicQueryMatchMode publicQueryMatchMode

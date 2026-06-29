@@ -6,7 +6,7 @@ export type SeatType = AttendeeType | "DISABLED";
 export type RoomStatus = "AVAILABLE" | "ASSIGNED" | "DISABLED";
 export type PublicQueryField = "NAME" | "PHONE" | "PHONE_LAST4" | "ATTENDEE_CODE" | "ORGANIZATION" | "TITLE" | "EMAIL";
 export type PublicQueryMatchMode = "FUZZY" | "EXACT";
-export type PublicQueryType = "SEAT" | "ROOM" | "CHECKIN";
+export type PublicQueryType = "SEAT" | "ROOM" | "DINNER" | "CHECKIN";
 export type PublicQueryStatus = "SUCCESS" | "FAILED";
 export type PublicQueryResultField =
   | "ATTENDEE_NAME"
@@ -23,7 +23,11 @@ export type PublicQueryResultField =
   | "ROOM_TYPE"
   | "ROOM_NO"
   | "ROOM_REMARK"
-  | "CHECKIN_TIPS";
+  | "CHECKIN_TIPS"
+  | "DINNER_TABLE_NO"
+  | "DINNER_VENUE"
+  | "DINNER_TIME"
+  | "DINNER_REMARK";
 
 export interface Meeting {
   id: string;
@@ -32,6 +36,8 @@ export interface Meeting {
   organizer: string;
   coOrganizer?: string;
   venue: string;
+  dinnerVenue?: string;
+  dinnerTime?: string;
   startTime: string;
   endTime: string;
   registrationStartTime?: string;
@@ -47,12 +53,14 @@ export interface Meeting {
   approvedCount: number;
   seatedCount: number;
   roomedCount: number;
+  dinneredCount?: number;
   checkedInCount: number;
   tduckFormKey: string;
   tduckFormName: string;
   registrationUrl: string;
   seatQueryEnabled: boolean;
   roomQueryEnabled: boolean;
+  dinnerQueryEnabled: boolean;
   checkinEnabled: boolean;
   publicQueryFields: PublicQueryField[];
   publicQueryMatchMode: PublicQueryMatchMode;
@@ -134,6 +142,7 @@ export interface MeetingQuerySettings {
   meetingName: string;
   seatQueryEnabled: boolean;
   roomQueryEnabled: boolean;
+  dinnerQueryEnabled: boolean;
   checkinEnabled: boolean;
   queryPaused: boolean;
   fields: PublicQueryField[];
@@ -148,6 +157,7 @@ export interface MeetingQuerySettings {
   emptyMessage: string;
   seatNotice: string;
   roomNotice: string;
+  dinnerNotice: string;
   themeColor: string;
   logoUrl?: string;
   backgroundUrl?: string;
@@ -161,6 +171,9 @@ export interface MeetingQuerySettings {
   roomVisibleResultFields: PublicQueryResultField[];
   roomMaskedResultFields: PublicQueryResultField[];
   roomHighlightResultFields: PublicQueryResultField[];
+  dinnerVisibleResultFields: PublicQueryResultField[];
+  dinnerMaskedResultFields: PublicQueryResultField[];
+  dinnerHighlightResultFields: PublicQueryResultField[];
   captchaEnabled: boolean;
   fieldOptions: QueryFieldOption[];
   resultFieldOptions: QueryResultFieldOption[];
@@ -202,6 +215,46 @@ export interface RoomQueryResult {
   hotelName?: string;
   roomType?: string;
   checkinTips?: string;
+}
+
+export interface DinnerAssignment {
+  id: string;
+  meetingId: string;
+  attendeeId: string;
+  attendeeName: string;
+  attendeePhone?: string;
+  organization?: string;
+  title?: string;
+  attendeeType?: AttendeeType | string;
+  tableNo: string;
+  remark?: string;
+  assignedBy?: string;
+}
+
+export interface DinnerTable {
+  id: string;
+  meetingId: string;
+  tableNo: string;
+  capacity: number;
+  occupiedCount: number;
+  remainingCount: number;
+  overCapacityCount: number;
+  remark?: string;
+  createdBy?: string;
+}
+
+export interface DinnerQueryResult {
+  attendeeId: number;
+  attendeeName: string;
+  attendeePhone?: string;
+  organization?: string;
+  title?: string;
+  email?: string;
+  meetingName: string;
+  tableNo: string;
+  venue?: string;
+  dinnerTime?: string;
+  remark?: string;
 }
 
 export type PublicCheckinResultStatus = "SUCCESS" | "DUPLICATE" | "NOT_APPROVED" | "NOT_FOUND";

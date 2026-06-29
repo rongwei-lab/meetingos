@@ -6,6 +6,7 @@ import com.meetingos.attendee.ReviewStatus;
 import com.meetingos.common.BusinessException;
 import com.meetingos.common.PageRequests;
 import com.meetingos.common.PageResponse;
+import com.meetingos.dinner.DinnerAssignmentRepository;
 import com.meetingos.permission.MeetingPermissionRole;
 import com.meetingos.permission.MeetingUserPermission;
 import com.meetingos.permission.MeetingUserPermissionRepository;
@@ -35,17 +36,20 @@ public class MeetingService {
     private final MeetingRepository meetingRepository;
     private final AttendeeRepository attendeeRepository;
     private final SeatAssignmentRepository seatAssignmentRepository;
+    private final DinnerAssignmentRepository dinnerAssignmentRepository;
     private final MeetingUserPermissionRepository permissionRepository;
     private final AppUserRepository userRepository;
 
     public MeetingService(MeetingRepository meetingRepository,
                           AttendeeRepository attendeeRepository,
                           SeatAssignmentRepository seatAssignmentRepository,
+                          DinnerAssignmentRepository dinnerAssignmentRepository,
                           MeetingUserPermissionRepository permissionRepository,
                           AppUserRepository userRepository) {
         this.meetingRepository = meetingRepository;
         this.attendeeRepository = attendeeRepository;
         this.seatAssignmentRepository = seatAssignmentRepository;
+        this.dinnerAssignmentRepository = dinnerAssignmentRepository;
         this.permissionRepository = permissionRepository;
         this.userRepository = userRepository;
     }
@@ -104,6 +108,7 @@ public class MeetingService {
                 summary.approvedCount(),
                 summary.seatedCount(),
                 summary.roomAssignedCount(),
+                summary.dinnerAssignedCount(),
                 summary.checkedInCount()
         );
     }
@@ -113,6 +118,7 @@ public class MeetingService {
         long approvedCount = attendeeRepository.countByMeetingIdAndReviewStatus(meeting.getId(), ReviewStatus.APPROVED);
         long seatedCount = seatAssignmentRepository.countByMeetingId(meeting.getId());
         long roomAssignedCount = attendeeRepository.countByMeetingIdAndRoomNoIsNotNull(meeting.getId());
+        long dinnerAssignedCount = dinnerAssignmentRepository.countByMeetingId(meeting.getId());
         long checkedInCount = attendeeRepository.countByMeetingIdAndCheckinStatus(meeting.getId(), CheckinStatus.CHECKED_IN);
         return new MeetingSummary(
                 meeting.getId(),
@@ -121,14 +127,18 @@ public class MeetingService {
                 meeting.getStartTime(),
                 meeting.getEndTime(),
                 meeting.getLocation(),
+                meeting.getDinnerVenue(),
+                meeting.getDinnerTime(),
                 registrationCount,
                 approvedCount,
                 seatedCount,
                 roomAssignedCount,
+                dinnerAssignedCount,
                 checkedInCount,
                 meeting.getStatus(),
                 meeting.isSeatQueryEnabled(),
                 meeting.isRoomQueryEnabled(),
+                meeting.isDinnerQueryEnabled(),
                 meeting.isCheckinEnabled(),
                 meeting.getPublicQueryFields(),
                 meeting.getPublicQueryMatchMode()
@@ -148,6 +158,8 @@ public class MeetingService {
         meeting.setRegistrationEndTime(request.registrationEndTime());
         meeting.setLocation(request.location());
         meeting.setVenueName(request.venueName());
+        meeting.setDinnerVenue(limit(blankToNull(request.dinnerVenue()), 160));
+        meeting.setDinnerTime(limit(blankToNull(request.dinnerTime()), 120));
         meeting.setCapacity(request.capacity());
         meeting.setDescription(request.description());
         meeting.setAgenda(request.agenda());
@@ -160,6 +172,9 @@ public class MeetingService {
         }
         if (request.roomQueryEnabled() != null) {
             meeting.setRoomQueryEnabled(request.roomQueryEnabled());
+        }
+        if (request.dinnerQueryEnabled() != null) {
+            meeting.setDinnerQueryEnabled(request.dinnerQueryEnabled());
         }
         if (request.checkinEnabled() != null) {
             meeting.setCheckinEnabled(request.checkinEnabled());
@@ -177,6 +192,13 @@ public class MeetingService {
 
     private String blankToNull(String value) {
         return value == null || value.isBlank() ? null : value;
+    }
+
+    private String limit(String value, int maxLength) {
+        if (value == null || value.length() <= maxLength) {
+            return value;
+        }
+        return value.substring(0, maxLength);
     }
 
     private String generateMeetingCode() {

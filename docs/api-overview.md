@@ -114,6 +114,26 @@ Webhook 优先校验基于原始 body 的 `X-TDuck-Signature`，兼容 `X-Meetin
 房间分配导入支持按手机号、证件号、姓名+单位匹配参会人。MVP 允许多人共用同一房间，不做酒店房态容量校验。
 房间手动分配和导入分配会写 `ROOM_ASSIGNMENT_CHANGE` 操作日志，包含原房间、新房间、参会人和来源。
 
+## 晚宴接口
+
+| 方法 | 路径 | 说明 |
+| --- | --- | --- |
+| `GET` | `/api/admin/dinner?meetingId={meetingId}` | 查询晚宴安排列表 |
+| `GET` | `/api/admin/dinner/tables?meetingId={meetingId}` | 查询晚宴桌号列表，返回可就餐人数、已安排人数、还缺人数和超员人数 |
+| `GET` | `/api/admin/dinner/settings?meetingId={meetingId}` | 查询整场晚宴地点和时间 |
+| `PUT` | `/api/admin/dinner/settings` | 保存整场晚宴地点和时间 |
+| `POST` | `/api/admin/dinner/tables` | 新增晚宴桌号，配置每桌可就餐人数和备注 |
+| `PUT` | `/api/admin/dinner/tables/{tableId}` | 修改晚宴桌号；调整容量时不能小于当前已安排人数 |
+| `DELETE` | `/api/admin/dinner/tables/{tableId}?meetingId={meetingId}` | 删除晚宴桌号；已有就餐人员时禁止删除 |
+| `POST` | `/api/admin/dinner/assign` | 手动保存某参会人的晚宴桌号 |
+| `POST` | `/api/admin/dinner/clear?attendeeId={attendeeId}` | 清空某参会人的晚宴安排 |
+| `POST` | `/api/admin/dinner/import?meetingId={meetingId}` | 导入晚宴分配 `.xlsx`，multipart 字段名 `file` |
+| `GET` | `/api/admin/dinner/export?meetingId={meetingId}` | 导出晚宴安排 `.xlsx` |
+| `POST` | `/api/public/dinner-query` | 个人晚宴桌号查询，按会议公开查询配置校验字段 |
+
+晚宴粒度固定为桌号，不提供席位号、多餐次或自动分桌。晚宴地点和时间是会议级信息，由 `/api/admin/dinner/settings` 维护，不跟随桌号或参会人分配。桌号容量由 `dinner_tables` 管理，手动安排和导入分配会校验目标桌是否已满；导入旧格式分配表时如果桌号尚未维护，会自动补一张默认 10 人桌，管理员可随后调整容量。导入分配支持按手机号、证件号、姓名+单位匹配参会人；同一会议同一参会人重复导入时更新原安排。晚宴专用导出固定为 `.xlsx`，表头包含姓名、手机号、单位、职务、参会类型、桌号、晚宴地点、晚宴时间、备注。
+公开晚宴查询复用座位/住宿查询的身份字段、验证码、开放时间、限流和审核通过校验；仅在参会人审核通过且已安排晚宴时返回姓名、会议名、晚宴地点、晚宴时间、桌号和备注。
+
 ## 签到接口
 
 | 方法 | 路径 | 说明 |
@@ -137,19 +157,19 @@ MEETINGOS-CHECKIN:{meetingId}:{attendeeCode}
 
 | 方法 | 路径 | 说明 |
 | --- | --- | --- |
-| `GET` | `/api/admin/statistics/overview?meetingId={meetingId}` | 报名、座位、住宿、签到概览 |
+| `GET` | `/api/admin/statistics/overview?meetingId={meetingId}` | 报名、座位、住宿、晚宴、签到概览 |
 | `POST` | `/api/admin/exports?meetingId={meetingId}&type={type}` | 创建导出任务，MVP 同步完成 |
 | `GET` | `/api/admin/exports?meetingId={meetingId}` | 查询已创建导出任务 |
-| `GET` | `/api/admin/exports/download?meetingId={meetingId}&type={type}` | 下载 CSV |
+| `GET` | `/api/admin/exports/download?meetingId={meetingId}&type={type}` | 下载导出文件，默认 CSV，可通过 `format=xlsx` 下载 XLSX |
 | `GET` | `/api/admin/operation-logs` | 操作日志 |
 | `GET` | `/api/admin/settings` | 读取系统设置，不返回 Webhook Token 明文 |
 | `PUT` | `/api/admin/settings` | 保存系统设置，Webhook Token 留空表示不轮换 |
-| `GET` | `/api/admin/meetings/{meetingId}/query-settings` | 查询会议公开座位/住宿查询配置 |
-| `PUT` | `/api/admin/meetings/{meetingId}/query-settings` | 保存会议公开座位/住宿查询配置 |
+| `GET` | `/api/admin/meetings/{meetingId}/query-settings` | 查询会议公开座位/住宿/晚宴/签到配置 |
+| `PUT` | `/api/admin/meetings/{meetingId}/query-settings` | 保存会议公开座位/住宿/晚宴/签到配置 |
 | `POST` | `/api/admin/meetings/{meetingId}/queries/seat` | 后台座位查询候选，最多返回 20 条 |
 | `POST` | `/api/admin/meetings/{meetingId}/queries/room` | 后台住宿查询候选，最多返回 20 条 |
 
-导出类型：`attendees`、`approved`、`seats`、`rooms`、`checkin-records`、`no-checkin`、`room-inventory`。
+导出类型：`attendees`、`approved`、`seats`、`rooms`、`checkin-records`、`no-checkin`、`room-inventory`、`statistics`。晚宴管理页使用专用 `/api/admin/dinner/export` 下载 `.xlsx`。
 操作日志暂仅 `SUPER_ADMIN` 可查看；日志 details 会递归脱敏手机号、证件号、邮箱、Token、密码和密钥类字段。
 
 ## 用户与会议授权
@@ -168,7 +188,9 @@ MEETINGOS-CHECKIN:{meetingId}:{attendeeCode}
 
 ## 公共查询安全
 
-- `/api/public/seat-query` 和 `/api/public/room-query` 使用本机滑动窗口限流。
+- `/api/public/seat-query`、`/api/public/room-query`、`/api/public/dinner-query` 和 `/api/public/checkin` 使用本机滑动窗口限流。
 - 默认单 IP 每分钟 30 次，可通过 `PUBLIC_QUERY_RATE_LIMIT_PER_MINUTE` 调整。
 - `GET /api/public/query-settings?meetingId=...|meetingCode=...` 返回会议查询开关、查询字段和匹配方式。
-- 公开查询仅返回唯一匹配、审核通过且已安排座位/房间的参会人信息；模糊命中多人时只提示补充信息，不返回候选名单。
+- 公开查询仅返回唯一匹配、审核通过且已安排座位/房间/晚宴的参会人信息；模糊命中多人时只提示补充信息，不返回候选名单。
+- 会议查询配置包含 `dinnerQueryEnabled` 和 `dinnerNotice`。`dinnerNotice` 默认值为“请按现场指引前往晚宴区域入座，如有调整请以会务组通知为准。”。
+- 查询历史 `queryType` 支持 `SEAT`、`ROOM`、`DINNER`、`CHECKIN`，会记录晚宴查询成功/失败。

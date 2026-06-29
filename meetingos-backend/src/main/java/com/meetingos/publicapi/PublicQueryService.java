@@ -5,6 +5,8 @@ import com.meetingos.attendee.AttendeeRepository;
 import com.meetingos.attendee.ReviewStatus;
 import com.meetingos.common.BusinessException;
 import com.meetingos.common.SensitiveDataMasker;
+import com.meetingos.dinner.DinnerQueryResult;
+import com.meetingos.dinner.DinnerService;
 import com.meetingos.meeting.Meeting;
 import com.meetingos.meeting.MeetingRepository;
 import com.meetingos.room.Room;
@@ -43,11 +45,16 @@ public class PublicQueryService {
             PublicQueryResultField.ROOM_TYPE,
             PublicQueryResultField.ROOM_NO,
             PublicQueryResultField.ROOM_REMARK,
-            PublicQueryResultField.CHECKIN_TIPS
+            PublicQueryResultField.CHECKIN_TIPS,
+            PublicQueryResultField.DINNER_TABLE_NO,
+            PublicQueryResultField.DINNER_VENUE,
+            PublicQueryResultField.DINNER_TIME,
+            PublicQueryResultField.DINNER_REMARK
     );
     private static final List<PublicQueryResultField> DEFAULT_HIGHLIGHT_FIELDS = List.of(
             PublicQueryResultField.SEAT_CODE,
-            PublicQueryResultField.ROOM_NO
+            PublicQueryResultField.ROOM_NO,
+            PublicQueryResultField.DINNER_TABLE_NO
     );
     private static final List<PublicQueryResultField> DEFAULT_SEAT_RESULT_FIELDS = List.of(
             PublicQueryResultField.ATTENDEE_NAME,
@@ -64,10 +71,19 @@ public class PublicQueryService {
             PublicQueryResultField.ROOM_REMARK,
             PublicQueryResultField.CHECKIN_TIPS
     );
+    private static final List<PublicQueryResultField> DEFAULT_DINNER_RESULT_FIELDS = List.of(
+            PublicQueryResultField.ATTENDEE_NAME,
+            PublicQueryResultField.DINNER_TABLE_NO,
+            PublicQueryResultField.DINNER_VENUE,
+            PublicQueryResultField.DINNER_TIME,
+            PublicQueryResultField.DINNER_REMARK
+    );
     private static final List<PublicQueryResultField> DEFAULT_SEAT_HIGHLIGHT_FIELDS = List.of(PublicQueryResultField.SEAT_CODE);
     private static final List<PublicQueryResultField> DEFAULT_ROOM_HIGHLIGHT_FIELDS = List.of(PublicQueryResultField.ROOM_NO);
+    private static final List<PublicQueryResultField> DEFAULT_DINNER_HIGHLIGHT_FIELDS = List.of(PublicQueryResultField.DINNER_TABLE_NO);
     private static final String DEFAULT_SEAT_NOTICE = "请按会议通知时间到达会场，凭会议证件从指定入口进入，对号入座。";
     private static final String DEFAULT_ROOM_NOTICE = "凭会议证件及身份证办理入住，接待台位于酒店大堂。";
+    private static final String DEFAULT_DINNER_NOTICE = "请按现场指引前往晚宴区域入座，如有调整请以会务组通知为准。";
     private static final int ADMIN_QUERY_LIMIT = 20;
 
     private final MeetingRepository meetingRepository;
@@ -75,6 +91,7 @@ public class PublicQueryService {
     private final SeatAssignmentRepository assignmentRepository;
     private final SeatRepository seatRepository;
     private final RoomRepository roomRepository;
+    private final DinnerService dinnerService;
     private final PublicQueryHistoryService historyService;
     private final PublicCaptchaService captchaService;
 
@@ -83,6 +100,7 @@ public class PublicQueryService {
                               SeatAssignmentRepository assignmentRepository,
                               SeatRepository seatRepository,
                               RoomRepository roomRepository,
+                              DinnerService dinnerService,
                               PublicQueryHistoryService historyService,
                               PublicCaptchaService captchaService) {
         this.meetingRepository = meetingRepository;
@@ -90,6 +108,7 @@ public class PublicQueryService {
         this.assignmentRepository = assignmentRepository;
         this.seatRepository = seatRepository;
         this.roomRepository = roomRepository;
+        this.dinnerService = dinnerService;
         this.historyService = historyService;
         this.captchaService = captchaService;
     }
@@ -138,6 +157,7 @@ public class PublicQueryService {
         List<PublicQueryField> fields = normalizeFields(request.fields());
         meeting.setSeatQueryEnabled(request.seatQueryEnabled());
         meeting.setRoomQueryEnabled(request.roomQueryEnabled());
+        meeting.setDinnerQueryEnabled(request.dinnerQueryEnabled());
         meeting.setCheckinEnabled(request.checkinEnabled());
         meeting.setPublicQueryPaused(request.queryPaused());
         meeting.setPublicQueryFields(serializeFields(fields));
@@ -152,6 +172,7 @@ public class PublicQueryService {
         meeting.setPublicQueryEmptyMessage(defaultText(request.emptyMessage(), "未查询到结果，请核对信息后重试", 255));
         meeting.setPublicQuerySeatNotice(blankToNull(request.seatNotice()));
         meeting.setPublicQueryRoomNotice(blankToNull(request.roomNotice()));
+        meeting.setPublicQueryDinnerNotice(blankToNull(request.dinnerNotice()));
         meeting.setPublicQueryThemeColor(normalizeThemeColor(request.themeColor()));
         meeting.setPublicQueryLogoUrl(limit(blankToNull(request.logoUrl()), 500));
         meeting.setPublicQueryBackgroundUrl(limit(blankToNull(request.backgroundUrl()), 500));
@@ -165,15 +186,21 @@ public class PublicQueryService {
         List<PublicQueryResultField> roomVisible = normalizeResultFields(request.roomVisibleResultFields(), filterResultFields(sharedVisible, PublicQueryType.ROOM, DEFAULT_ROOM_RESULT_FIELDS));
         List<PublicQueryResultField> roomMasked = normalizeResultFields(request.roomMaskedResultFields(), filterResultFields(sharedMasked, PublicQueryType.ROOM, List.of()));
         List<PublicQueryResultField> roomHighlight = normalizeResultFields(request.roomHighlightResultFields(), filterResultFields(sharedHighlight, PublicQueryType.ROOM, DEFAULT_ROOM_HIGHLIGHT_FIELDS));
+        List<PublicQueryResultField> dinnerVisible = normalizeResultFields(request.dinnerVisibleResultFields(), filterResultFields(sharedVisible, PublicQueryType.DINNER, DEFAULT_DINNER_RESULT_FIELDS));
+        List<PublicQueryResultField> dinnerMasked = normalizeResultFields(request.dinnerMaskedResultFields(), filterResultFields(sharedMasked, PublicQueryType.DINNER, List.of()));
+        List<PublicQueryResultField> dinnerHighlight = normalizeResultFields(request.dinnerHighlightResultFields(), filterResultFields(sharedHighlight, PublicQueryType.DINNER, DEFAULT_DINNER_HIGHLIGHT_FIELDS));
         meeting.setPublicQuerySeatVisibleResultFields(serializeResultFields(seatVisible));
         meeting.setPublicQuerySeatMaskedResultFields(serializeResultFields(seatMasked));
         meeting.setPublicQuerySeatHighlightResultFields(serializeResultFields(seatHighlight));
         meeting.setPublicQueryRoomVisibleResultFields(serializeResultFields(roomVisible));
         meeting.setPublicQueryRoomMaskedResultFields(serializeResultFields(roomMasked));
         meeting.setPublicQueryRoomHighlightResultFields(serializeResultFields(roomHighlight));
-        meeting.setPublicQueryVisibleResultFields(serializeResultFields(mergeResultFields(seatVisible, roomVisible)));
-        meeting.setPublicQueryMaskedResultFields(serializeResultFields(mergeResultFields(seatMasked, roomMasked)));
-        meeting.setPublicQueryHighlightResultFields(serializeResultFields(mergeResultFields(seatHighlight, roomHighlight)));
+        meeting.setPublicQueryDinnerVisibleResultFields(serializeResultFields(dinnerVisible));
+        meeting.setPublicQueryDinnerMaskedResultFields(serializeResultFields(dinnerMasked));
+        meeting.setPublicQueryDinnerHighlightResultFields(serializeResultFields(dinnerHighlight));
+        meeting.setPublicQueryVisibleResultFields(serializeResultFields(mergeResultFields(seatVisible, roomVisible, dinnerVisible)));
+        meeting.setPublicQueryMaskedResultFields(serializeResultFields(mergeResultFields(seatMasked, roomMasked, dinnerMasked)));
+        meeting.setPublicQueryHighlightResultFields(serializeResultFields(mergeResultFields(seatHighlight, roomHighlight, dinnerHighlight)));
         return toSettingsResponse(meeting);
     }
 
@@ -237,6 +264,30 @@ public class PublicQueryService {
             return filterRoomResult(meeting, rawResult);
         } catch (RuntimeException ex) {
             historyService.recordFailure(meeting, PublicQueryType.ROOM, request.values(), firstNonNull(attendee, identifySingleMatchedAttendee(meeting, request.values())), ex.getMessage(), clientIp, userAgent);
+            throw ex;
+        }
+    }
+
+    @Transactional(readOnly = true)
+    public DinnerQueryResult publicDinnerQuery(PublicQueryRequest request) {
+        return publicDinnerQuery(request, null, null);
+    }
+
+    @Transactional(readOnly = true)
+    public DinnerQueryResult publicDinnerQuery(PublicQueryRequest request, String clientIp, String userAgent) {
+        Meeting meeting = resolveMeeting(request.meetingId(), request.meetingCode());
+        Attendee attendee = null;
+        try {
+            ensureQueryWindowOpen(meeting);
+            if (!meeting.isDinnerQueryEnabled()) {
+                throw BusinessException.badRequest("晚宴查询尚未开放");
+            }
+            attendee = resolveSinglePublicAttendee(meeting, request.values());
+            DinnerQueryResult rawResult = dinnerService.query(meeting.getId(), attendee);
+            historyService.recordSuccess(meeting, PublicQueryType.DINNER, request.values(), attendee, dinnerSummary(rawResult), clientIp, userAgent);
+            return filterDinnerResult(meeting, rawResult);
+        } catch (RuntimeException ex) {
+            historyService.recordFailure(meeting, PublicQueryType.DINNER, request.values(), firstNonNull(attendee, identifySingleMatchedAttendee(meeting, request.values())), ex.getMessage(), clientIp, userAgent);
             throw ex;
         }
     }
@@ -451,6 +502,30 @@ public class PublicQueryService {
         );
     }
 
+    private DinnerQueryResult filterDinnerResult(Meeting meeting, DinnerQueryResult result) {
+        List<PublicQueryResultField> visible = parseResultFields(
+                meeting.getPublicQueryDinnerVisibleResultFields(),
+                filterResultFields(parseResultFields(meeting.getPublicQueryVisibleResultFields(), DEFAULT_RESULT_FIELDS), PublicQueryType.DINNER, DEFAULT_DINNER_RESULT_FIELDS)
+        );
+        List<PublicQueryResultField> masked = parseResultFields(
+                meeting.getPublicQueryDinnerMaskedResultFields(),
+                filterResultFields(parseResultFields(meeting.getPublicQueryMaskedResultFields(), List.of()), PublicQueryType.DINNER, List.of())
+        );
+        return new DinnerQueryResult(
+                result.attendeeId(),
+                visibleOrNull(PublicQueryResultField.ATTENDEE_NAME, visible, masked, result.attendeeName()),
+                visibleOrNull(PublicQueryResultField.ATTENDEE_PHONE, visible, masked, result.attendeePhone()),
+                visibleOrNull(PublicQueryResultField.ORGANIZATION, visible, masked, result.organization()),
+                visibleOrNull(PublicQueryResultField.TITLE, visible, masked, result.title()),
+                visibleOrNull(PublicQueryResultField.EMAIL, visible, masked, result.email()),
+                visibleOrNull(PublicQueryResultField.MEETING_NAME, visible, masked, result.meetingName()),
+                visibleOrNull(PublicQueryResultField.DINNER_TABLE_NO, visible, masked, result.tableNo()),
+                visibleOrNull(PublicQueryResultField.DINNER_VENUE, visible, masked, result.venue()),
+                visibleOrNull(PublicQueryResultField.DINNER_TIME, visible, masked, result.dinnerTime()),
+                visibleOrNull(PublicQueryResultField.DINNER_REMARK, visible, masked, result.remark())
+        );
+    }
+
     private String visibleOrNull(PublicQueryResultField field,
                                  List<PublicQueryResultField> visible,
                                  List<PublicQueryResultField> masked,
@@ -476,6 +551,11 @@ public class PublicQueryService {
         String hotel = result.hotelName() == null || result.hotelName().isBlank() ? "" : result.hotelName() + " ";
         String roomType = result.roomType() == null || result.roomType().isBlank() ? "" : " · " + result.roomType();
         return hotel + result.roomNo() + roomType;
+    }
+
+    private String dinnerSummary(DinnerQueryResult result) {
+        String venue = result.venue() == null || result.venue().isBlank() ? "" : result.venue() + " ";
+        return venue + result.tableNo();
     }
 
     private Attendee firstNonNull(Attendee primary, Attendee fallback) {
@@ -539,12 +619,25 @@ public class PublicQueryService {
                 meeting.getPublicQueryRoomHighlightResultFields(),
                 filterResultFields(parseResultFields(meeting.getPublicQueryHighlightResultFields(), DEFAULT_HIGHLIGHT_FIELDS), PublicQueryType.ROOM, DEFAULT_ROOM_HIGHLIGHT_FIELDS)
         );
+        List<PublicQueryResultField> dinnerVisible = parseResultFields(
+                meeting.getPublicQueryDinnerVisibleResultFields(),
+                filterResultFields(parseResultFields(meeting.getPublicQueryVisibleResultFields(), DEFAULT_RESULT_FIELDS), PublicQueryType.DINNER, DEFAULT_DINNER_RESULT_FIELDS)
+        );
+        List<PublicQueryResultField> dinnerMasked = parseResultFields(
+                meeting.getPublicQueryDinnerMaskedResultFields(),
+                filterResultFields(parseResultFields(meeting.getPublicQueryMaskedResultFields(), List.of()), PublicQueryType.DINNER, List.of())
+        );
+        List<PublicQueryResultField> dinnerHighlight = parseResultFields(
+                meeting.getPublicQueryDinnerHighlightResultFields(),
+                filterResultFields(parseResultFields(meeting.getPublicQueryHighlightResultFields(), DEFAULT_HIGHLIGHT_FIELDS), PublicQueryType.DINNER, DEFAULT_DINNER_HIGHLIGHT_FIELDS)
+        );
         return new MeetingQuerySettingsResponse(
                 meeting.getId(),
                 meeting.getCode(),
                 meeting.getName(),
                 meeting.isSeatQueryEnabled(),
                 meeting.isRoomQueryEnabled(),
+                meeting.isDinnerQueryEnabled(),
                 meeting.isCheckinEnabled(),
                 meeting.isPublicQueryPaused(),
                 parseFields(meeting),
@@ -559,19 +652,23 @@ public class PublicQueryService {
                 firstNonBlank(meeting.getPublicQueryEmptyMessage(), "未查询到结果，请核对信息后重试"),
                 firstNonBlank(meeting.getPublicQuerySeatNotice(), DEFAULT_SEAT_NOTICE),
                 firstNonBlank(meeting.getPublicQueryRoomNotice(), DEFAULT_ROOM_NOTICE),
+                firstNonBlank(meeting.getPublicQueryDinnerNotice(), DEFAULT_DINNER_NOTICE),
                 firstNonBlank(meeting.getPublicQueryThemeColor(), "#2563eb"),
                 meeting.getPublicQueryLogoUrl(),
                 meeting.getPublicQueryBackgroundUrl(),
                 firstNonBlank(meeting.getPublicQueryResultLayout(), "CARD"),
-                mergeResultFields(seatVisible, roomVisible),
-                mergeResultFields(seatMasked, roomMasked),
-                mergeResultFields(seatHighlight, roomHighlight),
+                mergeResultFields(seatVisible, roomVisible, dinnerVisible),
+                mergeResultFields(seatMasked, roomMasked, dinnerMasked),
+                mergeResultFields(seatHighlight, roomHighlight, dinnerHighlight),
                 seatVisible,
                 seatMasked,
                 seatHighlight,
                 roomVisible,
                 roomMasked,
                 roomHighlight,
+                dinnerVisible,
+                dinnerMasked,
+                dinnerHighlight,
                 captchaService.isEnabled(),
                 Arrays.stream(PublicQueryField.values())
                         .map(field -> new QueryFieldOption(field, field.label()))
@@ -650,10 +747,11 @@ public class PublicQueryService {
         return fields.stream().map(Enum::name).collect(Collectors.joining(","));
     }
 
-    private List<PublicQueryResultField> mergeResultFields(List<PublicQueryResultField> primary, List<PublicQueryResultField> secondary) {
+    private List<PublicQueryResultField> mergeResultFields(List<PublicQueryResultField> primary, List<PublicQueryResultField> secondary, List<PublicQueryResultField> tertiary) {
         Set<PublicQueryResultField> merged = new LinkedHashSet<>();
         merged.addAll(primary);
         merged.addAll(secondary);
+        merged.addAll(tertiary);
         return List.copyOf(merged);
     }
 
@@ -663,6 +761,7 @@ public class PublicQueryService {
         Set<PublicQueryResultField> allowed = switch (type) {
             case SEAT -> seatResultFields();
             case ROOM -> roomResultFields();
+            case DINNER -> dinnerResultFields();
             case CHECKIN -> Set.of();
         };
         List<PublicQueryResultField> filtered = fields.stream()
@@ -702,6 +801,21 @@ public class PublicQueryService {
                 PublicQueryResultField.ROOM_NO,
                 PublicQueryResultField.ROOM_REMARK,
                 PublicQueryResultField.CHECKIN_TIPS
+        );
+    }
+
+    private Set<PublicQueryResultField> dinnerResultFields() {
+        return Set.of(
+                PublicQueryResultField.ATTENDEE_NAME,
+                PublicQueryResultField.ATTENDEE_PHONE,
+                PublicQueryResultField.ORGANIZATION,
+                PublicQueryResultField.TITLE,
+                PublicQueryResultField.EMAIL,
+                PublicQueryResultField.MEETING_NAME,
+                PublicQueryResultField.DINNER_TABLE_NO,
+                PublicQueryResultField.DINNER_VENUE,
+                PublicQueryResultField.DINNER_TIME,
+                PublicQueryResultField.DINNER_REMARK
         );
     }
 

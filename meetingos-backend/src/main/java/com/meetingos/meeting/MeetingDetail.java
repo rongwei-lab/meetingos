@@ -6,6 +6,7 @@ public record MeetingDetail(
         long approvedCount,
         long seatedCount,
         long roomAssignedCount,
+        long dinnerAssignedCount,
         long checkedInCount
 ) {
 }

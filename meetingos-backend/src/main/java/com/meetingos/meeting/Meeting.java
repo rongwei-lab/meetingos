@@ -39,6 +39,12 @@ public class Meeting extends BaseEntity {
     @Column(length = 160)
     private String venueName;
 
+    @Column(length = 160)
+    private String dinnerVenue;
+
+    @Column(length = 120)
+    private String dinnerTime;
+
     private Integer capacity;
 
     @Column(columnDefinition = "text")
@@ -68,6 +74,9 @@ public class Meeting extends BaseEntity {
 
     @Column(nullable = false)
     private boolean roomQueryEnabled;
+
+    @Column(nullable = false)
+    private boolean dinnerQueryEnabled;
 
     @Column(nullable = false)
     private boolean checkinEnabled = true;
@@ -109,6 +118,9 @@ public class Meeting extends BaseEntity {
     @Column(columnDefinition = "text")
     private String publicQueryRoomNotice = "凭会议证件及身份证办理入住，接待台位于酒店大堂。";
 
+    @Column(columnDefinition = "text")
+    private String publicQueryDinnerNotice = "请按现场指引前往晚宴区域入座，如有调整请以会务组通知为准。";
+
     @Column(nullable = false, length = 20)
     private String publicQueryThemeColor = "#2563eb";
 
@@ -147,6 +159,15 @@ public class Meeting extends BaseEntity {
 
     @Column(nullable = false, length = 500)
     private String publicQueryRoomHighlightResultFields = "ROOM_NO";
+
+    @Column(nullable = false, length = 500)
+    private String publicQueryDinnerVisibleResultFields = "ATTENDEE_NAME,DINNER_TABLE_NO,DINNER_VENUE,DINNER_TIME,DINNER_REMARK";
+
+    @Column(nullable = false, length = 500)
+    private String publicQueryDinnerMaskedResultFields = "";
+
+    @Column(nullable = false, length = 500)
+    private String publicQueryDinnerHighlightResultFields = "DINNER_TABLE_NO";
 
     public String getCode() {
         return code;
@@ -228,6 +249,22 @@ public class Meeting extends BaseEntity {
         this.venueName = venueName;
     }
 
+    public String getDinnerVenue() {
+        return dinnerVenue;
+    }
+
+    public void setDinnerVenue(String dinnerVenue) {
+        this.dinnerVenue = dinnerVenue;
+    }
+
+    public String getDinnerTime() {
+        return dinnerTime;
+    }
+
+    public void setDinnerTime(String dinnerTime) {
+        this.dinnerTime = dinnerTime;
+    }
+
     public Integer getCapacity() {
         return capacity;
     }
@@ -306,6 +343,14 @@ public class Meeting extends BaseEntity {
 
     public void setRoomQueryEnabled(boolean roomQueryEnabled) {
         this.roomQueryEnabled = roomQueryEnabled;
+    }
+
+    public boolean isDinnerQueryEnabled() {
+        return dinnerQueryEnabled;
+    }
+
+    public void setDinnerQueryEnabled(boolean dinnerQueryEnabled) {
+        this.dinnerQueryEnabled = dinnerQueryEnabled;
     }
 
     public boolean isCheckinEnabled() {
@@ -420,6 +465,14 @@ public class Meeting extends BaseEntity {
         this.publicQueryRoomNotice = publicQueryRoomNotice;
     }
 
+    public String getPublicQueryDinnerNotice() {
+        return publicQueryDinnerNotice;
+    }
+
+    public void setPublicQueryDinnerNotice(String publicQueryDinnerNotice) {
+        this.publicQueryDinnerNotice = publicQueryDinnerNotice;
+    }
+
     public String getPublicQueryThemeColor() {
         return publicQueryThemeColor;
     }
@@ -522,5 +575,29 @@ public class Meeting extends BaseEntity {
 
     public void setPublicQueryRoomHighlightResultFields(String publicQueryRoomHighlightResultFields) {
         this.publicQueryRoomHighlightResultFields = publicQueryRoomHighlightResultFields;
+    }
+
+    public String getPublicQueryDinnerVisibleResultFields() {
+        return publicQueryDinnerVisibleResultFields;
+    }
+
+    public void setPublicQueryDinnerVisibleResultFields(String publicQueryDinnerVisibleResultFields) {
+        this.publicQueryDinnerVisibleResultFields = publicQueryDinnerVisibleResultFields;
+    }
+
+    public String getPublicQueryDinnerMaskedResultFields() {
+        return publicQueryDinnerMaskedResultFields;
+    }
+
+    public void setPublicQueryDinnerMaskedResultFields(String publicQueryDinnerMaskedResultFields) {
+        this.publicQueryDinnerMaskedResultFields = publicQueryDinnerMaskedResultFields;
+    }
+
+    public String getPublicQueryDinnerHighlightResultFields() {
+        return publicQueryDinnerHighlightResultFields;
+    }
+
+    public void setPublicQueryDinnerHighlightResultFields(String publicQueryDinnerHighlightResultFields) {
+        this.publicQueryDinnerHighlightResultFields = publicQueryDinnerHighlightResultFields;
     }
 }

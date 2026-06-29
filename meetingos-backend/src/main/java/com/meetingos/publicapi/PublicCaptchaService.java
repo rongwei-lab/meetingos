@@ -32,7 +32,7 @@ public class PublicCaptchaService {
         int right = RANDOM.nextInt(8) + 2;
         String captchaId = UUID.randomUUID().toString();
         long expiresAt = Instant.now().plusSeconds(ttlSeconds()).toEpochMilli();
-        challenges.put(captchaId, new CaptchaChallenge(String.valueOf(left + right), expiresAt, 2, 0));
+        challenges.put(captchaId, new CaptchaChallenge(String.valueOf(left + right), expiresAt, 3, 0));
         return new PublicCaptchaResponse(true, captchaId, left + " + " + right + " = ?", ttlSeconds());
     }
 
@@ -63,8 +63,9 @@ public class PublicCaptchaService {
             throw BusinessException.badRequest("验证码不正确");
         }
         /*
-         * 综合查询页会同时发起“座位 + 住宿”两个请求。短时间内允许同一个验证码再通过一次，
-         * 避免用户明明答对却因为并发第二个请求失败；超过两次后删除，防止验证码被长期复用。
+         * 综合查询页可能同时发起“座位 + 住宿 + 晚宴”三个查询请求。短时间内允许
+         * 同一个验证码通过最多三次，
+         * 避免用户明明答对却因为并发请求失败；超过三次后删除，防止验证码被长期复用。
          */
         if (challenge.remainingSuccessUses() <= 1) {
             challenges.remove(captchaId);
