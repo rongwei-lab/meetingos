@@ -1,6 +1,6 @@
 package com.meetingos.tduck;
 
-record TduckFormDetails(
+public record TduckFormDetails(
         String formKey,
         String formName,
         String status,

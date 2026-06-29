@@ -67,8 +67,11 @@ export interface Attendee {
   phone: string;
   company: string;
   title: string;
+  identityNo?: string;
   email?: string;
   attendeeType: AttendeeType;
+  accommodationRequired?: boolean;
+  remark?: string;
   tags: string[];
   auditStatus: AuditStatus;
   auditReason?: string;
@@ -92,6 +95,7 @@ export interface Seat {
   areaSortOrder?: number;
   rowNo: number;
   seatNo: number;
+  seatCode?: string;
   seatType: SeatType;
   status: SeatStatus;
   locked: boolean;

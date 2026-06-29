@@ -8,7 +8,7 @@ import java.util.List;
 import com.meetingos.publicapi.PublicQueryField;
 
 public record MeetingRequest(
-        @NotBlank String code,
+        String code,
         @NotBlank String name,
         String organizer,
         String coOrganizer,

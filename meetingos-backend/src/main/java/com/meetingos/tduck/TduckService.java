@@ -77,10 +77,11 @@ public class TduckService {
         TduckFormBinding binding = existingBinding.orElseGet(TduckFormBinding::new);
         String previousFormKey = binding.getFormKey();
         boolean replacingDifferentForm = existingBinding.isPresent() && !request.formKey().equals(previousFormKey);
-        if (replacingDifferentForm) {
+        if (replacingDifferentForm && !canReplaceExistingBinding(binding)) {
             throw BusinessException.conflict(REBINDING_DISABLED_REASON);
         }
         TduckFormDetails form = validateFormForBinding(request.formKey());
+        ensureFormKeyNotBoundToAnotherMeeting(form.formKey(), meeting.getId());
         binding.setMeeting(meeting);
         binding.setFormKey(form.formKey());
         binding.setFormName(form.formName());
@@ -121,25 +122,54 @@ public class TduckService {
         }
     }
 
+    @Transactional(readOnly = true)
+    public TduckBrowserSessionResponse browserSession(Long meetingId) {
+        meetingRepository.findById(meetingId)
+                .orElseThrow(() -> BusinessException.notFound("会议不存在"));
+        try {
+            return tduckClient.browserSession();
+        } catch (TduckClientException ex) {
+            throw BusinessException.badRequest(ex.getMessage());
+        }
+    }
+
+    @Transactional(readOnly = true)
+    public TduckFormOption createBlankForm(CreateTduckFormRequest request) {
+        Meeting meeting = meetingRepository.findById(request.meetingId())
+                .orElseThrow(() -> BusinessException.notFound("会议不存在"));
+        String formName = StringUtils.hasText(request.formName())
+                ? request.formName().trim()
+                : meeting.getName() + " 报名表";
+        String description = StringUtils.hasText(request.description())
+                ? request.description().trim()
+                : "MeetingOS 创建";
+        try {
+            /*
+             * 只负责在 TDuck 中创建一张可编辑的空表单，不在这里自动绑定会议。
+             * TDuck 新表单默认未发布，强行写入 MeetingOS 绑定会让公开报名入口指向不可填写表单；
+             * 管理员编辑并发布后，再从列表中保存绑定，流程更明确。
+             */
+            return tduckClient.createForm(formName, description);
+        } catch (TduckClientException ex) {
+            throw BusinessException.badRequest(ex.getMessage());
+        }
+    }
+
     @Transactional
     public List<TduckFieldMapping> updateMappings(Long meetingId, UpdateFieldMappingsRequest request) {
         Meeting meeting = meetingRepository.findById(meetingId)
                 .orElseThrow(() -> BusinessException.notFound("会议不存在"));
-        ensureRequiredMapping(request.mappings(), AttendeeField.NAME);
-        ensureRequiredMapping(request.mappings(), AttendeeField.PHONE);
+        List<FieldMappingItem> mappings = normalizeFieldMappings(request.mappings());
+        ensureRequiredMapping(mappings, AttendeeField.NAME);
+        ensureRequiredMapping(mappings, AttendeeField.PHONE);
 
         mappingRepository.deleteByMeetingId(meetingId);
         // 同一事务内会重新插入 meeting_id + attendee_field 相同的映射；先 flush 删除，避免数据库唯一键先看到旧行。
         mappingRepository.flush();
-        List<TduckFieldMapping> saved = request.mappings().stream().map(item -> {
-            TduckFieldMapping mapping = new TduckFieldMapping();
-            mapping.setMeeting(meeting);
-            mapping.setAttendeeField(item.attendeeField());
-            mapping.setTduckFieldKey(item.tduckFieldKey());
-            mapping.setTduckFieldLabel(item.tduckFieldLabel());
-            mapping.setRequiredMapping(item.requiredMapping());
-            return mapping;
-        }).map(mappingRepository::save).toList();
+        List<TduckFieldMapping> saved = mappings.stream()
+                .map(item -> toMappingEntity(meeting, item))
+                .map(mappingRepository::save)
+                .toList();
 
         bindingRepository.findByMeetingId(meetingId).ifPresent(binding -> binding.setMappingStatus(MappingStatus.VALID));
         return saved;
@@ -163,7 +193,9 @@ public class TduckService {
          */
         Map<String, TduckFieldMapping> mappingByTduckKey = new LinkedHashMap<>();
         for (TduckFieldMapping mapping : savedMappings) {
-            mappingByTduckKey.putIfAbsent(mapping.getTduckFieldKey(), mapping);
+            if (StringUtils.hasText(mapping.getTduckFieldKey())) {
+                mappingByTduckKey.putIfAbsent(mapping.getTduckFieldKey(), mapping);
+            }
         }
         try {
             List<TduckFormFieldOption> fields = tduckClient.formFields(binding.getFormKey());
@@ -200,51 +232,96 @@ public class TduckService {
         }
 
         /*
-         * 自动同步只做“低风险的首轮匹配”：
-         * - NAME 和 PHONE 是 Webhook 入库的最低要求，匹配不到则保持待确认，整体 mappingStatus 不是 VALID。
-         * - 其他字段按中文标签、常见英文 key 做启发式匹配；匹配结果落库，未匹配字段仍返回给前端展示。
-         * - 不删除 TDuck 端存在但无法识别的字段，避免把自定义业务字段误写到错误的 MeetingOS 字段。
+         * 字段同步既要刷新 TDuck 最新字段清单，也必须保留管理员已经确认过的映射。
+         * 之前这里每次都删除旧映射并按自动识别结果重建，导致“保存映射”后再次点同步字段时，
+         * 手工调整过的映射状态被覆盖。现在的策略是：
+         * - TDuck 字段 key 仍存在时，优先使用已保存映射；
+         * - 只有新字段才走启发式自动识别；
+         * - 自动识别结果如果和已保存目标字段冲突，则保持未配置，避免制造重复目标字段。
          */
+        List<TduckFieldMapping> savedMappings = mappingRepository.findByMeetingId(meetingId);
+        Map<String, TduckFieldMapping> savedMappingByTduckKey = new LinkedHashMap<>();
+        for (TduckFieldMapping mapping : savedMappings) {
+            if (StringUtils.hasText(mapping.getTduckFieldKey())) {
+                savedMappingByTduckKey.putIfAbsent(mapping.getTduckFieldKey(), mapping);
+            }
+        }
+        List<String> currentFieldKeys = fields.stream()
+                .map(TduckFormFieldOption::fieldKey)
+                .filter(StringUtils::hasText)
+                .toList();
+        List<AttendeeField> reservedSavedAttendeeFields = savedMappingByTduckKey.values()
+                .stream()
+                .filter(mapping -> currentFieldKeys.contains(mapping.getTduckFieldKey()))
+                .map(TduckFieldMapping::getAttendeeField)
+                .filter(java.util.Objects::nonNull)
+                .toList();
         List<TduckFieldSyncItem> preview = new ArrayList<>();
-        List<FieldMappingItem> matchedMappings = new ArrayList<>();
+        List<FieldMappingItem> desiredMappings = new ArrayList<>();
+        Map<AttendeeField, FieldMappingItem> desiredMappingByAttendeeField = new LinkedHashMap<>();
         for (TduckFormFieldOption field : fields) {
-            Optional<AttendeeField> matched = matchAttendeeField(field);
-            MappingStatus status = matched.isPresent() ? MappingStatus.VALID : MappingStatus.NOT_CONFIGURED;
-            boolean requiredMapping = matched
-                    .map(item -> item == AttendeeField.NAME || item == AttendeeField.PHONE)
-                    .orElse(false);
-            matched.ifPresent(attendeeField -> matchedMappings.add(new FieldMappingItem(
-                    attendeeField,
-                    field.fieldKey(),
-                    field.label(),
-                    requiredMapping
-            )));
+            TduckFieldMapping savedMapping = savedMappingByTduckKey.get(field.fieldKey());
+            AttendeeField attendeeField = null;
+            boolean requiredMapping = false;
+            MappingStatus status = MappingStatus.NOT_CONFIGURED;
+            if (savedMapping != null) {
+                attendeeField = savedMapping.getAttendeeField();
+                /*
+                 * attendeeField 为空表示管理员明确清空了这个 TDuck 字段。同步时必须保留该“忽略”选择，
+                 * 不能再按字段名自动识别，否则“保存映射”后再次同步会把已移除字段重新映射回来。
+                 */
+                requiredMapping = attendeeField != null && savedMapping.isRequiredMapping();
+                status = attendeeField == null ? MappingStatus.NOT_CONFIGURED : MappingStatus.VALID;
+                FieldMappingItem retained = new FieldMappingItem(
+                        attendeeField,
+                        field.fieldKey(),
+                        firstNonBlank(field.label(), savedMapping.getTduckFieldLabel()),
+                        requiredMapping
+                );
+                desiredMappings.add(retained);
+                if (attendeeField != null) {
+                    desiredMappingByAttendeeField.putIfAbsent(attendeeField, retained);
+                }
+            } else {
+                Optional<AttendeeField> matched = matchAttendeeField(field);
+                if (matched.isPresent()
+                        && !reservedSavedAttendeeFields.contains(matched.get())
+                        && !desiredMappingByAttendeeField.containsKey(matched.get())) {
+                    attendeeField = matched.get();
+                    requiredMapping = attendeeField == AttendeeField.NAME || attendeeField == AttendeeField.PHONE;
+                    status = MappingStatus.VALID;
+                    FieldMappingItem inferred = new FieldMappingItem(
+                            attendeeField,
+                            field.fieldKey(),
+                            field.label(),
+                            requiredMapping
+                    );
+                    desiredMappings.add(inferred);
+                    desiredMappingByAttendeeField.put(attendeeField, inferred);
+                }
+            }
             preview.add(new TduckFieldSyncItem(
                     field.fieldKey(),
                     field.label(),
                     field.type(),
                     field.required(),
-                    matched.orElse(null),
+                    attendeeField,
                     requiredMapping,
                     status
             ));
         }
 
-        boolean hasName = matchedMappings.stream().anyMatch(item -> item.attendeeField() == AttendeeField.NAME);
-        boolean hasPhone = matchedMappings.stream().anyMatch(item -> item.attendeeField() == AttendeeField.PHONE);
+        boolean hasName = desiredMappingByAttendeeField.containsKey(AttendeeField.NAME);
+        boolean hasPhone = desiredMappingByAttendeeField.containsKey(AttendeeField.PHONE);
         MappingStatus mappingStatus = hasName && hasPhone ? MappingStatus.VALID : MappingStatus.NOT_CONFIGURED;
 
         mappingRepository.deleteByMeetingId(meetingId);
-        // 同步字段会重建映射；必须先把旧映射删除落到数据库，避免唯一索引 uk_mapping_meeting_target 冲突。
+        // 同步字段会按“保留后的目标状态”重建映射；先 flush 删除，避免唯一索引 uk_mapping_meeting_target 冲突。
         mappingRepository.flush();
-        matchedMappings.stream()
-                // 同一个 MeetingOS 字段可能被多个 TDuck 字段模糊匹配到，保留最靠前的一个，避免唯一索引冲突。
-                .collect(LinkedHashMap<AttendeeField, FieldMappingItem>::new,
-                        (map, item) -> map.putIfAbsent(item.attendeeField(), item),
-                        LinkedHashMap::putAll)
-                .values()
-                .stream()
-                .sorted(Comparator.comparing(item -> item.attendeeField().ordinal()))
+        desiredMappings.stream()
+                .sorted(Comparator
+                        .comparing((FieldMappingItem item) -> item.attendeeField() == null ? Integer.MAX_VALUE : item.attendeeField().ordinal())
+                        .thenComparing(FieldMappingItem::tduckFieldKey))
                 .map(item -> toMappingEntity(meeting, item))
                 .forEach(mappingRepository::save);
         binding.setMappingStatus(mappingStatus);
@@ -253,7 +330,7 @@ public class TduckService {
                 binding.getFormKey(),
                 binding.getFormName(),
                 fields.size(),
-                matchedMappings.size(),
+                desiredMappingByAttendeeField.size(),
                 mappingStatus,
                 preview
         );
@@ -284,6 +361,13 @@ public class TduckService {
                 .orElseThrow(() -> BusinessException.notFound("会议不存在"));
         TduckFormBinding binding = bindingRepository.findByMeetingId(meeting.getId()).orElse(null);
         String message = registrationClosedReason(meeting, binding);
+        if (message == null) {
+            /*
+             * 公开报名入口不能只看 MeetingOS 会议状态。本地绑定可能指向已删除、未发布或字段为空的 TDuck 表单；
+             * 这种情况下应停在 MeetingOS 的明确提示页，而不是把用户跳到 TDuck 的“暂时无法填写”空状态。
+             */
+            message = registrationUnavailableReason(binding);
+        }
         boolean open = message == null;
         return new RegistrationInfo(
                 meeting.getId(),
@@ -592,6 +676,33 @@ public class TduckService {
         }
     }
 
+    private List<FieldMappingItem> normalizeFieldMappings(List<FieldMappingItem> mappings) {
+        Map<AttendeeField, FieldMappingItem> mappingByAttendeeField = new LinkedHashMap<>();
+        Map<String, FieldMappingItem> mappingByTduckFieldKey = new LinkedHashMap<>();
+        List<FieldMappingItem> normalized = new ArrayList<>();
+        for (FieldMappingItem item : mappings) {
+            FieldMappingItem deduplicated = mappingByTduckFieldKey.putIfAbsent(item.tduckFieldKey(), item);
+            if (deduplicated != null) {
+                throw BusinessException.badRequest("TDuck 字段重复，请检查字段映射: " + item.tduckFieldKey());
+            }
+            if (item.attendeeField() == null) {
+                // attendeeField 为空表示明确不映射；requiredMapping 对这类行没有意义，统一落库为 false。
+                normalized.add(new FieldMappingItem(null, item.tduckFieldKey(), item.tduckFieldLabel(), false));
+                continue;
+            }
+            FieldMappingItem existing = mappingByAttendeeField.putIfAbsent(item.attendeeField(), item);
+            if (existing != null) {
+                /*
+                 * 数据库唯一键按 meeting_id + attendee_field 限制一对一映射。这里提前拦截重复目标字段，
+                 * 避免把唯一键异常包装成 500，也避免保存时静默覆盖导致 Webhook 入库字段不可预测。
+                 */
+                throw BusinessException.badRequest("字段映射重复，请确保每个 MeetingOS 字段只绑定一个 TDuck 字段: " + item.attendeeField());
+            }
+            normalized.add(item);
+        }
+        return normalized;
+    }
+
     private TduckFieldMapping toMappingEntity(Meeting meeting, FieldMappingItem item) {
         TduckFieldMapping mapping = new TduckFieldMapping();
         mapping.setMeeting(meeting);
@@ -606,11 +717,29 @@ public class TduckService {
         String key = normalizeFieldText(field.fieldKey());
         String label = normalizeFieldText(field.label());
         String combined = key + " " + label;
+        if (containsAny(combined, "emergencycontact", "紧急联系人", "应急联系人")) {
+            return Optional.of(AttendeeField.EMERGENCY_CONTACT);
+        }
+        if (containsAny(combined, "emergencyphone", "emergencymobile", "紧急联系电话", "紧急电话", "应急电话", "应急手机号")) {
+            return Optional.of(AttendeeField.EMERGENCY_PHONE);
+        }
+        if (containsAny(combined, "invoiceemail", "billingemail", "发票邮箱", "收票邮箱")) {
+            return Optional.of(AttendeeField.INVOICE_EMAIL);
+        }
+        if (containsAny(combined, "taxno", "taxnumber", "taxid", "纳税人识别号", "税号")) {
+            return Optional.of(AttendeeField.TAX_NO);
+        }
+        if (containsAny(combined, "invoicetitle", "billingtitle", "发票抬头", "开票抬头")) {
+            return Optional.of(AttendeeField.INVOICE_TITLE);
+        }
         if (containsAny(combined, "name", "姓名", "参会人", "联系人")) {
             return Optional.of(AttendeeField.NAME);
         }
         if (containsAny(combined, "phone", "mobile", "tel", "手机号", "手机", "电话", "联系方式")) {
             return Optional.of(AttendeeField.PHONE);
+        }
+        if (containsAny(combined, "organizationtype", "companytype", "unittype", "单位类型", "公司类型", "机构类型")) {
+            return Optional.of(AttendeeField.ORGANIZATION_TYPE);
         }
         if (containsAny(combined, "organization", "company", "corp", "单位", "公司", "机构")) {
             return Optional.of(AttendeeField.ORGANIZATION);
@@ -626,6 +755,66 @@ public class TduckService {
         }
         if (containsAny(combined, "attendeetype", "guesttype", "参会类型", "嘉宾类型", "人员类型")) {
             return Optional.of(AttendeeField.ATTENDEE_TYPE);
+        }
+        if (containsAny(combined, "gender", "sex", "性别")) {
+            return Optional.of(AttendeeField.GENDER);
+        }
+        if (containsAny(combined, "countryregion", "country", "region", "国家地区", "国家", "地区")) {
+            return Optional.of(AttendeeField.COUNTRY_REGION);
+        }
+        if (containsAny(combined, "province", "state", "省份", "省市", "省")) {
+            return Optional.of(AttendeeField.PROVINCE);
+        }
+        if (containsAny(combined, "city", "城市", "市")) {
+            return Optional.of(AttendeeField.CITY);
+        }
+        if (containsAny(combined, "industry", "sector", "行业", "产业")) {
+            return Optional.of(AttendeeField.INDUSTRY);
+        }
+        if (containsAny(combined, "department", "dept", "部门", "科室")) {
+            return Optional.of(AttendeeField.DEPARTMENT);
+        }
+        if (containsAny(combined, "address", "addr", "通讯地址", "联系地址", "地址")) {
+            return Optional.of(AttendeeField.ADDRESS);
+        }
+        if (containsAny(combined, "dietary", "meal", "food", "allergy", "halal", "vegetarian", "餐饮", "用餐", "忌口", "清真", "素食", "过敏")) {
+            return Optional.of(AttendeeField.DIETARY_REQUIREMENT);
+        }
+        if (containsAny(combined, "departureflight", "departuretrain", "departureno", "leaveno", "returnflight", "returntrain", "离开航班", "离开车次", "返程航班", "返程车次")) {
+            return Optional.of(AttendeeField.DEPARTURE_FLIGHT_TRAIN);
+        }
+        if (containsAny(combined, "departuretransport", "leavetransport", "returntransport", "departuretraffic", "返程交通", "离开交通", "离店交通")) {
+            return Optional.of(AttendeeField.DEPARTURE_TRANSPORT);
+        }
+        if (containsAny(combined, "departuredate", "departuretime", "leavedate", "leavetime", "returndate", "returntime", "离开时间", "离开日期", "返程时间", "返程日期")) {
+            return Optional.of(AttendeeField.DEPARTURE_DATE);
+        }
+        if (containsAny(combined, "arrivalflight", "arrivaltrain", "arriveno", "arrivetrip", "抵达航班", "到达航班", "抵达车次", "到达车次", "来程航班", "来程车次")) {
+            return Optional.of(AttendeeField.ARRIVAL_FLIGHT_TRAIN);
+        }
+        if (containsAny(combined, "arrivaltransport", "arrivetransport", "arrivaltraffic", "arrivetraffic", "抵达交通", "到达交通", "来程交通", "交通方式")) {
+            return Optional.of(AttendeeField.ARRIVAL_TRANSPORT);
+        }
+        if (containsAny(combined, "arrivaldate", "arrivaltime", "arrivedate", "抵达时间", "到达时间", "抵达日期", "到达日期", "来程时间")) {
+            return Optional.of(AttendeeField.ARRIVAL_DATE);
+        }
+        if (containsAny(combined, "companioncount", "guestcount", "accompanycount", "随行人数", "陪同人数", "同伴人数")) {
+            return Optional.of(AttendeeField.COMPANION_COUNT);
+        }
+        if (containsAny(combined, "paymentstatus", "paystatus", "paidstatus", "缴费状态", "支付状态", "付款状态")) {
+            return Optional.of(AttendeeField.PAYMENT_STATUS);
+        }
+        if (containsAny(combined, "signupsource", "registrationsource", "source", "channel", "报名来源", "报名渠道", "来源渠道", "渠道")) {
+            return Optional.of(AttendeeField.SIGNUP_SOURCE);
+        }
+        if (containsAny(combined, "inviter", "referrer", "inviteby", "邀请人", "推荐人")) {
+            return Optional.of(AttendeeField.INVITER);
+        }
+        if (containsAny(combined, "photoconsent", "portraitconsent", "imageconsent", "肖像授权", "拍照授权", "照片授权", "影像授权")) {
+            return Optional.of(AttendeeField.CONSENT_PHOTO);
+        }
+        if (containsAny(combined, "privacyconsent", "privacyagree", "agreement", "隐私同意", "隐私协议", "用户协议", "信息授权")) {
+            return Optional.of(AttendeeField.CONSENT_PRIVACY);
         }
         /*
          * TDuck 报名表里的“房号/住宿备注”通常是报名需求或原始扩展信息，
@@ -727,7 +916,30 @@ public class TduckService {
     }
 
     private TduckBindingResponse withRebindingLockStatus(TduckBindingResponse response, Long meetingId) {
+        if (response.validationStatus() == TduckBindingValidationStatus.INVALID) {
+            return response.withRebindingLock(false, "当前 TDuck 绑定已失效，请重新选择已发布表单");
+        }
         return response.withRebindingLock(true, REBINDING_DISABLED_REASON);
+    }
+
+    private boolean canReplaceExistingBinding(TduckFormBinding binding) {
+        if (binding == null) {
+            return true;
+        }
+        return validateExistingBinding(binding).validationStatus() == TduckBindingValidationStatus.INVALID;
+    }
+
+    private void ensureFormKeyNotBoundToAnotherMeeting(String formKey, Long meetingId) {
+        bindingRepository.findByFormKey(formKey).ifPresent(existing -> {
+            Long boundMeetingId = existing.getMeeting() == null ? null : existing.getMeeting().getId();
+            if (boundMeetingId != null && !boundMeetingId.equals(meetingId)) {
+                /*
+                 * formKey 在数据库层有唯一约束。提前返回业务错误，避免用户在重新绑定时只看到
+                 * “系统异常”，也避免同一个 TDuck 表单的 Webhook 同时归属多个会议造成报名串会。
+                 */
+                throw BusinessException.conflict("该 TDuck 表单已绑定其他会议，请选择未绑定表单");
+            }
+        });
     }
 
     private String localBindingInvalidReason(TduckFormBinding binding) {
@@ -743,6 +955,17 @@ public class TduckService {
          * 历史绑定就会继续返回旧地址。公开入口只需要 formKey，因此对外统一按当前系统设置实时拼接。
          */
         return tduckClient.registrationUrlFor(binding.getFormKey());
+    }
+
+    private String registrationUnavailableReason(TduckFormBinding binding) {
+        TduckBindingResponse response = validateExistingBinding(binding);
+        if (response.validationStatus() == TduckBindingValidationStatus.VALID) {
+            return null;
+        }
+        if (response.validationStatus() == TduckBindingValidationStatus.UNKNOWN) {
+            return "报名表暂时无法校验，请稍后重试或联系会议管理员";
+        }
+        return "报名表不可用：" + response.validationMessage();
     }
 
     private String invalidFormReason(TduckFormDetails details) {

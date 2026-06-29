@@ -15,7 +15,8 @@ import jakarta.persistence.UniqueConstraint;
 
 @Entity
 @Table(name = "tduck_field_mappings", uniqueConstraints = {
-        @UniqueConstraint(name = "uk_mapping_meeting_target", columnNames = {"meeting_id", "attendee_field"})
+        @UniqueConstraint(name = "uk_mapping_meeting_target", columnNames = {"meeting_id", "attendee_field"}),
+        @UniqueConstraint(name = "uk_mapping_meeting_tduck_field", columnNames = {"meeting_id", "tduck_field_key"})
 })
 public class TduckFieldMapping extends BaseEntity {
 
@@ -25,7 +26,7 @@ public class TduckFieldMapping extends BaseEntity {
     private Meeting meeting;
 
     @Enumerated(EnumType.STRING)
-    @Column(name = "attendee_field", nullable = false, length = 48)
+    @Column(name = "attendee_field", length = 48)
     private AttendeeField attendeeField;
 
     @Column(nullable = false, length = 120)

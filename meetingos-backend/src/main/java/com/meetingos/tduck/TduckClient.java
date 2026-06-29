@@ -60,6 +60,29 @@ public class TduckClient {
                 .toList();
     }
 
+    public TduckFormOption createForm(String name, String description) {
+        String normalizedName = StringUtils.hasText(name) ? name.trim() : "MeetingOS 报名表";
+        Map<String, Object> body = new LinkedHashMap<>();
+        /*
+         * TDuck 原生表单名支持富文本 HTML。这里仍传纯文本，避免 MeetingOS 生成的会议名里
+         * 混入 HTML 后影响 TDuck 工作台展示，也便于后续在 MeetingOS 表单列表中清洗展示。
+         */
+        body.put("name", normalizedName);
+        body.put("description", StringUtils.hasText(description) ? description.trim() : "MeetingOS 创建");
+        body.put("type", 1);
+        body.put("folderId", 0);
+        Map<String, Object> response = withTokenRetry(token -> requestPost(apiUrl("/user/form/create"), body, token));
+        Map<String, Object> form = objectMap(unwrapTduckData(response));
+        if (form.isEmpty()) {
+            throw new TduckClientException("TDuck 创建表单未返回表单信息");
+        }
+        String formKey = firstText(form, "formKey", "key", "id");
+        if (!StringUtils.hasText(formKey)) {
+            throw new TduckClientException("TDuck 创建表单未返回 formKey");
+        }
+        return toFormOption(form);
+    }
+
     public Optional<TduckFormDetails> formDetails(String formKey) {
         if (!StringUtils.hasText(formKey)) {
             return Optional.empty();
@@ -150,6 +173,32 @@ public class TduckClient {
                 new LinkedHashMap<>(formData),
                 details
         );
+    }
+
+    public TduckBrowserSessionResponse browserSession() {
+        String token = adminToken();
+        Map<String, Object> userInfo = new LinkedHashMap<>();
+        try {
+            Map<String, Object> response = requestGet(apiUrl("/user/current/detail"), token);
+            userInfo.putAll(objectMap(unwrapTduckData(response)));
+        } catch (TduckUnauthorizedException ex) {
+            clearToken();
+            token = adminToken();
+            Map<String, Object> response = requestGet(apiUrl("/user/current/detail"), token);
+            userInfo.putAll(objectMap(unwrapTduckData(response)));
+        } catch (TduckClientException ex) {
+            // TDuck 前端判断登录态只依赖 token。用户详情接口异常时保留最小信息继续跳转，
+            // 避免已成功获取 token 的情况下仍把用户挡在 TDuck 登录页。
+        }
+        /*
+         * TDuck 前端只依赖 localStorage.token 判断是否已登录，userInfo 用于展示头像、名称和管理员菜单。
+         * 部分 TDuck 版本的 /user/current/detail 不稳定时，用登录返回结构的最小字段兜底，
+         * 避免按钮又被路由守卫打回登录页。
+         */
+        userInfo.putIfAbsent("token", token);
+        userInfo.putIfAbsent("name", "TDuck 管理员");
+        userInfo.putIfAbsent("admin", true);
+        return new TduckBrowserSessionResponse(token, userInfo);
     }
 
     public String registrationUrlFor(String formKey) {

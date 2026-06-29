@@ -1,6 +1,6 @@
 <template>
   <div>
-    <page-header title="签到工作台" subtitle="支持扫码枪输入、手机号/姓名搜索、补签和重复签到拦截">
+    <page-header title="签到工作台">
       <n-select v-model:value="entrance" :options="entranceOptions" style="width: 140px" />
       <n-button type="primary" @click="submitCheckin">{{ isSupplementMode ? "提交补签" : "签到" }}</n-button>
     </page-header>

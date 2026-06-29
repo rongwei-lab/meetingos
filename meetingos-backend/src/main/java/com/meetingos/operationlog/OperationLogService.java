@@ -15,6 +15,8 @@ import java.util.Map;
 @Service
 public class OperationLogService {
 
+    private static final int MAX_MESSAGE_LENGTH = 500;
+
     private final OperationLogRepository operationLogRepository;
 
     public OperationLogService(OperationLogRepository operationLogRepository) {
@@ -37,7 +39,7 @@ public class OperationLogService {
         log.setTargetId(targetId);
         log.setClientIp(resolveClientIp(request));
         log.setSuccess(success);
-        log.setMessage(message);
+        log.setMessage(truncate(message, MAX_MESSAGE_LENGTH));
         log.setDetails(details == null ? new LinkedHashMap<>() : SensitiveDataMasker.maskMap(details));
         operationLogRepository.save(log);
     }
@@ -60,5 +62,12 @@ public class OperationLogService {
             return forwarded.split(",")[0].trim();
         }
         return request.getRemoteAddr();
+    }
+
+    private String truncate(String value, int maxLength) {
+        if (value == null || value.length() <= maxLength) {
+            return value;
+        }
+        return value.substring(0, maxLength - 3) + "...";
     }
 }

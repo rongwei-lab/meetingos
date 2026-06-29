@@ -1,5 +1,6 @@
 package com.meetingos.integration;
 
+import com.fasterxml.jackson.databind.ObjectMapper;
 import com.meetingos.attendee.AttendeeRepository;
 import com.meetingos.attendee.AttendeeRequest;
 import com.meetingos.attendee.AttendeeResponse;
@@ -42,6 +43,7 @@ import com.meetingos.seating.SeatLayoutRequest;
 import com.meetingos.seating.SeatRepository;
 import com.meetingos.seating.SeatType;
 import com.meetingos.seating.SeatingService;
+import com.meetingos.seating.SwapSeatRequest;
 import com.meetingos.security.Role;
 import com.meetingos.security.CurrentUser;
 import com.meetingos.security.UserStatus;
@@ -96,6 +98,7 @@ import java.util.Set;
 class MeetingOsServiceIntegrationTest {
 
     private static final String STRONG_TEST_PASSWORD = "MeetingOS@2026";
+    private static final ObjectMapper OBJECT_MAPPER = new ObjectMapper();
 
     @Autowired
     private SeatingService seatingService;
@@ -231,6 +234,102 @@ class MeetingOsServiceIntegrationTest {
     }
 
     @Test
+    void assignedSeatsCanBeSwappedWithoutUniqueSeatCollision() {
+        List<Long> seatIds = seatRepository.findByMeetingIdAndAreaNameOrderByRowNoAscSeatNoAsc(1L, "A区")
+                .stream()
+                .limit(2)
+                .map(seat -> seat.getId())
+                .toList();
+        seatingService.manualAssign(new ManualAssignSeatRequest(1L, seatIds.get(0)));
+        seatingService.manualAssign(new ManualAssignSeatRequest(2L, seatIds.get(1)));
+
+        seatingService.swap(new SwapSeatRequest(1L, 2L));
+
+        assertThat(seatingService.seatMap(1L))
+                .filteredOn(view -> view.attendeeId() != null)
+                .anySatisfy(view -> {
+                    assertThat(view.attendeeId()).isEqualTo(1L);
+                    assertThat(view.seatId()).isEqualTo(seatIds.get(1));
+                })
+                .anySatisfy(view -> {
+                    assertThat(view.attendeeId()).isEqualTo(2L);
+                    assertThat(view.seatId()).isEqualTo(seatIds.get(0));
+                });
+    }
+
+    @Test
+    void seatLayoutCanRenameExistingAreaAndKeepAssignments() {
+        Long firstSeatId = seatRepository.findByMeetingIdAndAreaNameOrderByRowNoAscSeatNoAsc(1L, "A区").get(0).getId();
+        seatingService.manualAssign(new ManualAssignSeatRequest(1L, firstSeatId));
+
+        seatingService.createLayout(new SeatLayoutRequest(
+                1L,
+                "主会场",
+                "主会场区",
+                "A区",
+                2,
+                4,
+                "row-seat",
+                "",
+                "北",
+                0,
+                SeatType.NORMAL,
+                null
+        ));
+
+        assertThat(seatRepository.findByMeetingIdAndAreaNameOrderByRowNoAscSeatNoAsc(1L, "A区"))
+                .isEmpty();
+        assertThat(seatRepository.findByMeetingIdAndAreaNameOrderByRowNoAscSeatNoAsc(1L, "主会场区"))
+                .hasSize(8)
+                .first()
+                .satisfies(seat -> {
+                    assertThat(seat.getId()).isEqualTo(firstSeatId);
+                    assertThat(seat.getSeatCode()).isEqualTo("主会场区-1-1");
+                });
+        assertThat(seatingService.seatMap(1L))
+                .filteredOn(view -> view.seatId().equals(firstSeatId))
+                .singleElement()
+                .satisfies(view -> {
+                    assertThat(view.areaName()).isEqualTo("主会场区");
+                    assertThat(view.attendeeId()).isNotNull();
+                });
+    }
+
+    @Test
+    void seatLayoutRenameRejectsExistingTargetArea() {
+        seatingService.createLayout(new SeatLayoutRequest(
+                1L,
+                "主会场",
+                "B区",
+                1,
+                2,
+                "row-seat",
+                "",
+                "北",
+                1,
+                SeatType.NORMAL,
+                null
+        ));
+
+        assertThatThrownBy(() -> seatingService.createLayout(new SeatLayoutRequest(
+                1L,
+                "主会场",
+                "B区",
+                "A区",
+                2,
+                4,
+                "row-seat",
+                "",
+                "北",
+                0,
+                SeatType.NORMAL,
+                null
+        )))
+                .isInstanceOf(BusinessException.class)
+                .hasMessageContaining("区域名称已存在");
+    }
+
+    @Test
     void seatMapKeepsConfiguredAreaOrder() {
         seatingService.createLayout(new SeatLayoutRequest(
                 1L,
@@ -264,6 +363,31 @@ class MeetingOsServiceIntegrationTest {
         assertThat(seatingService.seatMap(1L))
                 .extracting(view -> view.areaName())
                 .containsSubsequence("B区", "A区");
+    }
+
+    @Test
+    void seatLayoutPersistsDefaultSeatTypeForExistingSeats() {
+        seatingService.createLayout(new SeatLayoutRequest(
+                1L,
+                "主会场",
+                "A区",
+                2,
+                4,
+                "row-seat",
+                "",
+                "北",
+                0,
+                SeatType.VIP,
+                null
+        ));
+
+        assertThat(seatingService.seatMap(1L))
+                .filteredOn(view -> view.areaName().equals("A区"))
+                .extracting(view -> view.seatType())
+                .containsOnly(SeatType.VIP);
+        assertThat(seatRepository.findByMeetingIdAndAreaNameOrderByRowNoAscSeatNoAsc(1L, "A区"))
+                .extracting(seat -> seat.getSeatType())
+                .containsOnly(SeatType.VIP);
     }
 
     @Test
@@ -1278,6 +1402,49 @@ class MeetingOsServiceIntegrationTest {
         );
         TduckWebhookResult result = tduckService.handleWebhook(retriedWithNewEvent, null, "rotated-webhook-secret", "{}");
         assertThat(result.status()).isEqualTo(SyncStatus.SUCCESS);
+    }
+
+    @Test
+    @WithMockUser(roles = {"SUPER_ADMIN"})
+    void createMeetingGeneratesCodeAndUpdateKeepsExistingCode() throws Exception {
+        String createResponse = mockMvc.perform(post("/api/admin/meetings")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("""
+                                {
+                                  "name": "自动编号会议",
+                                  "organizer": "会务组",
+                                  "venueName": "测试会场",
+                                  "capacity": 120,
+                                  "status": "DRAFT"
+                                }
+                                """))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.data.code").isString())
+                .andReturn()
+                .getResponse()
+                .getContentAsString();
+        var createdMeeting = OBJECT_MAPPER.readTree(createResponse).path("data");
+        String generatedCode = createdMeeting.path("code").asText();
+        Long meetingId = createdMeeting.path("id").asLong();
+
+        assertThat(generatedCode).startsWith("MEET");
+        assertThat(generatedCode).doesNotContain("SHOULD-NOT-CHANGE");
+
+        mockMvc.perform(org.springframework.test.web.servlet.request.MockMvcRequestBuilders.put("/api/admin/meetings/" + meetingId)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("""
+                                {
+                                  "code": "SHOULD-NOT-CHANGE",
+                                  "name": "自动编号会议更新",
+                                  "organizer": "会务组",
+                                  "venueName": "测试会场",
+                                  "capacity": 150,
+                                  "status": "DRAFT"
+                                }
+                                """))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.data.code").value(generatedCode))
+                .andExpect(jsonPath("$.data.name").value("自动编号会议更新"));
     }
 
     @Test

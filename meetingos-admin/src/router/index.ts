@@ -90,7 +90,7 @@ const router = createRouter({
         {
           path: "meetings/:meetingId/logs",
           name: "meeting-logs",
-          meta: { requiresMeeting: true },
+          meta: { requiresMeeting: true, requiresSystemAdmin: true },
           component: () => import("@/views/system/OperationLogView.vue")
         },
         {
@@ -120,6 +120,9 @@ router.beforeEach(async (to, from) => {
     return { name: "login", query: { redirect: to.fullPath } };
   }
   if (to.meta.requiresSystemAdmin && !auth.canAccessSystemSettings) {
+    if (to.params.meetingId) {
+      return { name: "meeting-workspace", params: { meetingId: to.params.meetingId } };
+    }
     return { name: "meetings" };
   }
   if (to.name === "login" && hasSession) {

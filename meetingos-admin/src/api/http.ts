@@ -12,7 +12,12 @@ http.interceptors.response.use(
   (response) => response,
   (error) => {
     const url = String(error.config?.url || "");
-    if (isAuthFailure(error) && !url.includes("/auth/login") && !url.includes("/auth/me") && !url.includes("/auth/logout")) {
+    if (
+      isUnauthenticated(error) &&
+      !url.includes("/auth/login") &&
+      !url.includes("/auth/me") &&
+      !url.includes("/auth/logout")
+    ) {
       // 认证失败说明当前 Cookie 会话已过期或无效，不能继续降级到本地 mock 数据，
       // 否则座位、参会人等后台操作会看起来成功但没有写入真实数据库。
       localStorage.removeItem(USER_KEY);
@@ -25,9 +30,18 @@ http.interceptors.response.use(
   }
 );
 
-export function isAuthFailure(error: unknown) {
+export function isUnauthenticated(error: unknown) {
   if (!axios.isAxiosError(error)) return false;
-  return error.response?.status === 401 || error.response?.status === 403;
+  return error.response?.status === 401;
+}
+
+export function isForbidden(error: unknown) {
+  if (!axios.isAxiosError(error)) return false;
+  return error.response?.status === 403;
+}
+
+export function isAuthFailure(error: unknown) {
+  return isUnauthenticated(error) || isForbidden(error);
 }
 
 export const demoFallbackEnabled =

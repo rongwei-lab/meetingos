@@ -1,6 +1,6 @@
 <template>
   <div v-if="meeting">
-    <page-header :title="meeting.name" :subtitle="meetingSummaryLabel(meeting)">
+    <page-header :title="meeting.name">
       <status-tag :value="meeting.status" />
       <n-button @click="goBusinessPage('meeting-registration')">报名配置</n-button>
     </page-header>
@@ -45,7 +45,7 @@
                     <div v-if="activePublicQueryLink" class="entry-preview">
                       <div class="entry-copy">
                         <strong>{{ activePublicQueryLink.label }}</strong>
-                        <p>{{ activePublicQueryLink.description }}</p>
+                        <p v-if="activePublicQueryLink.description">{{ activePublicQueryLink.description }}</p>
                         <n-input :value="activePublicQueryLink.url" readonly size="small" />
                         <n-button-group size="small">
                           <n-button secondary @click="copyPublicQueryUrl(activePublicQueryLink.url, activePublicQueryLink.label)">
@@ -99,9 +99,6 @@
                           {{ queryForm.queryPaused ? "已暂停" : "正常" }}
                         </n-tag>
                       </div>
-                    </div>
-                    <div class="rule-note">
-                      公开查询仅在唯一匹配已审核参会人时返回结果；多人命中时只提示补充信息。
                     </div>
                   </section>
                 </div>
@@ -533,7 +530,7 @@ import { CloudUploadOutline, CopyOutline, OpenOutline } from "@vicons/ionicons5"
 import PageHeader from "@/components/PageHeader.vue";
 import StatusTag from "@/components/StatusTag.vue";
 import { useMeetingStore } from "@/stores/meeting";
-import { formatDateTimeLabel, meetingSummaryLabel } from "@/utils/meetingDisplay";
+import { formatDateTimeLabel } from "@/utils/meetingDisplay";
 import { assertSafeImageUrl, isAllowedUploadImage } from "@/utils/safeUrl";
 import type {
   AdminQueryCandidate,
@@ -728,7 +725,7 @@ const publicQueryLinks = computed<PublicQueryLink[]>(() => {
       key: "combined" as const,
       label: "综合查询入口",
       shortLabel: "综合",
-      description: "同一页面返回座位和房间号，适合直接发给参会人。",
+      description: "",
       url: `${window.location.origin}/public/query?${query}`
     },
     {

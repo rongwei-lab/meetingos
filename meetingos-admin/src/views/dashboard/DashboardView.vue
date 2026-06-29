@@ -1,127 +1,163 @@
 <template>
-  <div>
-    <page-header :title="`${store.currentMeeting?.name || '会议'}工作区`" :subtitle="workspaceSubtitle">
+  <div class="dashboard-page">
+    <page-header :title="`${store.currentMeeting?.name || '会议'}工作区`">
       <n-button secondary type="primary" @click="goRegistration">报名配置</n-button>
     </page-header>
 
-    <div class="stat-grid">
-      <div class="surface stat-card" v-for="item in stats" :key="item.label">
+    <div class="stat-grid dashboard-stat-grid">
+      <div class="surface stat-card dashboard-stat-card" v-for="item in stats" :key="item.label">
         <div class="stat-value">{{ item.value }}</div>
         <div class="stat-label">{{ item.label }}</div>
-        <n-tag size="small" :type="item.type" round>{{ item.trend }}</n-tag>
+        <n-tag size="small" :type="item.type" round>{{ item.note }}</n-tag>
       </div>
     </div>
 
-    <div class="content-grid dashboard-grid">
-      <div class="surface chart-panel">
+    <div class="dashboard-grid">
+      <section class="surface chart-panel trend-panel">
         <div class="panel-head">
           <div>
-            <h3>今日签到趋势</h3>
-            <span>按小时统计</span>
+            <h3>近 7 日报名趋势</h3>
+            <span>报名新增与签到同步对比</span>
           </div>
-          <n-tag type="success" round>进行中</n-tag>
+          <n-tag type="info" round>{{ trendTotal }} 人新增</n-tag>
         </div>
-        <div class="chart line-chart" aria-label="今日签到趋势">
-          <svg viewBox="0 0 360 210" role="img">
-            <title>今日签到趋势</title>
-            <polyline v-for="line in gridLines" :key="line" class="chart-grid-line" :points="`28,${line} 344,${line}`" />
-            <polygon class="line-area" :points="lineAreaPoints" />
-            <polyline class="line-stroke" :points="linePolyline" />
-            <circle v-for="point in linePoints" :key="point.time" class="line-dot" :cx="point.x" :cy="point.y" r="3.5" />
-            <text v-for="point in lineAxisLabels" :key="point.time" class="axis-label" :x="point.x" y="202">
-              {{ point.time }}
-            </text>
-          </svg>
+        <div class="chart-shell trend-chart-shell" aria-label="近 7 日报名趋势">
+          <div ref="trendChartRef" class="dashboard-chart-canvas" :class="{ 'is-chart-empty': !hasTrendData }"></div>
+          <div v-if="!hasTrendData" class="chart-empty-overlay">暂无近 7 日报名数据</div>
         </div>
-      </div>
-      <div class="surface chart-panel">
-        <div class="panel-head">
-          <div>
-            <h3>参会人类型分布</h3>
-            <span>{{ store.currentMeeting?.name || "当前会议" }}</span>
-          </div>
-        </div>
-        <div class="chart pie-chart">
-          <div class="donut-chart" :style="{ background: attendeeDonutGradient }">
-            <div class="donut-hole">
-              <strong>{{ attendeeTypeTotal }}</strong>
-              <span>样本</span>
+      </section>
+
+      <div class="side-stack">
+        <section class="surface chart-panel compact-panel">
+          <div class="panel-head">
+            <div>
+              <h3>参会人类型分布</h3>
+              <span>报名人员结构</span>
             </div>
           </div>
-          <div class="donut-legend">
-            <span v-for="item in attendeeTypeSegments" :key="item.name">
-              <i :style="{ background: item.color }"></i>
-              {{ item.name }} {{ item.value }}
-            </span>
+          <div class="compact-chart-shell">
+            <div ref="attendeeTypeChartRef" class="dashboard-chart-canvas" :class="{ 'is-chart-empty': !attendeeTypeTotal }"></div>
+            <div v-if="!attendeeTypeTotal" class="chart-empty-overlay mini-empty">暂无参会人类型数据</div>
+          </div>
+        </section>
+
+        <section class="surface chart-panel compact-panel">
+          <div class="panel-head">
+            <div>
+              <h3>住宿需求概览</h3>
+              <span>报名住宿意向与安排情况</span>
+            </div>
+          </div>
+          <div class="room-summary">
+            <div class="compact-chart-shell room-chart-shell" aria-label="住宿需求概览">
+              <div ref="roomChartRef" class="dashboard-chart-canvas" :class="{ 'is-chart-empty': !accommodationRequiredCount }"></div>
+              <div v-if="!accommodationRequiredCount" class="chart-empty-overlay mini-empty">暂无住宿需求数据</div>
+            </div>
+            <div class="room-numbers">
+              <div>
+                <strong>{{ accommodationRequiredCount }}</strong>
+                <span>需要住宿</span>
+              </div>
+              <div>
+                <strong>{{ roomAssignedRequiredCount }}</strong>
+                <span>已安排</span>
+              </div>
+              <div>
+                <strong>{{ roomUnassignedRequiredCount }}</strong>
+                <span>待安排</span>
+              </div>
+            </div>
+          </div>
+        </section>
+      </div>
+    </div>
+
+    <div class="insight-grid">
+      <section class="surface insight-panel">
+        <div class="panel-head">
+          <div>
+            <h3>报名单位 Top 5</h3>
+            <span>按报名人数排序</span>
           </div>
         </div>
-      </div>
+        <div class="organization-chart-shell">
+          <div
+            ref="organizationChartRef"
+            class="dashboard-chart-canvas"
+            :class="{ 'is-chart-empty': !organizationRows.length }"
+          ></div>
+          <div v-if="!organizationRows.length" class="chart-empty-overlay mini-empty">暂无单位数据</div>
+        </div>
+      </section>
+
+      <section class="surface insight-panel">
+        <div class="panel-head">
+          <div>
+            <h3>报名情况概览</h3>
+            <span>当前会议报名数据快照</span>
+          </div>
+        </div>
+        <div class="overview-list">
+          <div v-for="item in overviewItems" :key="item.label">
+            <span>{{ item.label }}</span>
+            <strong>{{ item.value }}</strong>
+          </div>
+        </div>
+      </section>
     </div>
   </div>
 </template>
 
 <script setup lang="ts">
-import { computed, onMounted } from "vue";
+import { computed, nextTick, onBeforeUnmount, onMounted, ref, shallowRef, watch } from "vue";
 import { useRouter } from "vue-router";
 import PageHeader from "@/components/PageHeader.vue";
 import { useRouteMeeting } from "@/composables/useRouteMeeting";
-import { useMeetingStore } from "@/stores/meeting";
-import { meetingSummaryLabel } from "@/utils/meetingDisplay";
+import { useMeetingStore, type StatisticsOverviewDto } from "@/stores/meeting";
+import { attendeeTypeLabel } from "@/utils/meetingDisplay";
+
+type ChartInstance = import("echarts").ECharts;
+type EChartsModule = typeof import("echarts");
+type EChartsOption = Parameters<ChartInstance["setOption"]>[0];
 
 const store = useMeetingStore();
 const router = useRouter();
 const { routeMeetingId } = useRouteMeeting({ loadWorkspace: false });
 
-const trendSeries = [
-  { time: "08:00", value: 2 },
-  { time: "09:00", value: 14 },
-  { time: "10:00", value: 36 },
-  { time: "11:00", value: 28 },
-  { time: "12:00", value: 16 },
-  { time: "13:00", value: 9 },
-  { time: "14:00", value: 42 },
-  { time: "15:00", value: 18 },
-  { time: "16:00", value: 7 },
-  { time: "17:00", value: 3 }
-];
-
-const attendeeTypeSegments = [
-  { name: "VIP", value: 18, color: "#3b82f6" },
-  { name: "嘉宾", value: 45, color: "#60a5fa" },
-  { name: "媒体", value: 22, color: "#f6bd60" },
-  { name: "工作人员", value: 30, color: "#f28482" },
-  { name: "普通参会人", value: 127, color: "#a7c7e7" }
-];
-
-const gridLines = [36, 72, 108, 144, 180];
+const attendeeTypeColors = ["#3b82f6", "#60a5fa", "#14b8a6", "#f6bd60", "#f28482", "#94a3b8"];
+const roomColors = ["#14b8a6", "#f59e0b"];
+const echartsModule = shallowRef<EChartsModule | null>(null);
+const trendChartRef = ref<HTMLDivElement | null>(null);
+const attendeeTypeChartRef = ref<HTMLDivElement | null>(null);
+const roomChartRef = ref<HTMLDivElement | null>(null);
+const organizationChartRef = ref<HTMLDivElement | null>(null);
+const chartInstances: ChartInstance[] = [];
 
 function loadDashboardSummary() {
   const meetingId = routeMeetingId.value || store.currentMeetingId;
   if (!meetingId) return;
 
   /*
-   * 工作区首屏只展示会议摘要、统计卡片和静态图表，不需要完整工作区列表。
-   * 这里单独拉统计概览，避免刚进入会议后立刻触发参会人/座位/住宿/签到等整套请求。
+   * 工作区首屏只展示会议报名概览，不需要完整工作区列表。
+   * 这里单独拉统计概览，避免刚进入会议后触发参会人/座位/住宿等大列表请求。
    */
-  void store.loadStatistics(meetingId);
+  void store.loadStatistics(meetingId).then(renderDashboardCharts);
 }
 
-const workspaceSubtitle = computed(() => {
-  const meeting = store.currentMeeting;
-  if (!meeting) return "请选择会议后管理报名、参会人、座位、住宿和签到";
-  return meetingSummaryLabel(meeting, { includeCode: true });
-});
-
+const overview = computed(() => store.overview);
+const registrationCount = computed(() => overview.value?.registrationCount ?? store.currentMeeting?.registeredCount ?? 0);
+const todayRegistrationCount = computed(() => overview.value?.todayRegistrationCount ?? 0);
+const rangeRegistrationCount = computed(() => overview.value?.rangeRegistrationCount ?? 0);
+const checkedInCount = computed(() => overview.value?.checkedInCount ?? store.currentMeeting?.checkedInCount ?? 0);
+const checkinRate = computed(() => formatPercent(overview.value?.checkinRate));
+const accommodationRequiredCount = computed(() => overview.value?.accommodationRequiredCount ?? 0);
+const roomAssignedRequiredCount = computed(() => overview.value?.roomAssignedRequiredCount ?? 0);
+const roomUnassignedRequiredCount = computed(() => overview.value?.roomUnassignedRequiredCount ?? 0);
 const stats = computed(() => [
-  { label: "报名人数", value: store.currentMeeting?.registeredCount || 0, trend: "当前会议", type: "success" as const },
-  { label: "审核通过", value: store.currentMeeting?.approvedCount || 0, trend: "可参与排座", type: "success" as const },
-  { label: "已签到", value: store.currentMeeting?.checkedInCount || 0, trend: "现场进度", type: "info" as const },
-  {
-    label: "待审核报名",
-    value: store.currentAttendees.filter((item) => item.auditStatus === "PENDING").length,
-    trend: "需及时处理",
-    type: "warning" as const
-  }
+  { label: "报名总人数", value: registrationCount.value, note: "当前会议", type: "success" as const },
+  { label: "今日新增", value: todayRegistrationCount.value, note: "当天报名", type: "info" as const },
+  { label: "近 7 日新增", value: rangeRegistrationCount.value, note: "报名增长", type: "success" as const },
+  { label: "已签到人数", value: checkedInCount.value, note: `签到率 ${checkinRate.value}`, type: "info" as const }
 ]);
 
 function goRegistration() {
@@ -131,202 +167,499 @@ function goRegistration() {
 
 onMounted(() => {
   loadDashboardSummary();
+  window.addEventListener("resize", resizeDashboardCharts);
 });
 
-const linePoints = computed(() => {
-  const values = trendSeries.map((item) => item.value);
-  const maxValue = Math.max(...values, 1);
-  const minX = 36;
-  const maxX = 336;
-  const minY = 32;
-  const maxY = 180;
-  const stepX = (maxX - minX) / Math.max(trendSeries.length - 1, 1);
+onBeforeUnmount(() => {
+  window.removeEventListener("resize", resizeDashboardCharts);
+  chartInstances.splice(0).forEach((chart) => chart.dispose());
+});
 
-  /*
-   * 首页图表只需要传达趋势，不需要完整图表库能力。
-   * 用原生 SVG/CSS 可以避免进入工作区后再解析 ECharts/zrender 大包，
-   * 这是快速切换菜单时最容易挤占浏览器主线程的部分。
-   */
-  return trendSeries.map((item, index) => ({
-    ...item,
-    x: Math.round(minX + index * stepX),
-    y: Math.round(maxY - (item.value / maxValue) * (maxY - minY))
+watch(overview, () => {
+  void renderDashboardCharts();
+});
+
+function formatPercent(value?: number) {
+  if (!value) return "0%";
+  return `${Math.round(value * 100)}%`;
+}
+
+function normalizeTrend(registrationTrend?: Record<string, number>, checkinTrend?: Record<string, number>) {
+  const keys = Array.from(new Set([...Object.keys(registrationTrend || {}), ...Object.keys(checkinTrend || {})])).sort();
+  return keys.map((date) => ({
+    date,
+    registration: registrationTrend?.[date] ?? 0,
+    checkin: checkinTrend?.[date] ?? 0
   }));
+}
+
+const trendSeries = computed(() => normalizeTrend(overview.value?.registrationTrend, overview.value?.checkinTrend));
+const hasTrendData = computed(() => trendSeries.value.some((item) => item.registration > 0 || item.checkin > 0));
+const trendTotal = computed(() => trendSeries.value.reduce((total, item) => total + item.registration, 0));
+
+function distributionRows(distribution?: Record<string, number>, labeler: (value: string) => string = (value) => value) {
+  return Object.entries(distribution || {})
+    .map(([key, value]) => ({ label: labeler(key), value }))
+    .filter((item) => item.value > 0)
+    .sort((a, b) => b.value - a.value);
+}
+
+const attendeeTypeSegments = computed(() =>
+  distributionRows(overview.value?.attendeeTypeDistribution, attendeeTypeLabel).map((item, index) => ({
+    label: item.label,
+    value: item.value,
+    color: attendeeTypeColors[index % attendeeTypeColors.length]
+  }))
+);
+const attendeeTypeTotal = computed(() => attendeeTypeSegments.value.reduce((total, item) => total + item.value, 0));
+
+const organizationRows = computed(() => {
+  const rows = distributionRows(overview.value?.organizationDistribution).slice(0, 5);
+  return rows.map((item) => ({ ...item }));
 });
 
-const linePolyline = computed(() => linePoints.value.map((point) => `${point.x},${point.y}`).join(" "));
-const lineAreaPoints = computed(() => `36,180 ${linePolyline.value} 336,180`);
-const lineAxisLabels = computed(() => linePoints.value.filter((_, index) => index % 2 === 0 || index === linePoints.value.length - 1));
-const attendeeTypeTotal = computed(() => attendeeTypeSegments.reduce((total, item) => total + item.value, 0));
-const attendeeDonutGradient = computed(() => {
-  let cursor = 0;
-  const total = attendeeTypeTotal.value || 1;
-  const stops = attendeeTypeSegments.map((item) => {
-    const start = cursor;
-    cursor += (item.value / total) * 100;
-    return `${item.color} ${start.toFixed(2)}% ${cursor.toFixed(2)}%`;
-  });
-  return `conic-gradient(${stops.join(", ")})`;
-});
+const overviewItems = computed(() => [
+  { label: "报名总量", value: `${registrationCount.value} 人` },
+  { label: "今日新增", value: `${todayRegistrationCount.value} 人` },
+  { label: "近 7 日新增", value: `${rangeRegistrationCount.value} 人` },
+  { label: "需要住宿", value: `${accommodationRequiredCount.value} 人` },
+  { label: "已签到", value: `${checkedInCount.value} 人` },
+  { label: "签到率", value: checkinRate.value }
+]);
+
+async function ensureEcharts() {
+  if (!echartsModule.value) {
+    echartsModule.value = await import("echarts");
+  }
+  return echartsModule.value;
+}
+
+async function renderDashboardCharts() {
+  await nextTick();
+  const data = overview.value;
+  if (!data) return;
+
+  const echarts = await ensureEcharts();
+  renderTrendChart(echarts, data);
+  renderAttendeeTypeChart(echarts, data);
+  renderRoomChart(echarts, data);
+  renderOrganizationChart(echarts, data);
+}
+
+function chartFor(echarts: EChartsModule, element: HTMLDivElement | null) {
+  if (!element) return null;
+  const existing = echarts.getInstanceByDom(element);
+  if (existing) return existing;
+
+  const chart = echarts.init(element);
+  chartInstances.push(chart);
+  return chart;
+}
+
+function renderTrendChart(echarts: EChartsModule, data: StatisticsOverviewDto) {
+  const chart = chartFor(echarts, trendChartRef.value);
+  if (!chart) return;
+
+  const rows = normalizeTrend(data.registrationTrend, data.checkinTrend);
+  chart.setOption(
+    {
+      ...animatedChartBase(1200),
+      color: ["#3b82f6", "#14b8a6"],
+      tooltip: { trigger: "axis", confine: true },
+      legend: { top: 0, right: 4, icon: "roundRect", itemWidth: 12, itemHeight: 8, textStyle: { color: "#64748b" } },
+      grid: { top: 44, left: 36, right: 18, bottom: 30 },
+      xAxis: {
+        type: "category",
+        boundaryGap: false,
+        data: rows.map((item) => item.date),
+        axisTick: { show: false },
+        axisLine: { lineStyle: { color: "#dbe7f3" } },
+        axisLabel: { color: "#64748b", formatter: shortDateLabel }
+      },
+      yAxis: {
+        type: "value",
+        minInterval: 1,
+        splitLine: { lineStyle: { color: "#e5edf7" } },
+        axisLabel: { color: "#64748b" }
+      },
+      series: [
+        {
+          name: "报名新增",
+          type: "line",
+          smooth: true,
+          symbol: "circle",
+          symbolSize: 7,
+          areaStyle: { color: "rgba(59, 130, 246, 0.14)" },
+          lineStyle: { width: 3 },
+          emphasis: { focus: "series" },
+          data: rows.map((item) => item.registration)
+        },
+        {
+          name: "签到人数",
+          type: "line",
+          smooth: true,
+          symbol: "circle",
+          symbolSize: 6,
+          lineStyle: { width: 3 },
+          emphasis: { focus: "series" },
+          data: rows.map((item) => item.checkin)
+        }
+      ]
+    },
+    true
+  );
+}
+
+function renderAttendeeTypeChart(echarts: EChartsModule, data: StatisticsOverviewDto) {
+  const chart = chartFor(echarts, attendeeTypeChartRef.value);
+  if (!chart) return;
+
+  const rows = distributionRows(data.attendeeTypeDistribution, attendeeTypeLabel);
+  chart.setOption(
+    {
+      ...animatedChartBase(950),
+      color: attendeeTypeColors,
+      tooltip: { trigger: "item", confine: true },
+      legend: {
+        type: "scroll",
+        orient: "vertical",
+        right: 0,
+        top: "middle",
+        itemWidth: 10,
+        itemHeight: 10,
+        textStyle: { color: "#64748b", fontSize: 12 }
+      },
+      series: [
+        {
+          name: "参会人类型",
+          type: "pie",
+          radius: ["46%", "72%"],
+          center: ["32%", "50%"],
+          avoidLabelOverlap: true,
+          label: { show: false },
+          emphasis: { label: { show: true, fontWeight: 700 } },
+          data: rows.map((item) => ({ name: item.label, value: item.value }))
+        }
+      ]
+    },
+    true
+  );
+}
+
+function renderRoomChart(echarts: EChartsModule, data: StatisticsOverviewDto) {
+  const chart = chartFor(echarts, roomChartRef.value);
+  if (!chart) return;
+
+  const assigned = data.roomAssignedRequiredCount ?? 0;
+  const unassigned = data.roomUnassignedRequiredCount ?? 0;
+  chart.setOption(
+    {
+      ...animatedChartBase(900),
+      color: roomColors,
+      tooltip: { trigger: "item", confine: true },
+      legend: { bottom: 0, icon: "roundRect", itemWidth: 12, itemHeight: 8, textStyle: { color: "#64748b", fontSize: 12 } },
+      series: [
+        {
+          name: "住宿安排",
+          type: "pie",
+          radius: ["50%", "74%"],
+          center: ["50%", "42%"],
+          label: { formatter: "{b}\\n{c} 人", color: "#334155", fontSize: 12 },
+          labelLine: { length: 8, length2: 6 },
+          data: [
+            { name: "已安排", value: assigned },
+            { name: "待安排", value: unassigned }
+          ]
+        }
+      ]
+    },
+    true
+  );
+}
+
+function renderOrganizationChart(echarts: EChartsModule, data: StatisticsOverviewDto) {
+  const chart = chartFor(echarts, organizationChartRef.value);
+  if (!chart) return;
+
+  const rows = distributionRows(data.organizationDistribution).slice(0, 5).reverse();
+  chart.setOption(
+    {
+      ...animatedChartBase(1000),
+      color: ["#3b82f6"],
+      tooltip: { trigger: "axis", axisPointer: { type: "shadow" }, confine: true },
+      grid: { top: 8, left: 98, right: 24, bottom: 10 },
+      xAxis: {
+        type: "value",
+        minInterval: 1,
+        splitLine: { lineStyle: { color: "#e5edf7" } },
+        axisLabel: { color: "#64748b" }
+      },
+      yAxis: {
+        type: "category",
+        data: rows.map((item) => item.label),
+        axisTick: { show: false },
+        axisLine: { show: false },
+        axisLabel: {
+          color: "#475569",
+          width: 86,
+          overflow: "truncate"
+        }
+      },
+      series: [
+        {
+          name: "报名人数",
+          type: "bar",
+          barMaxWidth: 18,
+          itemStyle: { borderRadius: [0, 8, 8, 0] },
+          label: { show: true, position: "right", color: "#334155" },
+          data: rows.map((item) => item.value)
+        }
+      ]
+    },
+    true
+  );
+}
+
+function animatedChartBase(duration = 900): EChartsOption {
+  return {
+    animation: true,
+    animationDuration: duration,
+    animationDurationUpdate: 650,
+    animationEasing: "cubicOut",
+    animationEasingUpdate: "cubicOut"
+  };
+}
+
+function shortDateLabel(date: string) {
+  const match = date.match(/^\d{4}-(\d{2})-(\d{2})$/);
+  return match ? `${Number(match[1])}/${Number(match[2])}` : date;
+}
+
+function resizeDashboardCharts() {
+  chartInstances.forEach((chart) => chart.resize());
+}
 </script>
 
 <style scoped>
+.dashboard-page {
+  display: grid;
+  gap: 16px;
+}
+
+.dashboard-stat-grid {
+  grid-template-columns: repeat(4, minmax(150px, 1fr));
+}
+
+.dashboard-stat-card {
+  min-height: 126px;
+  display: grid;
+  align-content: center;
+  gap: 4px;
+}
+
 .dashboard-grid {
-  margin-top: 16px;
+  display: grid;
+  grid-template-columns: minmax(0, 2fr) minmax(340px, 0.9fr);
+  gap: 16px;
+  align-items: stretch;
 }
 
 .chart-panel {
   padding: 20px;
-  margin-top: 16px;
+}
+
+.trend-panel {
+  min-height: 360px;
+}
+
+.side-stack {
+  display: grid;
+  gap: 16px;
+}
+
+.compact-panel {
+  min-height: 172px;
 }
 
 .panel-head {
   display: flex;
   justify-content: space-between;
   align-items: flex-start;
+  gap: 12px;
   margin-bottom: 16px;
 }
 
 .panel-head h3 {
   margin: 0;
+  font-size: 17px;
+  line-height: 24px;
 }
 
 .panel-head span {
-  color: #64748b;
+  color: var(--text-secondary);
   font-size: 13px;
 }
 
-.chart {
-  height: 260px;
+.chart-shell,
+.compact-chart-shell,
+.organization-chart-shell {
+  position: relative;
 }
 
-.line-chart {
-  display: flex;
-  align-items: center;
+.trend-chart-shell {
+  height: 270px;
 }
 
-.line-chart svg {
+.compact-chart-shell {
+  height: 154px;
+}
+
+.room-chart-shell {
+  height: 150px;
+}
+
+.organization-chart-shell {
+  height: 240px;
+}
+
+.dashboard-chart-canvas {
   width: 100%;
   height: 100%;
+  min-height: 120px;
 }
 
-.chart-grid-line {
-  fill: none;
-  stroke: #e5edf7;
-  stroke-width: 1;
+.dashboard-chart-canvas.is-chart-empty {
+  opacity: 0;
+  pointer-events: none;
 }
 
-.line-area {
-  fill: rgba(59, 130, 246, 0.12);
-}
-
-.line-stroke {
-  fill: none;
-  stroke: #3b82f6;
-  stroke-width: 4;
-  stroke-linecap: round;
-  stroke-linejoin: round;
-}
-
-.line-dot {
-  fill: #ffffff;
-  stroke: #3b82f6;
-  stroke-width: 3;
-}
-
-.axis-label {
-  fill: #64748b;
-  font-size: 11px;
-  text-anchor: middle;
-}
-
-.pie-chart {
-  height: 260px;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  gap: 24px;
-}
-
-.donut-chart {
-  width: 168px;
-  height: 168px;
-  border-radius: 50%;
+.chart-empty-overlay,
+.mini-empty {
+  position: absolute;
+  inset: 0;
   display: grid;
   place-items: center;
-  box-shadow: inset 0 0 0 1px rgba(15, 23, 42, 0.04);
+  color: var(--text-secondary);
+  background: var(--surface-muted);
+  border-radius: 8px;
+  font-size: 13px;
 }
 
-.donut-hole {
-  width: 96px;
-  height: 96px;
-  border-radius: 50%;
-  background: #ffffff;
+.room-summary {
   display: grid;
-  place-items: center;
-  align-content: center;
-  box-shadow: 0 8px 22px rgba(15, 23, 42, 0.08);
+  gap: 12px;
 }
 
-.donut-hole strong,
-.donut-hole span {
+.room-numbers {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.room-numbers div {
+  padding: 10px;
+  border-radius: 8px;
+  background: var(--surface-muted);
+}
+
+.room-numbers strong,
+.room-numbers span {
   display: block;
 }
 
-.donut-hole strong {
-  font-size: 24px;
+.room-numbers strong {
+  color: var(--text-primary);
+  font-size: 20px;
 }
 
-.donut-hole span {
-  color: #64748b;
+.room-numbers span {
+  margin-top: 2px;
+  color: var(--text-secondary);
   font-size: 12px;
 }
 
-.donut-legend {
+.insight-grid {
   display: grid;
-  gap: 9px;
-  color: #475569;
-  font-size: 13px;
+  grid-template-columns: minmax(0, 1.3fr) minmax(320px, 0.7fr);
+  gap: 16px;
 }
 
-.donut-legend span {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  white-space: nowrap;
+.insight-panel {
+  padding: 20px;
 }
 
-.donut-legend i {
-  width: 10px;
-  height: 10px;
-  border-radius: 999px;
-  flex: 0 0 auto;
+.overview-list {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.overview-list div {
+  padding: 12px;
+  border-radius: 8px;
+  background: var(--surface-muted);
+}
+
+.overview-list span,
+.overview-list strong {
+  display: block;
+}
+
+.overview-list span {
+  color: var(--text-secondary);
+  font-size: 12px;
+}
+
+.overview-list strong {
+  margin-top: 4px;
+  font-size: 18px;
+}
+
+@media (max-width: 1100px) {
+  .dashboard-stat-grid,
+  .dashboard-grid,
+  .insight-grid {
+    grid-template-columns: 1fr 1fr;
+  }
+
+  .trend-panel {
+    grid-column: 1 / -1;
+  }
 }
 
 @media (max-width: 760px) {
+  .dashboard-stat-grid,
+  .dashboard-grid,
+  .insight-grid {
+    grid-template-columns: 1fr;
+  }
+
   .dashboard-grid {
     gap: 12px;
   }
 
-  .chart-panel {
+  .chart-panel,
+  .insight-panel {
     padding: 14px;
   }
 
-  .chart {
+  .trend-chart-shell {
     min-height: 220px;
+    height: 230px;
   }
 
-  .pie-chart {
-    flex-direction: column;
-    gap: 12px;
+  .compact-chart-shell,
+  .room-chart-shell {
+    height: 180px;
   }
 
-  .donut-legend {
-    grid-template-columns: repeat(2, minmax(0, 1fr));
+  .organization-chart-shell {
+    height: 220px;
   }
 
-  .donut-legend span {
-    white-space: normal;
+  .overview-list,
+  .room-numbers {
+    grid-template-columns: 1fr;
   }
 }
 </style>

@@ -18,12 +18,19 @@ import org.springframework.data.domain.Page;
 import org.springframework.data.domain.PageRequest;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
+import org.springframework.util.StringUtils;
 
+import java.time.LocalDate;
+import java.time.format.DateTimeFormatter;
 import java.util.Set;
+import java.util.UUID;
 import java.util.stream.Collectors;
 
 @Service
 public class MeetingService {
+
+    private static final String MEETING_CODE_PREFIX = "MEET";
+    private static final DateTimeFormatter MEETING_CODE_DATE_FORMAT = DateTimeFormatter.BASIC_ISO_DATE;
 
     private final MeetingRepository meetingRepository;
     private final AttendeeRepository attendeeRepository;
@@ -45,10 +52,8 @@ public class MeetingService {
 
     @Transactional
     public Meeting create(MeetingRequest request) {
-        meetingRepository.findByCode(request.code()).ifPresent(existing -> {
-            throw BusinessException.conflict("会议编号已存在");
-        });
         Meeting meeting = new Meeting();
+        meeting.setCode(generateMeetingCode());
         applyRequest(meeting, request);
         meeting.setCreatedBy(SecurityUtils.currentUsernameOrSystem());
         Meeting saved = meetingRepository.save(meeting);
@@ -60,11 +65,6 @@ public class MeetingService {
     public Meeting update(Long id, MeetingRequest request) {
         Meeting meeting = meetingRepository.findById(id)
                 .orElseThrow(() -> BusinessException.notFound("会议不存在"));
-        if (!meeting.getCode().equals(request.code())) {
-            meetingRepository.findByCode(request.code()).ifPresent(existing -> {
-                throw BusinessException.conflict("会议编号已存在");
-            });
-        }
         applyRequest(meeting, request);
         return meeting;
     }
@@ -136,7 +136,9 @@ public class MeetingService {
     }
 
     private void applyRequest(Meeting meeting, MeetingRequest request) {
-        meeting.setCode(request.code());
+        if (!StringUtils.hasText(meeting.getCode())) {
+            meeting.setCode(generateMeetingCode());
+        }
         meeting.setName(request.name());
         meeting.setOrganizer(request.organizer());
         meeting.setCoOrganizer(request.coOrganizer());
@@ -175,6 +177,21 @@ public class MeetingService {
 
     private String blankToNull(String value) {
         return value == null || value.isBlank() ? null : value;
+    }
+
+    private String generateMeetingCode() {
+        String datePart = LocalDate.now().format(MEETING_CODE_DATE_FORMAT);
+        for (int attempts = 0; attempts < 10; attempts++) {
+            String suffix = UUID.randomUUID().toString()
+                    .replace("-", "")
+                    .substring(0, 6)
+                    .toUpperCase();
+            String code = MEETING_CODE_PREFIX + datePart + "-" + suffix;
+            if (meetingRepository.findByCode(code).isEmpty()) {
+                return code;
+            }
+        }
+        throw BusinessException.conflict("会议编号生成失败，请稍后重试");
     }
 
     private Page<Meeting> searchVisibleMeetings(String keyword, MeetingStatus status, PageRequest pageRequest) {

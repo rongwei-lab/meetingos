@@ -56,7 +56,7 @@
               <n-icon :component="TimeOutline" />
               最近访问：{{ lastVisitedLabel(meeting, index) }}
             </p>
-            <p class="meeting-subtitle">{{ meetingSummaryLabel(meeting) }}</p>
+            <p v-if="visibleMeetingSummary(meeting)" class="meeting-subtitle">{{ visibleMeetingSummary(meeting) }}</p>
           </div>
 
           <div class="meeting-card-footer">
@@ -113,7 +113,12 @@
     <n-modal v-model:show="showCreate" preset="card" :title="meetingModalTitle" style="width: 560px">
       <n-form label-placement="top">
         <n-form-item label="会议名称"><n-input v-model:value="draft.name" /></n-form-item>
-        <n-form-item label="会议编号"><n-input v-model:value="draft.code" /></n-form-item>
+        <n-form-item label="会议编号">
+          <div class="readonly-code-box">
+            <strong>{{ draft.code || "保存后自动生成" }}</strong>
+            <span>系统自动生成，用于报名中转页和公开查询链接</span>
+          </div>
+        </n-form-item>
         <n-form-item label="主办方"><n-input v-model:value="draft.organizer" /></n-form-item>
         <n-form-item label="会议地点"><n-input v-model:value="draft.venue" /></n-form-item>
         <n-form-item label="人数上限"><n-input-number v-model:value="draft.capacity" :min="1" style="width: 100%" /></n-form-item>
@@ -167,7 +172,7 @@ const loadingMeetingDetail = ref(false);
 const enteringMeetingId = ref("");
 const draft = reactive<Pick<Meeting, "name" | "code" | "organizer" | "venue" | "capacity" | "status">>({
   name: "新会议",
-  code: "NEW2026",
+  code: "",
   organizer: "主办方",
   venue: "",
   capacity: 300,
@@ -209,6 +214,13 @@ const filteredMeetings = computed(() =>
   })
 );
 
+function visibleMeetingSummary(meeting: Meeting) {
+  const hasRealTime = Boolean(meeting.startTime?.trim());
+  const venue = meeting.venue?.trim() || "";
+  const hasRealVenue = venue !== "" && venue !== "-" && venue !== "待定" && venue !== "未定" && venue !== "地点待定";
+  return hasRealTime || hasRealVenue ? meetingSummaryLabel(meeting) : "";
+}
+
 const meetingColumns: DataTableColumns<Meeting> = [
   {
     title: "会议名称",
@@ -224,7 +236,7 @@ const meetingColumns: DataTableColumns<Meeting> = [
     key: "summary",
     minWidth: 240,
     ellipsis: { tooltip: true },
-    render: (row) => meetingSummaryLabel(row)
+    render: (row) => visibleMeetingSummary(row) || "-"
   },
   { title: "报名", key: "registeredCount", width: 82, align: "center" },
   { title: "通过", key: "approvedCount", width: 82, align: "center" },
@@ -279,7 +291,7 @@ function actionOptions(meeting: Meeting): DropdownOption[] {
 function resetDraft(meeting?: Meeting) {
   // 新建和编辑共用同一个弹窗，打开前统一重置草稿，避免上一次编辑的残留值污染下一次操作。
   draft.name = meeting?.name || "新会议";
-  draft.code = meeting?.code || "NEW2026";
+  draft.code = meeting?.code || "";
   draft.organizer = meeting?.organizer || "主办方";
   draft.venue = meeting?.venue || "";
   draft.capacity = meeting?.capacity || 300;
@@ -312,10 +324,6 @@ async function saveMeeting() {
   if (savingMeeting.value || loadingMeetingDetail.value) return;
   if (!draft.name.trim()) {
     message.warning("请输入会议名称");
-    return;
-  }
-  if (!draft.code.trim()) {
-    message.warning("请输入会议编号");
     return;
   }
 
@@ -447,6 +455,29 @@ function transition(row: Meeting, status: Meeting["status"]) {
 
 .status-filter {
   width: 168px;
+}
+
+.readonly-code-box {
+  min-height: 34px;
+  border: 1px solid var(--border-color);
+  border-radius: 8px;
+  padding: 8px 10px;
+  display: grid;
+  gap: 2px;
+  background: var(--surface-muted);
+}
+
+.readonly-code-box strong {
+  color: var(--text-primary);
+  font-size: 14px;
+  line-height: 20px;
+  font-weight: 650;
+}
+
+.readonly-code-box span {
+  color: var(--text-secondary);
+  font-size: 12px;
+  line-height: 18px;
 }
 
 .meeting-section {

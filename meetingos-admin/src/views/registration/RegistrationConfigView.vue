@@ -1,8 +1,8 @@
 <template>
   <div>
-    <page-header title="TDuck 报名配置" subtitle="绑定 TDuck 表单、同步报名字段、生成中转报名二维码，并跟踪 Webhook 同步日志">
+    <page-header title="TDuck 报名配置">
       <n-button type="primary" :loading="savingBinding" :disabled="!canSaveBinding" @click="saveBindingAndGenerateQr">
-        {{ isBindingLocked ? "已绑定" : "保存绑定并生成二维码" }}
+        {{ bindingActionLabel }}
       </n-button>
     </page-header>
 
@@ -14,7 +14,19 @@
               <h2>表单绑定</h2>
               <span>选择已发布 TDuck 表单，系统会生成固定中转入口</span>
             </div>
-            <n-tag round :type="bindingStatusType">{{ bindingStatusLabel }}</n-tag>
+            <div class="binding-header-actions">
+              <n-tag round :type="bindingStatusType">{{ bindingStatusLabel }}</n-tag>
+              <n-dropdown trigger="click" :options="createTduckFormOptions" :disabled="!currentMeeting" @select="handleCreateTduckFormSelect">
+                <n-button size="small" secondary :loading="openingTduck" :disabled="!currentMeeting">
+                  <template #icon><n-icon :component="AddOutline" /></template>
+                  新建 TDuck 表单
+                </n-button>
+              </n-dropdown>
+              <n-button size="small" secondary :loading="openingTduckEditor" :disabled="!canOpenTduckEditor" @click="openTduckEditor">
+                <template #icon><n-icon :component="CreateOutline" /></template>
+                编辑当前表单
+              </n-button>
+            </div>
           </div>
         </template>
 
@@ -23,8 +35,7 @@
             <n-form-item label="当前会议">
               <div class="current-meeting-box">
                 <strong>{{ currentMeeting?.name || "未选择会议" }}</strong>
-                <span v-if="currentMeeting">{{ meetingSummaryLabel(currentMeeting, { includeCode: true }) }}</span>
-                <span v-else>请先在左侧选择会议</span>
+                <span v-if="!currentMeeting">请先在左侧选择会议</span>
               </div>
             </n-form-item>
 
@@ -33,18 +44,18 @@
                 v-model:value="selectedFormKey"
                 filterable
                 remote
-                :clearable="!isBindingLocked"
-                :disabled="isBindingLocked"
+                :clearable="canEditBinding"
+                :disabled="!canEditBinding"
                 :loading="loadingForms"
                 :options="formSelectOptions"
-                :placeholder="isBindingLocked ? '当前会议已绑定 TDuck 表单' : '搜索并选择已发布 TDuck 表单'"
+                :placeholder="canEditBinding ? '搜索并选择已发布 TDuck 表单' : '当前会议已绑定 TDuck 表单'"
                 @search="searchTduckForms"
                 @update:value="handleFormSelect"
               />
             </n-form-item>
           </div>
 
-          <n-alert v-if="currentBoundFormKey" type="success" :bordered="false" class="binding-alert">
+          <n-alert v-if="currentBoundFormKey && bindingValidationStatus !== 'INVALID'" type="success" :bordered="false" class="binding-alert">
             已绑定 TDuck 表单。为避免误操作，当前会议不允许在此处改选其他表单。
           </n-alert>
 
@@ -85,14 +96,6 @@
       </n-card>
 
       <n-card class="surface qr-card" :bordered="false">
-        <template #header>
-          <div class="card-title-row compact">
-            <div>
-              <h2>报名二维码</h2>
-              <span>对外分发这个固定入口</span>
-            </div>
-          </div>
-        </template>
         <div class="qr-frame">
           <canvas ref="qrCanvas" width="220" height="220"></canvas>
         </div>
@@ -176,16 +179,19 @@
 <script setup lang="ts">
 import { computed, h, onMounted, ref, watch } from "vue";
 import { extractErrorMessage } from "@/api/http";
-import { NDataTable, NSelect, NSwitch, useMessage } from "naive-ui";
+import { NDataTable, NIcon, NSelect, NSwitch, useMessage, type DropdownOption } from "naive-ui";
+import { AddOutline, CreateOutline, SparklesOutline } from "@vicons/ionicons5";
 import { useRouter } from "vue-router";
 import PageHeader from "@/components/PageHeader.vue";
 import StatusTag from "@/components/StatusTag.vue";
 import { useRouteMeeting } from "@/composables/useRouteMeeting";
 import { useMeetingStore, type TduckBindingDto, type TduckFieldMappingDto, type TduckFieldSyncItemDto, type TduckFormOptionDto } from "@/stores/meeting";
-import { formatDateTimeLabel, meetingSummaryLabel } from "@/utils/meetingDisplay";
+import { attendeeFieldOptions, inferAttendeeField } from "@/utils/attendeeFields";
+import { formatDateTimeLabel } from "@/utils/meetingDisplay";
 import type { SyncLog } from "@/utils/types";
 
 type BindingValidationStatus = "VALID" | "INVALID" | "UNKNOWN" | "";
+type CreateTduckFormAction = "blank" | "ai";
 
 const store = useMeetingStore();
 const message = useMessage();
@@ -200,12 +206,15 @@ const savingBinding = ref(false);
 const syncingFields = ref(false);
 const savingMappings = ref(false);
 const pullingSync = ref(false);
+const openingTduck = ref(false);
+const openingTduckEditor = ref(false);
 const pullSyncDataId = ref("");
 const bindingValidationStatus = ref<BindingValidationStatus>("");
 const bindingValidationMessage = ref("");
 const currentBinding = ref<TduckBindingDto | null>(null);
 
 const redirectUrl = computed(() => (currentMeeting.value ? `${window.location.origin}/r/${currentMeeting.value.code}` : ""));
+const tduckFrontBaseUrl = computed(() => `${window.location.origin}/tduck`);
 
 const activeForm = computed<TduckFormOptionDto | null>(() => {
   const selected = formOptions.value.find((item) => item.formKey === selectedFormKey.value);
@@ -231,24 +240,33 @@ const formSelectOptions = computed(() =>
 );
 
 const currentBoundFormKey = computed(() => currentBinding.value?.formKey || currentMeeting.value?.tduckFormKey || "");
-const isBindingLocked = computed(() => Boolean(currentBoundFormKey.value));
-const canSaveBinding = computed(() => Boolean(currentMeeting.value && selectedFormKey.value && !savingBinding.value && !isBindingLocked.value));
+const activeTduckFormKey = computed(() => activeForm.value?.formKey || selectedFormKey.value || currentBoundFormKey.value);
+const canOpenTduckEditor = computed(() => Boolean(activeTduckFormKey.value));
+const tduckEditorUrl = computed(() =>
+  activeTduckFormKey.value ? `${tduckFrontBaseUrl.value}/project/form/editor?key=${encodeURIComponent(activeTduckFormKey.value)}` : ""
+);
+const canEditBinding = computed(() => !currentBoundFormKey.value || bindingValidationStatus.value === "INVALID");
+const isBindingLocked = computed(() => Boolean(currentBoundFormKey.value && !canEditBinding.value));
+const canSaveBinding = computed(() => Boolean(currentMeeting.value && selectedFormKey.value && !savingBinding.value && canEditBinding.value));
 const canOpenRegistrationEntry = computed(() => Boolean(currentMeeting.value && bindingValidationStatus.value !== "INVALID"));
+const bindingActionLabel = computed(() => {
+  if (bindingValidationStatus.value === "INVALID") return "重新绑定并生成二维码";
+  return isBindingLocked.value ? "已绑定" : "保存绑定并生成二维码";
+});
+const createTduckFormOptions: DropdownOption[] = [
+  {
+    key: "blank",
+    label: "空白表单",
+    icon: () => h(NIcon, null, { default: () => h(AddOutline) })
+  },
+  {
+    key: "ai",
+    label: "AI 智能建表",
+    icon: () => h(NIcon, null, { default: () => h(SparklesOutline) })
+  }
+];
 
 const fieldMappings = ref<FieldMappingRow[]>([]);
-const attendeeFieldOptions = [
-  { label: "姓名", value: "NAME" },
-  { label: "手机号", value: "PHONE" },
-  { label: "单位", value: "ORGANIZATION" },
-  { label: "职务", value: "TITLE" },
-  { label: "参会类型", value: "ATTENDEE_TYPE" },
-  { label: "证件号", value: "IDENTITY_NO" },
-  { label: "邮箱", value: "EMAIL" },
-  { label: "是否住宿", value: "ACCOMMODATION_REQUIRED" },
-  { label: "房间号", value: "ROOM_NO" },
-  { label: "房间备注", value: "ROOM_REMARK" },
-  { label: "备注", value: "REMARK" }
-];
 
 const bindingStatusLabel = computed(() => {
   if (!currentMeeting.value) return "未选择会议";
@@ -323,6 +341,9 @@ const mappingColumns = [
           placeholder: "选择字段",
           "onUpdate:value": (value: string | null) => {
             row.attendeeField = value || null;
+            if (!row.attendeeField) {
+              row.requiredMapping = false;
+            }
           }
         })
       ])
@@ -338,6 +359,10 @@ const mappingColumns = [
           row.requiredMapping = value;
           if (value && !row.attendeeField) {
             row.attendeeField = inferAttendeeField(row.tduckFieldKey, row.tduckField);
+            if (!row.attendeeField) {
+              row.requiredMapping = false;
+              message.warning("请先选择要映射的参会人字段");
+            }
           }
         }
       })
@@ -370,7 +395,7 @@ async function saveBindingAndGenerateQr() {
     message.warning("请先选择 TDuck 表单");
     return;
   }
-  if (isBindingLocked.value) {
+  if (!canEditBinding.value) {
     selectedFormKey.value = currentBoundFormKey.value;
     message.warning("当前会议已绑定 TDuck 表单，不能选择其他表单");
     return;
@@ -435,28 +460,57 @@ async function saveMappings() {
     message.warning("请先选择会议");
     return;
   }
-  const mappings = fieldMappings.value
-    .filter((item) => item.tduckFieldKey && item.tduckFieldKey !== "-" && item.attendeeField)
+  const editableRows = fieldMappings.value
+    .filter((item) => item.tduckFieldKey && item.tduckFieldKey !== "-");
+  const mappedRows = editableRows.filter((item) => item.attendeeField);
+  const mappings = editableRows
     .map((item) => ({
+      /*
+       * 未选择 attendeeField 的行也要提交给后端，表示“管理员已确认该 TDuck 字段不需要映射”。
+       * 否则保存或再次同步时，前后端的智能推断会把它重新自动映射回来。
+       */
       attendeeField: item.attendeeField,
       tduckFieldKey: item.tduckFieldKey,
       tduckFieldLabel: item.tduckField,
-      requiredMapping: item.requiredMapping
+      requiredMapping: Boolean(item.attendeeField && item.requiredMapping)
     }));
-  if (!mappings.length) {
+  if (!mappedRows.length) {
     message.warning("请至少配置一个字段映射");
+    return;
+  }
+  const duplicateFields = findDuplicateAttendeeFields(mappedRows.map((item) => item.attendeeField as string));
+  if (duplicateFields.length) {
+    message.warning(`字段映射重复：${duplicateFields.join("、")}，每个 MeetingOS 字段只能绑定一个 TDuck 字段`);
     return;
   }
   savingMappings.value = true;
   try {
-    const saved = await store.saveTduckMappings(store.currentMeetingId, mappings);
-    fieldMappings.value = saved.map(mapSavedMapping);
+    await store.saveTduckMappings(store.currentMeetingId, mappings);
+    /*
+     * 保存接口只返回写入 tduck_field_mappings 的“已映射字段”，而页面需要展示 TDuck 表单完整字段清单。
+     * 保存成功后必须重新读取 GET /mappings，它会把 TDuck 全量字段和已保存映射合并；否则未映射字段会在 UI
+     * 上被误删，看起来像保存后字段数量从 12 个变成 5 个。
+     */
+    await loadSavedMappings();
     message.success("字段映射已保存");
   } catch (error) {
     message.error(extractErrorMessage(error, "保存字段映射失败"));
   } finally {
     savingMappings.value = false;
   }
+}
+
+function findDuplicateAttendeeFields(fields: string[]) {
+  const seen = new Set<string>();
+  const duplicates = new Set<string>();
+  for (const field of fields) {
+    if (seen.has(field)) {
+      duplicates.add(field);
+      continue;
+    }
+    seen.add(field);
+  }
+  return Array.from(duplicates);
 }
 
 
@@ -495,6 +549,92 @@ function openRegistrationEntry() {
     return;
   }
   void router.push(`/r/${currentMeeting.value.code}`);
+}
+
+function handleCreateTduckFormSelect(key: string | number) {
+  void openTduckCreation(key === "ai" ? "ai" : "blank");
+}
+
+async function openTduckCreation(action: CreateTduckFormAction) {
+  if (!currentMeeting.value) {
+    message.warning("请先选择会议");
+    return;
+  }
+  openingTduck.value = true;
+  try {
+    await ensureTduckBrowserSession();
+    if (action === "ai") {
+      /*
+       * TDuck 的 AI 建表能力目前挂在“我的项目”页的 ChatFormDialog 中，不是独立编辑器路由。
+       * 部署侧 TDuck 前端会识别 aiCreate=1 并自动打开该抽屉；如果未来 TDuck 官方提供独立路由，
+       * 这里只需要替换目标 URL，不影响 MeetingOS 绑定流程。
+       */
+      window.location.href = `${tduckFrontBaseUrl.value}/project/my?aiCreate=1`;
+      return;
+    }
+    const form = await store.createTduckForm(currentMeeting.value.id, `${currentMeeting.value.name} 报名表`);
+    formOptions.value = mergeFormOptions(formOptions.value, form);
+    if (canEditBinding.value) {
+      selectedFormKey.value = form.formKey;
+      bindingValidationStatus.value = "";
+      bindingValidationMessage.value = "";
+    }
+    /*
+     * /project/form 是 TDuck 编辑器父路由，缺少 key 时会请求 formKey=undefined 并弹出
+     * “must not be blank”。因此新建后必须用 TDuck 返回的 formKey 直达编辑器。
+     */
+    window.location.href = `${tduckFrontBaseUrl.value}/project/form/editor?key=${encodeURIComponent(form.formKey)}`;
+  } catch (error) {
+    message.error(extractErrorMessage(error, "创建 TDuck 表单失败"));
+  } finally {
+    openingTduck.value = false;
+  }
+}
+
+async function openTduckEditor() {
+  if (!tduckEditorUrl.value) {
+    message.warning("请先选择或绑定 TDuck 表单");
+    return;
+  }
+  await openTduckAfterSession(tduckEditorUrl.value, openingTduckEditor);
+}
+
+async function openTduckAfterSession(targetUrl: string, loading: typeof openingTduck) {
+  loading.value = true;
+  try {
+    await ensureTduckBrowserSession();
+    /*
+     * 先打开 about:blank 再异步改地址在部分浏览器/内置 WebView 中会打断原页面请求，
+     * 导致 TDuck 登录态还没写入就停在空白页。这里改为会话同步完成后当前页跳转，
+     * 保证 TDuck 首次加载时已经能读取 localStorage.token。
+     */
+    window.location.href = targetUrl;
+  } finally {
+    loading.value = false;
+  }
+}
+
+async function ensureTduckBrowserSession() {
+  if (!currentMeeting.value) {
+    message.warning("请先选择会议");
+    throw new Error("当前会议为空");
+  }
+  try {
+    const session = await store.loadTduckBrowserSession(currentMeeting.value.id);
+    if (!session.token) {
+      throw new Error("TDuck 未返回登录 token");
+    }
+    /*
+     * TDuck 前端和 MeetingOS 通过 /tduck/ 部署在同一 origin 下，因此 localStorage 共享。
+     * 这里写入 TDuck 原生登录成功后的两个 key，避免用户从 MeetingOS 跳转过去时又被
+     * TDuck 路由守卫拦到登录页。不要把 TDuck 管理员密码放到前端，只写服务端换取到的 token。
+     */
+    localStorage.setItem("token", session.token);
+    localStorage.setItem("userInfo", JSON.stringify({ ...session.userInfo, token: session.token }));
+  } catch (error) {
+    message.error(extractErrorMessage(error, "同步 TDuck 登录态失败，请检查 TDuck 管理员账号配置"));
+    throw error;
+  }
 }
 
 async function copyRedirectUrl() {
@@ -551,7 +691,7 @@ async function searchTduckForms(keyword: string) {
 }
 
 function handleFormSelect(value: string | null) {
-  if (isBindingLocked.value) {
+  if (!canEditBinding.value) {
     selectedFormKey.value = currentBoundFormKey.value;
     message.warning("当前会议已绑定 TDuck 表单，不能选择其他表单");
     return;
@@ -620,8 +760,8 @@ function mapSyncedField(field: TduckFieldSyncItemDto): FieldMappingRow {
     tduckField: field.tduckFieldLabel || field.tduckFieldKey,
     tduckFieldKey: field.tduckFieldKey,
     tduckRequired: field.tduckRequired,
-    attendeeField: field.attendeeField || inferAttendeeField(field.tduckFieldKey, field.tduckFieldLabel),
-    requiredMapping: field.requiredMapping,
+    attendeeField: field.attendeeField || null,
+    requiredMapping: Boolean(field.attendeeField && field.requiredMapping),
     status: field.status
   };
 }
@@ -631,8 +771,8 @@ function mapSavedMapping(mapping: TduckFieldMappingDto): FieldMappingRow {
     tduckField: mapping.tduckFieldLabel || mapping.tduckFieldKey,
     tduckFieldKey: mapping.tduckFieldKey,
     tduckRequired: mapping.tduckRequired ?? mapping.requiredMapping,
-    attendeeField: mapping.attendeeField || inferAttendeeField(mapping.tduckFieldKey, mapping.tduckFieldLabel || ""),
-    requiredMapping: mapping.requiredMapping,
+    attendeeField: mapping.attendeeField || null,
+    requiredMapping: Boolean(mapping.attendeeField && mapping.requiredMapping),
     status: mapping.status
   };
 }
@@ -640,27 +780,20 @@ function mapSavedMapping(mapping: TduckFieldMappingDto): FieldMappingRow {
 function emptyMappingRow(label: string): FieldMappingRow {
   return { tduckField: label, tduckFieldKey: "-", tduckRequired: false, attendeeField: null, requiredMapping: false };
 }
-
-function inferAttendeeField(key: string, label = "") {
-  const text = `${key} ${label}`.toLowerCase();
-  if (text.includes("phone") || text.includes("mobile") || text.includes("手机") || text.includes("电话")) return "PHONE";
-  if (text.includes("name") || text.includes("姓名")) return "NAME";
-  if (text.includes("organization") || text.includes("company") || text.includes("单位") || text.includes("公司")) return "ORGANIZATION";
-  if (text.includes("title") || text.includes("position") || text.includes("职务") || text.includes("职位")) return "TITLE";
-  if (text.includes("email") || text.includes("邮箱") || text.includes("mail")) return "EMAIL";
-  if (text.includes("identity") || text.includes("idcard") || text.includes("证件") || text.includes("身份证")) return "IDENTITY_NO";
-  if (text.includes("attendeetype") || text.includes("参会类型")) return "ATTENDEE_TYPE";
-  if (text.includes("roomremark") || text.includes("房间备注") || text.includes("住宿备注")) return "ROOM_REMARK";
-  if (text.includes("room") || text.includes("房间号") || text.includes("房号")) return "ROOM_NO";
-  if (text.includes("remark") || text.includes("备注")) return "REMARK";
-  return null;
-}
 </script>
 
 <style scoped>
 .card-title-row span,
 .mini-section-head span {
   color: var(--text-secondary);
+}
+
+.binding-header-actions {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  flex-wrap: wrap;
+  gap: 8px;
 }
 
 .registration-grid {
@@ -752,6 +885,7 @@ function inferAttendeeField(key: string, label = "") {
   display: grid;
   justify-items: center;
   gap: 14px;
+  padding-top: 24px;
 }
 
 .qr-frame {
@@ -900,6 +1034,11 @@ function inferAttendeeField(key: string, label = "") {
   .card-title-row {
     align-items: flex-start;
     flex-direction: column;
+  }
+
+  .binding-header-actions {
+    width: 100%;
+    justify-content: flex-start;
   }
 
   .mini-section-head,

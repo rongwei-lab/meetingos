@@ -1,6 +1,7 @@
 package com.meetingos.tduck;
 
 public enum AttendeeField {
+    // 会直接落到 attendees 主表的核心字段，用于检索、审核、签到、住宿和公开查询。
     NAME,
     PHONE,
     ORGANIZATION,
@@ -11,5 +12,33 @@ public enum AttendeeField {
     ACCOMMODATION_REQUIRED,
     ROOM_NO,
     ROOM_REMARK,
-    REMARK
+    REMARK,
+
+    // 通用报名扩展字段：保存映射关系与 TDuck 原始快照，便于列表、详情、导出和后续业务使用。
+    GENDER,
+    COUNTRY_REGION,
+    PROVINCE,
+    CITY,
+    INDUSTRY,
+    ORGANIZATION_TYPE,
+    DEPARTMENT,
+    ADDRESS,
+    DIETARY_REQUIREMENT,
+    ARRIVAL_DATE,
+    ARRIVAL_TRANSPORT,
+    ARRIVAL_FLIGHT_TRAIN,
+    DEPARTURE_DATE,
+    DEPARTURE_TRANSPORT,
+    DEPARTURE_FLIGHT_TRAIN,
+    EMERGENCY_CONTACT,
+    EMERGENCY_PHONE,
+    COMPANION_COUNT,
+    INVOICE_TITLE,
+    TAX_NO,
+    INVOICE_EMAIL,
+    PAYMENT_STATUS,
+    SIGNUP_SOURCE,
+    INVITER,
+    CONSENT_PHOTO,
+    CONSENT_PRIVACY
 }

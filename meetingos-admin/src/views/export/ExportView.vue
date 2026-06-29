@@ -1,6 +1,6 @@
 <template>
   <div class="export-page">
-    <page-header title="数据导出" subtitle="导出参会名单、座位、住宿、签到记录和统计汇总">
+    <page-header title="数据导出">
       <div class="export-actions">
         <n-button secondary @click="createTask">创建记录</n-button>
         <n-button type="primary" @click="downloadSelected">下载</n-button>

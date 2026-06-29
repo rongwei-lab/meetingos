@@ -19,6 +19,8 @@ import java.util.Set;
 @Service
 public class UserService {
 
+    private static final String BUILT_IN_ADMIN_USERNAME = "admin";
+
     private final AppUserRepository userRepository;
     private final PasswordEncoder passwordEncoder;
 
@@ -54,6 +56,7 @@ public class UserService {
     public UserResponse update(Long id, UpdateUserRequest request) {
         AppUser user = userRepository.findById(id)
                 .orElseThrow(() -> BusinessException.notFound("用户不存在"));
+        ensureBuiltInAdminKeepsSystemAccess(user, request);
         user.setDisplayName(request.displayName().trim());
         user.setStatus(request.status());
         user.setRoles(normalizeRoles(request.roles()));
@@ -87,6 +90,23 @@ public class UserService {
             throw BusinessException.badRequest("用户至少需要一个角色");
         }
         return new LinkedHashSet<>(roles);
+    }
+
+    private void ensureBuiltInAdminKeepsSystemAccess(AppUser user, UpdateUserRequest request) {
+        if (!BUILT_IN_ADMIN_USERNAME.equals(user.getUsername())) {
+            return;
+        }
+        /*
+         * 系统设置入口由 SystemAdminAccess 固定识别内置 admin 账号。
+         * 因此 admin 不能被停用，也不能移除 SUPER_ADMIN，否则会把用户管理、
+         * 品牌配置、TDuck 接入等全局设置全部锁死，只能手工改库恢复。
+         */
+        if (request.status() != UserStatus.ACTIVE) {
+            throw BusinessException.badRequest("内置 admin 账号不能停用");
+        }
+        if (request.roles() == null || !request.roles().contains(Role.SUPER_ADMIN)) {
+            throw BusinessException.badRequest("内置 admin 账号必须保留超级管理员角色");
+        }
     }
 
     private String normalizeUsername(String username) {

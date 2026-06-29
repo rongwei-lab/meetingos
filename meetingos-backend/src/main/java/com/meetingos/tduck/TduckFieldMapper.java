@@ -19,6 +19,10 @@ public class TduckFieldMapper {
 
         Map<AttendeeField, Object> values = new EnumMap<>(AttendeeField.class);
         for (TduckFieldMapping mapping : mappings) {
+            if (mapping.getAttendeeField() == null) {
+                // 空目标字段代表管理员明确选择“不映射”，只用于配置回显和同步保护，不参与参会人数据入库。
+                continue;
+            }
             Object value = mappedValue(data, mapping.getTduckFieldKey());
             if (mapping.isRequiredMapping() && isBlank(value)) {
                 throw BusinessException.badRequest("必填映射字段缺失: " + mapping.getAttendeeField());

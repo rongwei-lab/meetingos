@@ -12,19 +12,26 @@ import com.meetingos.seating.SeatRepository;
 import com.meetingos.seating.SeatingService;
 import com.meetingos.tduck.SyncStatus;
 import com.meetingos.tduck.TduckManualSyncRequest;
+import com.meetingos.tduck.TduckClient;
+import com.meetingos.tduck.TduckFormDetails;
 import com.meetingos.tduck.TduckService;
 import com.meetingos.meeting.MeetingRepository;
 import com.meetingos.meeting.MeetingStatus;
+import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.boot.test.mock.mockito.MockBean;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.test.context.ActiveProfiles;
 import org.springframework.transaction.annotation.Transactional;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
+import static org.mockito.ArgumentMatchers.anyString;
+import static org.mockito.Mockito.lenient;
 
 import java.util.Map;
+import java.util.Optional;
 
 @SpringBootTest
 @ActiveProfiles("test")
@@ -52,6 +59,22 @@ class AttendeeSearchAndCheckinRuleTest {
 
     @Autowired
     private MeetingRepository meetingRepository;
+
+    @MockBean
+    private TduckClient tduckClient;
+
+    @BeforeEach
+    void setUpTduckClient() {
+        /*
+         * 公开报名现在会校验 TDuck 端表单是否真实可填写。集成测试只关心
+         * MeetingOS 的开放/关闭规则，因此用测试替身固定外部 TDuck 状态，
+         * 避免测试需要访问真实 TDuck 服务。
+         */
+        lenient().when(tduckClient.formDetails("ndef2026"))
+                .thenReturn(Optional.of(new TduckFormDetails("ndef2026", "数字经济论坛报名表", "2", true, 5)));
+        lenient().when(tduckClient.registrationUrlFor(anyString()))
+                .thenAnswer(invocation -> "http://tduck.test/s/" + invocation.getArgument(0, String.class));
+    }
 
     @Test
     void supplementCheckinRequiresRemarkForAudit() {

@@ -55,6 +55,19 @@ public class TduckController {
         return ApiResponse.ok(tduckService.formOptions(keyword, page, size));
     }
 
+    @PostMapping({"/api/tduck/forms", "/api/admin/tduck/forms"})
+    @PreAuthorize("@meetingAccess.canManage(#request.meetingId())")
+    @AuditLog(action = "TDUCK_CREATE_FORM", targetType = "TDUCK_FORM")
+    public ApiResponse<TduckFormOption> createForm(@Valid @RequestBody CreateTduckFormRequest request) {
+        return ApiResponse.ok(tduckService.createBlankForm(request));
+    }
+
+    @GetMapping({"/api/tduck/browser-session", "/api/admin/tduck/browser-session"})
+    @PreAuthorize("@meetingAccess.canManage(#meetingId)")
+    public ApiResponse<TduckBrowserSessionResponse> browserSession(@RequestParam Long meetingId) {
+        return ApiResponse.ok(tduckService.browserSession(meetingId));
+    }
+
     @PutMapping({"/api/tduck/mappings/{meetingId}", "/api/admin/tduck/mappings/{meetingId}"})
     @PreAuthorize("@meetingAccess.canManage(#meetingId)")
     @AuditLog(action = "TDUCK_UPDATE_FIELD_MAPPING", targetType = "TDUCK_MAPPING")

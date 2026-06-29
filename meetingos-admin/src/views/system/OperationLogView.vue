@@ -1,7 +1,10 @@
 <template>
   <div>
-    <page-header title="操作日志" subtitle="记录创建会议、审核报名、导入导出、排座、住宿变更、签到补签等关键行为" />
+    <page-header title="操作日志" />
     <n-card class="surface" :bordered="false">
+      <n-alert v-if="loadError" class="log-load-error" type="warning" :show-icon="false">
+        {{ loadError }}
+      </n-alert>
       <n-data-table v-if="!isMobile" :columns="columns" :data="logs" :pagination="{ pageSize: 8 }" />
       <div v-else class="mobile-card-list log-card-list">
         <article v-for="log in logs" :key="`${log.time}-${log.operator}-${log.target}`" class="mobile-data-card">
@@ -32,8 +35,8 @@
 <script setup lang="ts">
 import { onMounted, ref } from "vue";
 import { useRoute } from "vue-router";
-import { NDataTable } from "naive-ui";
-import { http, type PagePayload, unwrapApi } from "@/api/http";
+import { NAlert, NDataTable } from "naive-ui";
+import { extractErrorMessage, http, isForbidden, type PagePayload, unwrapApi } from "@/api/http";
 import PageHeader from "@/components/PageHeader.vue";
 import { useIsMobile } from "@/composables/useResponsive";
 import { formatDateTimeLabel, operationActionLabel, operationMessageLabel, operationTargetLabel } from "@/utils/meetingDisplay";
@@ -48,15 +51,19 @@ interface OperationLogDto {
   createdAt?: string;
 }
 
-const logs = ref([
-  { time: "2026-06-24 09:10", operator: "超级管理员", type: "审核报名", target: "陈嘉宁", remark: "审核通过" },
-  { time: "2026-06-24 09:12", operator: "超级管理员", type: "自动排座", target: "全国数字经济论坛", remark: "新增 4 个座位分配" },
-  { time: "2026-06-24 09:16", operator: "住宿工作人员", type: "修改房间", target: "1801", remark: "分配给嘉宾" },
-  { time: "2026-06-24 09:20", operator: "签到工作人员", type: "扫码签到", target: "王子墨", remark: "A入口" }
-]);
+interface OperationLogRow {
+  time: string;
+  operator: string;
+  type: string;
+  target: string;
+  remark: string;
+}
+
+const logs = ref<OperationLogRow[]>([]);
 const isMobile = useIsMobile();
 const route = useRoute();
 const routeMeetingId = () => String(route.params.meetingId || "");
+const loadError = ref("");
 const columns = [
   { title: "时间", key: "time", minWidth: 180, render: (row: { time?: string }) => formatDateTimeLabel(row.time) },
   { title: "操作人", key: "operator", minWidth: 120 },
@@ -67,6 +74,7 @@ const columns = [
 
 onMounted(async () => {
   try {
+    loadError.value = "";
     const page = unwrapApi(
       await http.get<PagePayload<OperationLogDto>>("/admin/operation-logs", {
         params: { meetingId: routeMeetingId() || undefined, page: 0, size: 50 }
@@ -79,8 +87,19 @@ onMounted(async () => {
       target: operationTargetLabel(item.targetType, item.targetId),
       remark: operationMessageLabel(item.message)
     }));
-  } catch {
-    // 后端未启动时保留静态演示日志。
+  } catch (error) {
+    logs.value = [];
+    /*
+     * 操作日志是系统级敏感数据。真实服务返回 403 时不能继续展示静态示例，
+     * 否则会让权限问题看起来像“有数据但不准确”。
+     */
+    loadError.value = isForbidden(error) ? "当前账号无权查看操作日志" : extractErrorMessage(error, "操作日志加载失败");
   }
 });
 </script>
+
+<style scoped>
+.log-load-error {
+  margin-bottom: 12px;
+}
+</style>

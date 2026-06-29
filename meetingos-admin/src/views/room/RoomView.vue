@@ -1,6 +1,6 @@
 <template>
   <div>
-    <page-header title="住宿管理" subtitle="维护会议房源、批量生成房号，并为审核通过的嘉宾分配住宿">
+    <page-header title="住宿管理">
       <n-button secondary size="large" @click="openCreateRoomModal">
         <template #icon><n-icon :component="AddOutline" /></template>
         新增房间

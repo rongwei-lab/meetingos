@@ -49,42 +49,53 @@ public class SeatingService {
     public List<Seat> createLayout(SeatLayoutRequest request) {
         Meeting meeting = meetingRepository.findById(request.meetingId())
                 .orElseThrow(() -> BusinessException.notFound("会议不存在"));
-        SeatLayout layout = layoutRepository.findByMeetingIdAndAreaNameOrderByIdAsc(request.meetingId(), request.areaName())
+        String areaName = normalizeAreaName(request.areaName());
+        String lookupAreaName = normalizeOriginalAreaName(request.originalAreaName(), areaName);
+        boolean renamed = !lookupAreaName.equals(areaName);
+        List<SeatLayout> existingLayouts = layoutRepository.findByMeetingIdAndAreaNameOrderByIdAsc(request.meetingId(), lookupAreaName);
+        List<Seat> existingSeats = seatRepository.findByMeetingIdAndAreaNameOrderByRowNoAscSeatNoAsc(request.meetingId(), lookupAreaName);
+        if (renamed) {
+            ensureAreaCanBeRenamed(request.meetingId(), areaName, existingLayouts, existingSeats);
+        }
+
+        SeatLayout layout = existingLayouts
                 .stream()
                 .findFirst()
                 .orElseGet(SeatLayout::new);
         layout.setMeeting(meeting);
-        applyLayoutRequest(layout, request);
+        applyLayoutRequest(layout, request, areaName);
         layoutRepository.save(layout);
 
         boolean overrideDisabledSeats = request.disabledSeatCodes() != null;
         Set<String> disabledCodes = overrideDisabledSeats ? new HashSet<>(request.disabledSeatCodes()) : Set.of();
-        List<Seat> existingSeats = seatRepository.findByMeetingIdAndAreaNameOrderByRowNoAscSeatNoAsc(request.meetingId(), request.areaName());
+        SeatType requestedSeatType = request.defaultSeatType() == null ? SeatType.NORMAL : request.defaultSeatType();
         Map<String, Seat> existingByPosition = existingSeats.stream()
                 .collect(Collectors.toMap(this::positionKey, seat -> seat));
         List<Seat> seatsToDelete = seatsOutsideLayout(existingSeats, request.rowCount(), request.seatsPerRow());
         ensureSeatsCanBeRemoved(seatsToDelete);
 
         // 管理员调整座位数量时，同一区域按“创建或更新”处理：
-        // 1. 已存在且仍在新范围内的座位保留，避免丢失手动调座、座位类型、锁定等状态。
-        // 2. 新增出来的位置补建座位。
-        // 3. 缩小范围时只删除未锁定且未分配的座位，防止误删业务结果。
+        // 1. 已存在且仍在新范围内的座位保留 ID、锁定、分配状态，避免丢失手动排座结果。
+        // 2. 默认座位类型是区域级配置，管理员在布局弹窗切换后应覆盖该区域当前范围内座位类型。
+        // 3. 新增出来的位置补建座位。
+        // 4. 缩小范围时只删除未锁定且未分配的座位，防止误删业务结果。
         List<Seat> seatsToSave = new ArrayList<>();
         for (int row = 1; row <= request.rowCount(); row++) {
             for (int no = 1; no <= request.seatsPerRow(); no++) {
-                String seatCode = request.areaName() + "-" + row + "-" + no;
+                String seatCode = areaName + "-" + row + "-" + no;
                 Seat seat = existingByPosition.get(row + "-" + no);
                 if (seat == null) {
                     seat = new Seat();
                     seat.setMeeting(meeting);
-                    seat.setAreaName(request.areaName());
                     seat.setRowNo(row);
                     seat.setSeatNo(no);
-                    seat.setSeatType(request.defaultSeatType() == null ? SeatType.NORMAL : request.defaultSeatType());
                     seat.setDisabled(disabledCodes.contains(seatCode));
                 }
                 seat.setLayout(layout);
+                // 区域改名时复用原座位 ID，保证已有手动排座/签到关系继续指向同一个座位。
+                seat.setAreaName(areaName);
                 seat.setSeatCode(seatCode);
+                seat.setSeatType(requestedSeatType);
                 if (overrideDisabledSeats) {
                     seat.setDisabled(disabledCodes.contains(seatCode));
                 }
@@ -95,7 +106,7 @@ public class SeatingService {
             seatRepository.deleteAll(seatsToDelete);
         }
         seatRepository.saveAll(seatsToSave);
-        return seatRepository.findByMeetingIdAndAreaNameOrderByRowNoAscSeatNoAsc(request.meetingId(), request.areaName());
+        return seatRepository.findByMeetingIdAndAreaNameOrderByRowNoAscSeatNoAsc(request.meetingId(), areaName);
     }
 
     @Transactional
@@ -192,6 +203,9 @@ public class SeatingService {
 
     @Transactional
     public void swap(SwapSeatRequest request) {
+        if (Objects.equals(request.firstAttendeeId(), request.secondAttendeeId())) {
+            throw BusinessException.badRequest("不能和同一个参会人交换座位");
+        }
         SeatAssignment first = assignmentRepository.findByAttendeeId(request.firstAttendeeId())
                 .orElseThrow(() -> BusinessException.notFound("第一个参会人未分配座位"));
         SeatAssignment second = assignmentRepository.findByAttendeeId(request.secondAttendeeId())
@@ -199,13 +213,22 @@ public class SeatingService {
         if (!Objects.equals(first.getMeeting().getId(), second.getMeeting().getId())) {
             throw BusinessException.badRequest("不能跨会议交换座位");
         }
-        Seat temp = first.getSeat();
-        first.setSeat(second.getSeat());
-        second.setSeat(temp);
-        first.setManualAssigned(true);
-        second.setManualAssigned(true);
-        first.setAssignedBy(SecurityUtils.currentUsernameOrSystem());
-        second.setAssignedBy(SecurityUtils.currentUsernameOrSystem());
+        Meeting meeting = first.getMeeting();
+        Attendee firstAttendee = first.getAttendee();
+        Attendee secondAttendee = second.getAttendee();
+        Seat firstSeat = first.getSeat();
+        Seat secondSeat = second.getSeat();
+
+        /*
+         * seat_assignments 同时对 attendee_id 和 seat_id 建了唯一索引。
+         * 如果直接把两条记录的 seat_id 对调，MySQL 会在第一条 update 刷新时看到
+         * “目标座位仍被另一条记录占用”的中间状态，进而抛 Duplicate entry。
+         * 这里先删除并 flush 两条旧分配，显式释放唯一键，再按互换结果重新创建。
+         */
+        assignmentRepository.deleteAll(List.of(first, second));
+        assignmentRepository.flush();
+        saveAssignment(meeting, firstAttendee, secondSeat, true);
+        saveAssignment(meeting, secondAttendee, firstSeat, true);
     }
 
     @Transactional
@@ -408,9 +431,34 @@ public class SeatingService {
         return availableSeats.stream().filter(seat -> !usedIds.contains(seat.getId())).toList();
     }
 
-    private void applyLayoutRequest(SeatLayout layout, SeatLayoutRequest request) {
+    private String normalizeAreaName(String areaName) {
+        if (areaName == null || areaName.isBlank()) {
+            throw BusinessException.badRequest("区域名称不能为空");
+        }
+        return areaName.trim();
+    }
+
+    private String normalizeOriginalAreaName(String originalAreaName, String fallbackAreaName) {
+        if (originalAreaName == null || originalAreaName.isBlank()) {
+            return fallbackAreaName;
+        }
+        return originalAreaName.trim();
+    }
+
+    private void ensureAreaCanBeRenamed(Long meetingId, String targetAreaName, List<SeatLayout> sourceLayouts, List<Seat> sourceSeats) {
+        if (sourceLayouts.isEmpty() && sourceSeats.isEmpty()) {
+            throw BusinessException.notFound("原区域不存在");
+        }
+        boolean targetLayoutExists = !layoutRepository.findByMeetingIdAndAreaNameOrderByIdAsc(meetingId, targetAreaName).isEmpty();
+        boolean targetSeatExists = !seatRepository.findByMeetingIdAndAreaNameOrderByRowNoAscSeatNoAsc(meetingId, targetAreaName).isEmpty();
+        if (targetLayoutExists || targetSeatExists) {
+            throw BusinessException.conflict("区域名称已存在");
+        }
+    }
+
+    private void applyLayoutRequest(SeatLayout layout, SeatLayoutRequest request, String areaName) {
         layout.setVenueName(request.venueName());
-        layout.setAreaName(request.areaName());
+        layout.setAreaName(areaName);
         layout.setRowCount(request.rowCount());
         layout.setSeatsPerRow(request.seatsPerRow());
         layout.setSortOrder(request.sortOrder() == null ? nextSortOrder(layout) : Math.max(0, request.sortOrder()));

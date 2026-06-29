@@ -129,12 +129,13 @@ create table tduck_field_mappings (
   created_at datetime(6) not null,
   updated_at datetime(6) not null,
   meeting_id bigint not null,
-  attendee_field varchar(48) not null,
+  attendee_field varchar(48),
   tduck_field_key varchar(120) not null,
   tduck_field_label varchar(160),
   required_mapping boolean not null,
   constraint fk_tduck_mapping_meeting foreign key (meeting_id) references meetings(id),
-  constraint uk_mapping_meeting_target unique (meeting_id, attendee_field)
+  constraint uk_mapping_meeting_target unique (meeting_id, attendee_field),
+  constraint uk_mapping_meeting_tduck_field unique (meeting_id, tduck_field_key)
 );
 
 create table tduck_sync_logs (

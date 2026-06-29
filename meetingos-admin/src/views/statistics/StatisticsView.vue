@@ -1,6 +1,6 @@
 <template>
   <div class="statistics-page">
-    <page-header title="数据统计" subtitle="报名、座位、住宿、签到核心指标汇总">
+    <page-header title="数据统计">
       <div class="statistics-actions">
         <n-radio-group v-model:value="rangeMode" size="small">
           <n-radio-button v-for="item in rangeOptions" :key="item.value" :value="item.value">{{ item.label }}</n-radio-button>

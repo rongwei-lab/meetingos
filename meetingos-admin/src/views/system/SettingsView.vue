@@ -1,6 +1,6 @@
 <template>
   <div class="settings-view">
-    <page-header title="系统设置" subtitle="配置品牌信息、TDuck 地址、Webhook Token、安全策略、用户和会议授权" />
+    <page-header title="系统设置" />
 
     <n-tabs v-model:value="activeSettingsTab" class="settings-tabs" type="segment" animated>
       <n-tab-pane name="branding" tab="品牌设置">
@@ -220,6 +220,35 @@
     </n-modal>
 
     <n-modal
+      v-model:show="showEditUser"
+      preset="card"
+      title="编辑后台用户"
+      class="settings-modal"
+      style="width: min(560px, calc(100vw - 32px))"
+    >
+      <n-form class="modal-form" label-placement="top">
+        <n-form-item label="用户名">
+          <n-input :value="editingUser?.username || ''" disabled />
+        </n-form-item>
+        <n-form-item label="显示名">
+          <n-input v-model:value="editUserForm.displayName" placeholder="请输入后台显示名称" />
+        </n-form-item>
+        <n-form-item label="账号状态">
+          <n-select v-model:value="editUserForm.status" :options="userStatusOptions" :disabled="isEditingBuiltInAdmin" placeholder="请选择账号状态" />
+        </n-form-item>
+        <n-form-item label="全局角色">
+          <n-select v-model:value="editUserForm.roles" :options="roleOptions" multiple :disabled="isEditingBuiltInAdmin" placeholder="请选择全局角色" />
+        </n-form-item>
+      </n-form>
+      <template #footer>
+        <n-space justify="end">
+          <n-button @click="showEditUser = false">取消</n-button>
+          <n-button type="primary" :loading="savingUser" @click="submitEditUser">保存</n-button>
+        </n-space>
+      </template>
+    </n-modal>
+
+    <n-modal
       v-model:show="showResetPassword"
       preset="card"
       title="重置密码"
@@ -286,8 +315,10 @@ const savingPermission = ref(false);
 const activeSettingsTab = ref<"branding" | "integration" | "security" | "access">("branding");
 const activeAccessTab = ref<"users" | "permissions">("users");
 const showCreateUser = ref(false);
+const showEditUser = ref(false);
 const showResetPassword = ref(false);
 const showGrantPermission = ref(false);
+const editingUser = ref<AdminUserDto | null>(null);
 const resettingUser = ref<AdminUserDto | null>(null);
 const resetPassword = ref("");
 const defaultBrandIcon = "/favicon.svg";
@@ -297,6 +328,12 @@ const createUserForm = reactive({
   username: "",
   displayName: "",
   password: "",
+  status: "ACTIVE",
+  roles: ["MEETING_ADMIN"] as string[]
+});
+
+const editUserForm = reactive({
+  displayName: "",
   status: "ACTIVE",
   roles: ["MEETING_ADMIN"] as string[]
 });
@@ -332,6 +369,11 @@ const roleOptions = [
   { label: "只读查看", value: "VIEWER" }
 ];
 
+const userStatusOptions = [
+  { label: "启用", value: "ACTIVE" },
+  { label: "停用", value: "DISABLED" }
+];
+
 const meetingPermissionOptions = [
   { label: "会议管理员", value: "MANAGER" },
   { label: "签到", value: "CHECKIN" },
@@ -343,6 +385,7 @@ const roleLabelMap = new Map(roleOptions.map((item) => [item.value, item.label])
 const meetingPermissionLabelMap = new Map(meetingPermissionOptions.map((item) => [item.value, item.label]));
 
 const activeUserCount = computed(() => users.value.filter((user) => isActiveStatus(user.status)).length);
+const isEditingBuiltInAdmin = computed(() => isBuiltInAdmin(editingUser.value));
 
 const authorizedUserCount = computed(() => {
   const userIds = new Set(
@@ -389,10 +432,15 @@ const userColumns: DataTableColumns<AdminUserDto> = [
   {
     title: "操作",
     key: "actions",
-    width: 120,
+    width: 180,
     align: "right",
     render: (row: AdminUserDto) =>
-      h(NButton, { text: true, type: "primary", onClick: () => openResetPassword(row) }, { default: () => "重置密码" })
+      h(NSpace, { justify: "end", size: 12 }, {
+        default: () => [
+          h(NButton, { text: true, type: "primary", onClick: () => openEditUser(row) }, { default: () => "编辑" }),
+          h(NButton, { text: true, type: "primary", onClick: () => openResetPassword(row) }, { default: () => "重置密码" })
+        ]
+      })
   }
 ];
 
@@ -666,6 +714,70 @@ function createUser() {
     .finally(() => {
       savingUser.value = false;
     });
+}
+
+function openEditUser(user: AdminUserDto) {
+  editingUser.value = user;
+  editUserForm.displayName = user.displayName || user.name || user.username;
+  editUserForm.status = normalizeUserStatus(user.status);
+  editUserForm.roles = user.roles?.length ? [...user.roles] : ["MEETING_ADMIN"];
+  showEditUser.value = true;
+}
+
+function submitEditUser() {
+  if (!editingUser.value) {
+    return;
+  }
+  if (!editUserForm.displayName.trim()) {
+    message.warning("请填写显示名");
+    return;
+  }
+  if (!editUserForm.roles.length) {
+    message.warning("请至少选择一个全局角色");
+    return;
+  }
+  if (isBuiltInAdmin(editingUser.value)) {
+    /*
+     * 前端和后端同时保护内置 admin：系统设置权限固定识别该用户名，
+     * 允许改显示名，但不允许停用或移除 SUPER_ADMIN，避免把全局后台入口锁死。
+     */
+    editUserForm.status = "ACTIVE";
+    editUserForm.roles = ensureRole(editUserForm.roles, "SUPER_ADMIN");
+  }
+  savingUser.value = true;
+  void store.updateAdminUser(editingUser.value.id, {
+    /*
+     * 后端当前只允许更新显示名、状态和角色；用户名作为登录标识保持只读，
+     * 避免改名后已有授权、审计日志和当前会话出现难以追踪的身份变更。
+     */
+    displayName: editUserForm.displayName.trim(),
+    status: editUserForm.status,
+    roles: editUserForm.roles
+  })
+    .then(() => {
+      message.success("用户信息已保存");
+      showEditUser.value = false;
+      editingUser.value = null;
+      return loadSecurityData();
+    })
+    .catch((error) => {
+      message.error(error instanceof Error ? error.message : "用户信息保存失败");
+    })
+    .finally(() => {
+      savingUser.value = false;
+    });
+}
+
+function normalizeUserStatus(status?: string) {
+  return isActiveStatus(status) ? "ACTIVE" : "DISABLED";
+}
+
+function isBuiltInAdmin(user?: AdminUserDto | null) {
+  return (user?.username || "").trim().toLocaleLowerCase("en-US") === "admin";
+}
+
+function ensureRole(roles: string[], role: string) {
+  return roles.includes(role) ? roles : [role, ...roles];
 }
 
 function openResetPassword(user: AdminUserDto) {

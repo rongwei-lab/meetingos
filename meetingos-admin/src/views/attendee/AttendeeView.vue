@@ -1,6 +1,6 @@
 <template>
   <div>
-    <page-header title="参会人管理" subtitle="审核报名、处理重复数据、维护标签，并查看座位、住宿、签到状态">
+    <page-header title="参会人管理">
       <n-button
         :loading="batchAuditingStatus === 'APPROVED'"
         :disabled="batchAuditingStatus !== null || !canBatchAuditTo('APPROVED')"
@@ -255,6 +255,7 @@ import { useRouteMeeting } from "@/composables/useRouteMeeting";
 import { useIsMobile } from "@/composables/useResponsive";
 import type { ImportResultDto, TduckFieldMappingDto } from "@/stores/meeting";
 import { useMeetingStore } from "@/stores/meeting";
+import { attendeeFieldLabel, normalizedAttendeeFieldText } from "@/utils/attendeeFields";
 import { attendeeTypeLabel, formatDateLikeValue, formatDateTimeLabel, seatTypeLabel } from "@/utils/meetingDisplay";
 import type { Attendee, AuditStatus } from "@/utils/types";
 
@@ -925,10 +926,13 @@ function fallbackAttendeeFieldValue(row: Attendee, field: string) {
     PHONE: row.phone,
     ORGANIZATION: row.company,
     TITLE: row.title,
+    IDENTITY_NO: row.identityNo,
     EMAIL: row.email,
     ATTENDEE_TYPE: attendeeTypeLabel(row.attendeeType),
+    ACCOMMODATION_REQUIRED: row.accommodationRequired == null ? undefined : (row.accommodationRequired ? "是" : "否"),
     ROOM_NO: row.roomNo,
-    ROOM_REMARK: row.roomRemark
+    ROOM_REMARK: row.roomRemark,
+    REMARK: row.remark
   };
   return values[field] || "";
 }
@@ -941,23 +945,6 @@ function formatFieldValue(value: unknown): string {
   return formatDateLikeValue(String(value));
 }
 
-function attendeeFieldLabel(value: string) {
-  const labels: Record<string, string> = {
-    NAME: "姓名",
-    PHONE: "手机号",
-    ORGANIZATION: "单位",
-    TITLE: "职务",
-    IDENTITY_NO: "证件号",
-    EMAIL: "邮箱",
-    ATTENDEE_TYPE: "参会类型",
-    ACCOMMODATION_REQUIRED: "是否住宿",
-    ROOM_NO: "房间号",
-    ROOM_REMARK: "房间备注",
-    REMARK: "备注"
-  };
-  return labels[value] || value;
-}
-
 function fieldDisplayLabel(mapping: TduckFieldMappingDto) {
   return mapping.tduckFieldLabel || (mapping.attendeeField ? attendeeFieldLabel(mapping.attendeeField) : mapping.tduckFieldKey);
 }
@@ -968,23 +955,42 @@ function fieldKeyOf(mapping: TduckFieldMappingDto) {
 
 function formColumnWidth(mapping: TduckFieldMappingDto) {
   const label = fieldDisplayLabel(mapping);
-  const normalized = `${mapping.attendeeField || ""} ${mapping.tduckFieldKey || ""} ${label}`.toLowerCase();
-  if (mapping.attendeeField === "PHONE" || normalized.includes("phone") || normalized.includes("mobile") || normalized.includes("电话") || normalized.includes("手机")) {
+  const normalized = normalizedAttendeeFieldText({ ...mapping, tduckFieldLabel: label });
+  if (
+    ["PHONE", "EMERGENCY_PHONE"].includes(mapping.attendeeField || "") ||
+    normalized.includes("phone") ||
+    normalized.includes("mobile") ||
+    normalized.includes("电话") ||
+    normalized.includes("手机")
+  ) {
     return 160;
   }
-  if (mapping.attendeeField === "EMAIL" || normalized.includes("email") || normalized.includes("mail") || normalized.includes("邮箱")) {
+  if (
+    ["EMAIL", "INVOICE_EMAIL"].includes(mapping.attendeeField || "") ||
+    normalized.includes("email") ||
+    normalized.includes("mail") ||
+    normalized.includes("邮箱")
+  ) {
     return 220;
   }
+  if (["ADDRESS", "DIETARY_REQUIREMENT", "ARRIVAL_FLIGHT_TRAIN", "DEPARTURE_FLIGHT_TRAIN", "INVOICE_TITLE"].includes(mapping.attendeeField || "")) {
+    return 220;
+  }
+  if (["ARRIVAL_DATE", "DEPARTURE_DATE"].includes(mapping.attendeeField || "") || normalized.includes("date") || normalized.includes("time") || normalized.includes("时间") || normalized.includes("日期")) {
+    return 180;
+  }
   if (mapping.attendeeField === "NAME") return 120;
-  if (normalized.includes("备注") || normalized.includes("需求")) return 180;
+  if (normalized.includes("备注") || normalized.includes("需求") || normalized.includes("地址")) return 180;
   return 150;
 }
 
 function shouldEllipsisFormColumn(mapping: TduckFieldMappingDto) {
-  const normalized = `${mapping.attendeeField || ""} ${mapping.tduckFieldKey || ""} ${fieldDisplayLabel(mapping)}`.toLowerCase();
+  const normalized = normalizedAttendeeFieldText({ ...mapping, tduckFieldLabel: fieldDisplayLabel(mapping) });
   return !(
     mapping.attendeeField === "PHONE" ||
     mapping.attendeeField === "EMAIL" ||
+    mapping.attendeeField === "EMERGENCY_PHONE" ||
+    mapping.attendeeField === "INVOICE_EMAIL" ||
     normalized.includes("phone") ||
     normalized.includes("mobile") ||
     normalized.includes("电话") ||

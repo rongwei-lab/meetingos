@@ -6,6 +6,8 @@ import jakarta.servlet.http.HttpServletRequest;
 import org.aspectj.lang.ProceedingJoinPoint;
 import org.aspectj.lang.annotation.Around;
 import org.aspectj.lang.annotation.Aspect;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.http.ResponseEntity;
 import org.springframework.stereotype.Component;
 import org.springframework.web.context.request.RequestContextHolder;
@@ -20,6 +22,8 @@ import java.util.Map;
 @Aspect
 @Component
 public class AuditLogAspect {
+
+    private static final Logger log = LoggerFactory.getLogger(AuditLogAspect.class);
 
     private final OperationLogService operationLogService;
 
@@ -42,12 +46,25 @@ public class AuditLogAspect {
         try {
             Object result = joinPoint.proceed();
             details.put("result", summarizeResult(result));
-            operationLogService.record(auditLog.action(), auditLog.targetType(), true, "OK", request, details);
+            safeRecord(auditLog.action(), auditLog.targetType(), true, "OK", request, details);
             return result;
         } catch (Throwable ex) {
             details.put("exceptionType", ex.getClass().getName());
-            operationLogService.record(auditLog.action(), auditLog.targetType(), false, ex.getMessage(), request, details);
+            safeRecord(auditLog.action(), auditLog.targetType(), false, ex.getMessage(), request, details);
             throw ex;
+        }
+    }
+
+    private void safeRecord(String action, String targetType, boolean success, String message,
+                            HttpServletRequest request, Map<String, Object> details) {
+        try {
+            operationLogService.record(action, targetType, success, message, request, details);
+        } catch (RuntimeException logException) {
+            /*
+             * 审计日志是旁路能力，不能因为消息过长、JSON 序列化或数据库暂时异常覆盖真实业务结果。
+             * 这里记录 warn 后继续抛出原始业务异常，前端才能拿到准确的错误提示。
+             */
+            log.warn("Operation audit log recording failed for action={}", action, logException);
         }
     }
 

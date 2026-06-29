@@ -13,7 +13,7 @@
 
       <nav class="nav-list">
         <button
-          v-for="item in navItems"
+          v-for="item in visibleNavItems"
           :key="item.key"
           class="nav-item"
           :class="{ active: isNavActive(item) }"
@@ -152,7 +152,7 @@
 
         <nav class="mobile-nav-list" aria-label="手机端后台导航">
           <button
-            v-for="item in navItems"
+            v-for="item in visibleNavItems"
             :key="item.key"
             class="mobile-nav-item"
             :class="{ active: isNavActive(item) }"
@@ -230,6 +230,7 @@ interface NavItem {
   routeName: RouteRecordName;
   scope: "global" | "meeting";
   badge?: number;
+  systemAdminOnly?: boolean;
 }
 
 const navItems: NavItem[] = [
@@ -241,7 +242,7 @@ const navItems: NavItem[] = [
   { key: "detail", label: "查询设置", routeName: "meeting-detail", scope: "meeting", icon: SettingsOutline },
   { key: "statistics", label: "数据统计", routeName: "meeting-statistics", scope: "meeting", icon: BarChartOutline },
   { key: "exports", label: "数据导出", routeName: "meeting-exports", scope: "meeting", icon: DownloadOutline },
-  { key: "logs", label: "操作日志", routeName: "meeting-logs", scope: "meeting", icon: ListOutline }
+  { key: "logs", label: "操作日志", routeName: "meeting-logs", scope: "meeting", icon: ListOutline, systemAdminOnly: true }
 ];
 
 interface SearchResult {
@@ -255,7 +256,7 @@ interface SearchResult {
 const currentTitle = computed(() => {
   if (route.name === "meetings") return "会议工作台";
   if (route.path.startsWith("/settings")) return "系统设置";
-  return navItems.find((item) => item.routeName === route.name)?.label || "会议管理系统";
+  return visibleNavItems.value.find((item) => item.routeName === route.name)?.label || "会议管理系统";
 });
 
 const userInitial = computed(() => auth.user.name?.trim().slice(0, 1) || "管");
@@ -264,6 +265,13 @@ const showSidebar = computed(() => route.name !== "meetings");
 const branding = computed(() => meetingStore.branding);
 const brandInitial = computed(() => branding.value.brandName?.trim().slice(0, 1) || "M");
 const isMobile = useIsMobile();
+
+const visibleNavItems = computed(() =>
+  navItems.filter((item) => {
+    if (!item.systemAdminOnly) return true;
+    return auth.canAccessSystemSettings;
+  })
+);
 
 watch(
   () => route.fullPath,
@@ -284,7 +292,7 @@ const searchResults = computed<SearchResult[]>(() => {
   const normalizedKeyword = normalizeSearchText(keyword);
 
   // 顶部全局搜索只基于当前前端已有数据生成入口，避免为了搜索框额外触发跨模块后端请求。
-  const menuResults = navItems
+  const menuResults = visibleNavItems.value
     .filter((item) => matchesKeyword(normalizedKeyword, item.label, navPath(item)))
     .slice(0, 4)
     .map((item) => ({
@@ -414,6 +422,11 @@ function pushNavTarget(targetPath: string, push: () => ReturnType<typeof router.
 }
 
 function navigateNav(item: NavItem) {
+  if (item.systemAdminOnly && !auth.canAccessSystemSettings) {
+    mobileNavVisible.value = false;
+    return;
+  }
+
   const targetPath = navPath(item);
   if (targetPath === route.path) {
     mobileNavVisible.value = false;

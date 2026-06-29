@@ -85,8 +85,10 @@ interface AttendeeDto {
   phone: string;
   organization?: string;
   title?: string;
+  identityNo?: string;
   email?: string;
   attendeeType?: Attendee["attendeeType"];
+  accommodationRequired?: boolean;
   tags?: string;
   reviewStatus?: Attendee["auditStatus"];
   reviewReason?: string;
@@ -94,6 +96,7 @@ interface AttendeeDto {
   registeredAt?: string;
   roomNo?: string;
   roomRemark?: string;
+  remark?: string;
   seatQueried?: boolean;
   roomQueried?: boolean;
   checkinStatus?: Attendee["checkinStatus"];
@@ -119,6 +122,7 @@ interface SeatViewDto {
 }
 
 export interface SeatLayoutPayload {
+  originalAreaName?: string;
   areaName: string;
   rowCount: number;
   seatsPerRow: number;
@@ -318,6 +322,11 @@ export interface TduckSyncResultDto {
   message?: string;
 }
 
+export interface TduckBrowserSessionDto {
+  token: string;
+  userInfo: Record<string, unknown>;
+}
+
 export interface StatisticsTrendPoint {
   date: string;
   count: number;
@@ -403,6 +412,12 @@ export interface CreateAdminUserPayload {
   username: string;
   displayName: string;
   password: string;
+  status: string;
+  roles: string[];
+}
+
+export interface UpdateAdminUserPayload {
+  displayName: string;
   status: string;
   roles: string[];
 }
@@ -513,10 +528,20 @@ function blankToUndefined(value?: string) {
   return text || undefined;
 }
 
+function localMeetingCode() {
+  const date = new Date();
+  const datePart = [
+    date.getFullYear(),
+    String(date.getMonth() + 1).padStart(2, "0"),
+    String(date.getDate()).padStart(2, "0")
+  ].join("");
+  return `MEET${datePart}-${Date.now().toString(36).slice(-6).toUpperCase()}`;
+}
+
 function meetingRequestFrom(meeting: Partial<Meeting>, fallback?: Meeting) {
   const venue = blankToUndefined(meeting.venue ?? fallback?.venue);
   return {
-    code: meeting.code || fallback?.code || `MEET-${Date.now().toString().slice(-5)}`,
+    code: blankToUndefined(meeting.code ?? fallback?.code),
     name: meeting.name || fallback?.name || "新会议",
     organizer: meeting.organizer || fallback?.organizer || "主办方",
     coOrganizer: blankToUndefined(meeting.coOrganizer ?? fallback?.coOrganizer),
@@ -1130,12 +1155,14 @@ export const useMeetingStore = defineStore("meeting", {
       const meeting = this.currentMeeting;
       const meetingId = requireMeetingId(this.currentMeetingId);
       const areaName = payload.areaName.trim() || "A区";
+      const originalAreaName = payload.originalAreaName?.trim() || undefined;
       const rowCount = Math.max(1, Math.floor(payload.rowCount));
       const seatsPerRow = Math.max(1, Math.floor(payload.seatsPerRow));
       try {
         await http.post("/admin/seating/layouts", {
           meetingId: backendId(meetingId),
           venueName: payload.venueName?.trim() || meeting?.venue || "主会场",
+          originalAreaName,
           areaName,
           rowCount,
           seatsPerRow,
@@ -1148,7 +1175,7 @@ export const useMeetingStore = defineStore("meeting", {
         await Promise.allSettled([this.loadSeats(meetingId), this.loadStatistics(meetingId)]);
       } catch (error) {
         if (!canUseDemoFallback(error)) throw error;
-        this.saveSeatLayoutLocally({ areaName, rowCount, seatsPerRow, sortOrder: payload.sortOrder, venueName: payload.venueName, defaultSeatType: payload.defaultSeatType });
+        this.saveSeatLayoutLocally({ originalAreaName, areaName, rowCount, seatsPerRow, sortOrder: payload.sortOrder, venueName: payload.venueName, defaultSeatType: payload.defaultSeatType });
       }
       this.reconcileAssignments();
       this.refreshMeetingCounters();
@@ -1264,7 +1291,7 @@ export const useMeetingStore = defineStore("meeting", {
         if (!canUseDemoFallback(error)) throw new Error(extractErrorMessage(error, "会议创建失败"));
         const meeting: Meeting = {
           id: `m-${Date.now()}`,
-          code: request.code,
+          code: request.code || localMeetingCode(),
           name: request.name,
           organizer: request.organizer,
           venue: request.venueName || "",
@@ -1302,7 +1329,7 @@ export const useMeetingStore = defineStore("meeting", {
         // 与项目已有 demo fallback 行为保持一致，避免开发环境编辑弹窗保存后直接报错。
         const meeting: Meeting = {
           ...current,
-          code: request.code,
+          code: current.code || request.code || localMeetingCode(),
           name: request.name,
           organizer: request.organizer,
           coOrganizer: request.coOrganizer,
@@ -1383,6 +1410,15 @@ export const useMeetingStore = defineStore("meeting", {
       );
       return forms;
     },
+    async createTduckForm(meetingId?: string, formName?: string) {
+      const targetMeetingId = requireMeetingId(meetingId || this.currentMeetingId);
+      return unwrapApi(
+        await http.post<TduckFormOptionDto>("/admin/tduck/forms", {
+          meetingId: backendId(targetMeetingId),
+          formName
+        })
+      );
+    },
     async bindTduckForm(
       formKey: string,
       options: { replaceExisting?: boolean; confirmMeetingCode?: string; changeReason?: string } = {}
@@ -1421,6 +1457,14 @@ export const useMeetingStore = defineStore("meeting", {
         }
         throw error;
       }
+    },
+    async loadTduckBrowserSession(meetingId?: string) {
+      const targetMeetingId = requireMeetingId(meetingId || this.currentMeetingId);
+      return unwrapApi(
+        await http.get<TduckBrowserSessionDto>("/admin/tduck/browser-session", {
+          params: { meetingId: backendId(targetMeetingId) }
+        })
+      );
     },
     async syncTduckFields(meetingId?: string) {
       meetingId = requireMeetingId(meetingId || this.currentMeetingId);
@@ -1836,6 +1880,10 @@ export const useMeetingStore = defineStore("meeting", {
       const user = unwrapApi(await http.post<AdminUserDto>("/admin/users", payload));
       return user;
     },
+    async updateAdminUser(userId: string | number, payload: UpdateAdminUserPayload) {
+      const user = unwrapApi(await http.put<AdminUserDto>(`/admin/users/${backendId(idOf(userId))}`, payload));
+      return user;
+    },
     async resetAdminUserPassword(userId: string | number, password: string) {
       return unwrapApi(await http.post<AdminUserDto>(`/admin/users/${backendId(idOf(userId))}/reset-password`, { password }));
     },
@@ -2050,16 +2098,37 @@ export const useMeetingStore = defineStore("meeting", {
     },
     saveSeatLayoutLocally(payload: SeatLayoutPayload) {
       const meetingId = this.currentMeetingId;
+      const nextAreaName = payload.areaName.trim() || "A区";
+      const lookupAreaName = payload.originalAreaName?.trim() || nextAreaName;
+      const renamed = lookupAreaName !== nextAreaName;
       const rowCount = Math.max(1, Math.floor(payload.rowCount));
       const seatsPerRow = Math.max(1, Math.floor(payload.seatsPerRow));
-      const areaSeats = this.seats.filter((seat) => seat.meetingId === meetingId && seat.areaName === payload.areaName);
+      const nextSeatType = payload.defaultSeatType || "NORMAL";
+      const areaSeats = this.seats.filter((seat) => seat.meetingId === meetingId && seat.areaName === lookupAreaName);
+      if (renamed && this.seats.some((seat) => seat.meetingId === meetingId && seat.areaName === nextAreaName)) {
+        throw new Error("区域名称已存在，请换一个名称");
+      }
       const removable = areaSeats.filter((seat) => seat.rowNo > rowCount || seat.seatNo > seatsPerRow);
       if (removable.some((seat) => seat.locked || seat.attendeeId || seat.status === "ASSIGNED" || seat.status === "CHECKED_IN")) {
         throw new Error("缩小座位数量会删除已分配或锁定座位，请先清空这些座位后再调整");
       }
 
-      this.seats = this.seats.filter((seat) => !(seat.meetingId === meetingId && seat.areaName === payload.areaName && (seat.rowNo > rowCount || seat.seatNo > seatsPerRow)));
-      const existingKeys = new Set(this.seats.filter((seat) => seat.meetingId === meetingId && seat.areaName === payload.areaName).map((seat) => `${seat.rowNo}-${seat.seatNo}`));
+      // 本地演示模式也按“原区域名 -> 新区域名”处理，保证改名不会误建第二个区域。
+      this.seats = this.seats
+        .filter((seat) => !(seat.meetingId === meetingId && seat.areaName === lookupAreaName && (seat.rowNo > rowCount || seat.seatNo > seatsPerRow)))
+        .map((seat) =>
+          seat.meetingId === meetingId && seat.areaName === lookupAreaName
+            ? {
+                ...seat,
+                areaName: nextAreaName,
+                areaSortOrder: payload.sortOrder,
+                seatCode: `${nextAreaName}-${seat.rowNo}-${seat.seatNo}`,
+                // 布局弹窗的默认座位类型是区域级批量设置，保存后旧座位也要同步更新。
+                seatType: nextSeatType
+              }
+            : seat
+        );
+      const existingKeys = new Set(this.seats.filter((seat) => seat.meetingId === meetingId && seat.areaName === nextAreaName).map((seat) => `${seat.rowNo}-${seat.seatNo}`));
       for (let rowNo = 1; rowNo <= rowCount; rowNo++) {
         for (let seatNo = 1; seatNo <= seatsPerRow; seatNo++) {
           const key = `${rowNo}-${seatNo}`;
@@ -2067,11 +2136,12 @@ export const useMeetingStore = defineStore("meeting", {
           this.seats.push({
             id: `local-seat-${Date.now()}-${rowNo}-${seatNo}`,
             meetingId,
-            areaName: payload.areaName,
+            areaName: nextAreaName,
             areaSortOrder: payload.sortOrder,
             rowNo,
             seatNo,
-            seatType: payload.defaultSeatType || "NORMAL",
+            seatCode: `${nextAreaName}-${rowNo}-${seatNo}`,
+            seatType: nextSeatType,
             status: "EMPTY",
             locked: false
           });
@@ -2207,8 +2277,11 @@ function mapAttendee(item: AttendeeDto, meetingId: string): Attendee {
     phone: item.phone,
     company: item.organization || "",
     title: item.title || "",
+    identityNo: item.identityNo,
     email: item.email,
     attendeeType: item.attendeeType || "NORMAL",
+    accommodationRequired: item.accommodationRequired,
+    remark: item.remark,
     tags: splitTags(item.tags),
     auditStatus: item.reviewStatus || "PENDING",
     auditReason: item.reviewReason,
@@ -2232,6 +2305,7 @@ function mapSeat(item: SeatViewDto, meetingId: string): Seat {
     areaSortOrder: item.areaSortOrder,
     rowNo: item.rowNo,
     seatNo: item.seatNo,
+    seatCode: item.seatCode,
     seatType: item.seatType,
     status: item.status,
     locked: item.locked,

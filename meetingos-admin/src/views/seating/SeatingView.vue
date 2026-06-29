@@ -1,9 +1,6 @@
 <template>
   <div class="seating-page">
-    <page-header
-      title="座位管理"
-      :subtitle="`${store.currentMeeting?.name || '当前会议'} · ${store.currentMeeting?.venue || '主会场'} · 点击座位可分配参会人`"
-    >
+    <page-header title="座位管理">
       <n-button secondary size="large" @click="openLayoutModal">
         <template #icon><n-icon :component="SettingsOutline" /></template>
         布局配置
@@ -132,7 +129,6 @@
                     v-model:value="draft.areaName"
                     class="layout-area-name-input"
                     placeholder="区域名称"
-                    :readonly="draft.persisted"
                   />
                 </div>
                 <div class="layout-area-meta">
@@ -386,6 +382,7 @@ import type { ExportFormat } from "@/utils/exportSeating";
 
 interface LayoutAreaDraft {
   uid: string;
+  originalAreaName?: string;
   areaName: string;
   rowCount: number;
   seatsPerRow: number;
@@ -913,6 +910,7 @@ function addLayoutArea() {
   const index = layoutDrafts.value.length;
   layoutDrafts.value.push({
     uid: `new-${Date.now()}-${index}`,
+    originalAreaName: undefined,
     areaName: nextAreaName(),
     rowCount: 8,
     seatsPerRow: 10,
@@ -928,28 +926,29 @@ function requestRemoveLayoutArea(draft: LayoutAreaDraft) {
     return;
   }
 
-  const occupiedSeats = seatsForArea(draft.areaName).filter((seat) => seat.attendeeId || seat.status === "ASSIGNED" || seat.status === "CHECKED_IN");
+  const lookupName = areaLookupName(draft);
+  const occupiedSeats = seatsForDraft(draft).filter((seat) => seat.attendeeId || seat.status === "ASSIGNED" || seat.status === "CHECKED_IN");
   if (occupiedSeats.length) {
     dialog.warning({
       title: "该区域已有人员入座",
-      content: `${draft.areaName} 当前有 ${occupiedSeats.length} 个已分配或已签到座位。请先解除座位分配后再删除该区域。`,
+      content: `${lookupName} 当前有 ${occupiedSeats.length} 个已分配或已签到座位。请先解除座位分配后再删除该区域。`,
       positiveText: "知道了"
     });
     return;
   }
 
   dialog.warning({
-    title: `删除 ${draft.areaName}`,
+    title: `删除 ${lookupName}`,
     content: `该区域暂无人员入座。删除后会移除 ${layoutAreaSeatCount(draft)} 个座位，此操作会写入当前会议数据。`,
     positiveText: "删除区域",
     negativeText: "取消",
     onPositiveClick: () => {
       deletingAreaUid.value = draft.uid;
       void store
-        .deleteSeatArea(draft.areaName)
+        .deleteSeatArea(lookupName)
         .then(() => {
-          message.success(`已删除 ${draft.areaName}`);
-          if (activeArea.value === draft.areaName) activeArea.value = "ALL";
+          message.success(`已删除 ${lookupName}`);
+          if (activeArea.value === lookupName) activeArea.value = "ALL";
           syncLayoutDraftsFromSeats();
           void nextTick(fitSeatBoardToWidth);
         })
@@ -971,13 +970,25 @@ function seatsForArea(areaName: string) {
   return store.currentSeats.filter((seat) => seat.areaName === areaName);
 }
 
+function areaLookupName(draft: LayoutAreaDraft) {
+  /*
+   * 已保存区域允许改名。保存前，页面上的输入值已经是“新名称”，
+   * 但占用统计、缩容保护和删除确认都必须继续按原区域名查当前座位。
+   */
+  return draft.originalAreaName?.trim() || draft.areaName.trim();
+}
+
+function seatsForDraft(draft: LayoutAreaDraft) {
+  return seatsForArea(areaLookupName(draft));
+}
+
 function isProtectedSeat(seat: Seat) {
   return Boolean(seat.locked || seat.attendeeId || seat.status === "ASSIGNED" || seat.status === "CHECKED_IN");
 }
 
 function layoutAreaOccupancySummary(draft: LayoutAreaDraft) {
   if (!draft.persisted) return "新区域";
-  const areaSeats = seatsForArea(draft.areaName);
+  const areaSeats = seatsForDraft(draft);
   const assigned = areaSeats.filter((seat) => seat.status === "ASSIGNED" || seat.status === "CHECKED_IN").length;
   const locked = areaSeats.filter((seat) => seat.locked).length;
   if (!assigned && !locked) return "未入座";
@@ -988,7 +999,7 @@ function seatsRemovedByDraft(draft: LayoutAreaDraft) {
   if (!draft.persisted) return [];
   const nextRows = Math.max(1, Math.floor(draft.rowCount || 1));
   const nextSeatsPerRow = Math.max(1, Math.floor(draft.seatsPerRow || 1));
-  return seatsForArea(draft.areaName).filter((seat) => seat.rowNo > nextRows || seat.seatNo > nextSeatsPerRow);
+  return seatsForDraft(draft).filter((seat) => seat.rowNo > nextRows || seat.seatNo > nextSeatsPerRow);
 }
 
 function formatSeatList(seats: Seat[]) {
@@ -1011,6 +1022,7 @@ function nextAreaName() {
 function normalizeLayoutDrafts() {
   const normalized = layoutDrafts.value.map((draft) => ({
     ...draft,
+    originalAreaName: draft.originalAreaName?.trim() || undefined,
     areaName: draft.areaName.trim(),
     rowCount: Math.max(1, Math.floor(draft.rowCount || 1)),
     seatsPerRow: Math.max(1, Math.floor(draft.seatsPerRow || 1))
@@ -1062,6 +1074,7 @@ function persistLayouts(drafts: LayoutAreaDraft[]) {
   void Promise.all(
     drafts.map((draft, index) =>
       store.saveSeatLayout({
+        originalAreaName: draft.originalAreaName,
         areaName: draft.areaName,
         rowCount: draft.rowCount,
         seatsPerRow: draft.seatsPerRow,
@@ -1138,6 +1151,7 @@ function syncLayoutDraftsFromSeats() {
     const firstSeat = area.seats.find((seat) => seat.seatType !== "DISABLED") || area.seats[0];
     return {
       uid: `area-${area.name}`,
+      originalAreaName: area.name,
       areaName: area.name,
       rowCount: area.rowCount,
       seatsPerRow: area.seatsPerRow,
