@@ -215,6 +215,9 @@ services:
     environment:
       TZ: ${TZ:-Asia/Shanghai}
       JAVA_OPTS: ${TDUCK_JAVA_OPTS:--Duser.language=zh -XX:+UseG1GC}
+      # TDuck 官方镜像入口是 `java -jar application.jar`，不会主动展开 JAVA_OPTS。
+      # JAVA_TOOL_OPTIONS 会被 JVM 自动读取，用于在不改 vendor 镜像入口的情况下限制内存。
+      JAVA_TOOL_OPTIONS: ${TDUCK_JAVA_TOOL_OPTIONS:--Duser.language=zh -Duser.timezone=Asia/Shanghai -XX:+UseG1GC -Xms256m -Xmx768m}
       # TDuck 后端是 Spring Boot 2.x，使用 relaxed binding 覆盖 application-prod.yml。
       # 当前版本只强依赖 MySQL；Redis 主要供 TDuck 使用，MeetingOS 仅保留多副本限流预留配置。
       spring.datasource.url: jdbc:mysql://mysql:3306/${TDUCK_MYSQL_DATABASE:-tduck}?useSSL=false&useUnicode=true&characterEncoding=utf8&serverTimezone=UTC&tinyInt1isBit=false&allowPublicKeyRetrieval=true

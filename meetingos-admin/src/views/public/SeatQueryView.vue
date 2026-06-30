@@ -48,7 +48,7 @@
         :notice="settings?.seatNotice"
       />
       <public-result-checkin-action
-        v-if="result && resultRows.length"
+        v-if="result && resultRows.length && settings?.checkinEnabled"
         :settings="settings"
         :meeting-id="queryMeetingId"
         :meeting-code="queryMeetingCode || null"

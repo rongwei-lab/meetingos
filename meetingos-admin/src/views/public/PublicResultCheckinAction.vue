@@ -1,31 +1,25 @@
 <template>
-  <section v-if="settings" class="result-checkin-action">
-    <n-alert v-if="!settings.checkinEnabled" type="warning" :bordered="false">
-      签到尚未开放
+  <section v-if="settings?.checkinEnabled" class="result-checkin-action">
+    <n-alert v-if="result" :type="resultAlertType" :bordered="false" class="result-checkin-message">
+      <div class="result-checkin-message-body">
+        <strong>{{ resultTitle }}</strong>
+        <span>{{ resultMessage }}</span>
+        <span v-if="result.checkedInAt">签到时间：{{ formatDateTimeSecondLabel(result.checkedInAt) }}</span>
+      </div>
     </n-alert>
 
     <template v-else>
-      <n-alert v-if="result" :type="resultAlertType" :bordered="false" class="result-checkin-message">
-        <div class="result-checkin-message-body">
-          <strong>{{ resultTitle }}</strong>
-          <span>{{ resultMessage }}</span>
-          <span v-if="result.checkedInAt">签到时间：{{ formatDateTimeSecondLabel(result.checkedInAt) }}</span>
+      <div v-if="settings.captchaEnabled" class="result-checkin-captcha">
+        <span>{{ captchaQuestion || "验证码" }}</span>
+        <div class="captcha-row">
+          <n-input v-model:value="captchaAnswer" placeholder="请输入计算结果" />
+          <n-button secondary :loading="captchaLoading" @click="loadCaptcha">刷新</n-button>
         </div>
-      </n-alert>
+      </div>
 
-      <template v-else>
-        <div v-if="settings.captchaEnabled" class="result-checkin-captcha">
-          <span>{{ captchaQuestion || "验证码" }}</span>
-          <div class="captcha-row">
-            <n-input v-model:value="captchaAnswer" placeholder="请输入计算结果" />
-            <n-button secondary :loading="captchaLoading" @click="loadCaptcha">刷新</n-button>
-          </div>
-        </div>
-
-        <n-button type="primary" block :color="settings.themeColor" :loading="loading" @click="submitCheckin">
-          立即签到
-        </n-button>
-      </template>
+      <n-button type="primary" block :color="settings.themeColor" :loading="loading" @click="submitCheckin">
+        立即签到
+      </n-button>
     </template>
   </section>
 </template>

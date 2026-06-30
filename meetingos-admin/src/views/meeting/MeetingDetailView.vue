@@ -94,7 +94,7 @@
                         </n-tag>
                       </div>
                       <div class="status-row">
-                        <span>签到</span>
+                        <span>查询后签到</span>
                         <n-tag size="small" :type="queryForm.checkinEnabled ? 'success' : 'default'">
                           {{ queryForm.checkinEnabled ? "已开放" : "未开放" }}
                         </n-tag>
@@ -115,7 +115,7 @@
                   <section class="settings-panel">
                     <div class="section-heading">
                       <strong>开放范围</strong>
-                      <span>分别控制公开入口是否可用</span>
+                      <span>分别控制公开入口和查询后签到按钮是否可用</span>
                     </div>
                     <div class="toggle-list">
                       <div class="toggle-row">
@@ -141,8 +141,8 @@
                       </div>
                       <div class="toggle-row">
                         <div>
-                          <strong>签到</strong>
-                          <span>参会人自助签到</span>
+                          <strong>查询后签到按钮</strong>
+                          <span>座位查询成功后显示“立即签到”，关闭后不展示并拦截自助签到</span>
                         </div>
                         <n-switch v-model:value="queryForm.checkinEnabled" />
                       </div>
@@ -839,7 +839,7 @@ const publicQueryLinks = computed<PublicQueryLink[]>(() => {
       key: "checkin" as const,
       label: "签到入口",
       shortLabel: "签到",
-      description: "参会人可通过 H5 页面自助签到，适合现场入口扫码使用。",
+      description: "独立自助签到入口，受查询后签到开关控制，适合现场入口扫码使用。",
       url: `${window.location.origin}/public/checkin?${query}`
     }
   ].map((item) => ({

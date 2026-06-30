@@ -21,4 +21,4 @@ fi
 docker build \
   -f "$ROOT_DIR/deploy/tduck-front/Dockerfile" \
   -t "$TDUCK_FRONTEND_IMAGE" \
-  "$TDUCK_FRONT_DIR"
+  "$ROOT_DIR"
