@@ -13,6 +13,8 @@ public interface DinnerAssignmentRepository extends JpaRepository<DinnerAssignme
 
     Optional<DinnerAssignment> findByAttendeeId(Long attendeeId);
 
+    boolean existsByAttendeeId(Long attendeeId);
+
     long countByMeetingIdAndTableNo(Long meetingId, String tableNo);
 
     void deleteByAttendeeId(Long attendeeId);

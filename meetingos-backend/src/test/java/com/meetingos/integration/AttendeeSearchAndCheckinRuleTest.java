@@ -1,15 +1,23 @@
 package com.meetingos.integration;
 
 import com.meetingos.attendee.AttendeeRepository;
+import com.meetingos.attendee.ReviewRequest;
 import com.meetingos.attendee.AttendeeService;
 import com.meetingos.attendee.ReviewStatus;
 import com.meetingos.checkin.CheckinRequest;
 import com.meetingos.checkin.CheckinService;
 import com.meetingos.checkin.CheckinType;
 import com.meetingos.common.BusinessException;
+import com.meetingos.dinner.DinnerAssignRequest;
+import com.meetingos.dinner.DinnerService;
 import com.meetingos.seating.ManualAssignSeatRequest;
 import com.meetingos.seating.SeatRepository;
 import com.meetingos.seating.SeatingService;
+import com.meetingos.room.AssignRoomRequest;
+import com.meetingos.room.RoomRequest;
+import com.meetingos.room.RoomRepository;
+import com.meetingos.room.RoomService;
+import com.meetingos.room.RoomStatus;
 import com.meetingos.tduck.SyncStatus;
 import com.meetingos.tduck.TduckManualSyncRequest;
 import com.meetingos.tduck.TduckClient;
@@ -17,6 +25,10 @@ import com.meetingos.tduck.TduckFormDetails;
 import com.meetingos.tduck.TduckService;
 import com.meetingos.meeting.MeetingRepository;
 import com.meetingos.meeting.MeetingStatus;
+import com.meetingos.publicapi.PublicQueryHistoryRepository;
+import com.meetingos.publicapi.PublicQueryHistoryService;
+import com.meetingos.publicapi.PublicQueryField;
+import com.meetingos.publicapi.PublicQueryType;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -32,6 +44,7 @@ import static org.mockito.Mockito.lenient;
 
 import java.util.Map;
 import java.util.Optional;
+import java.util.List;
 
 @SpringBootTest
 @ActiveProfiles("test")
@@ -55,10 +68,25 @@ class AttendeeSearchAndCheckinRuleTest {
     private SeatRepository seatRepository;
 
     @Autowired
+    private RoomService roomService;
+
+    @Autowired
+    private RoomRepository roomRepository;
+
+    @Autowired
+    private DinnerService dinnerService;
+
+    @Autowired
     private TduckService tduckService;
 
     @Autowired
     private MeetingRepository meetingRepository;
+
+    @Autowired
+    private PublicQueryHistoryRepository publicQueryHistoryRepository;
+
+    @Autowired
+    private PublicQueryHistoryService publicQueryHistoryService;
 
     @MockBean
     private TduckClient tduckClient;
@@ -110,6 +138,89 @@ class AttendeeSearchAndCheckinRuleTest {
                 .extracting("phone")
                 .contains("13800000002")
                 .doesNotContain("13800000001");
+    }
+
+    @Test
+    void reviewedAttendeeWithPublicQueryHistoryCannotBeRejected() {
+        var attendee = attendeeRepository.findById(1L).orElseThrow();
+        publicQueryHistoryService.recordSuccess(
+                attendee.getMeeting(),
+                PublicQueryType.SEAT,
+                Map.of(PublicQueryField.PHONE, attendee.getPhone(), PublicQueryField.NAME, attendee.getName()),
+                attendee,
+                "A区 1排1座",
+                "127.0.0.1",
+                "integration-test"
+        );
+
+        assertThat(publicQueryHistoryRepository.existsByAttendeeIdAndQueryTypeIn(1L, List.of(PublicQueryType.SEAT))).isTrue();
+        assertThatThrownBy(() -> attendeeService.review(1L, new ReviewRequest(ReviewStatus.REJECTED, "资料不完整", null, null)))
+                .isInstanceOf(BusinessException.class)
+                .hasMessageContaining("已有查询记录，不能拒绝");
+    }
+
+    @Test
+    void batchRejectStopsWhenSelectedAttendeeHasPublicQueryHistory() {
+        var attendee = attendeeRepository.findById(1L).orElseThrow();
+        publicQueryHistoryService.recordSuccess(
+                attendee.getMeeting(),
+                PublicQueryType.ROOM,
+                Map.of(PublicQueryField.PHONE, attendee.getPhone(), PublicQueryField.NAME, attendee.getName()),
+                attendee,
+                "1801",
+                "127.0.0.1",
+                "integration-test"
+        );
+
+        assertThatThrownBy(() -> attendeeService.batchReview(new ReviewRequest(ReviewStatus.REJECTED, "批量拒绝", null, List.of(1L, 2L))))
+                .isInstanceOf(BusinessException.class)
+                .hasMessageContaining("已有查询记录，不能拒绝");
+        assertThat(attendeeRepository.findById(1L).orElseThrow().getReviewStatus()).isEqualTo(ReviewStatus.APPROVED);
+        assertThat(attendeeRepository.findById(2L).orElseThrow().getReviewStatus()).isEqualTo(ReviewStatus.APPROVED);
+    }
+
+    @Test
+    void reviewedAttendeeWithSeatAssignmentCannotBeRejected() {
+        Long seatId = seatRepository.findByMeetingIdOrderByRowNoAscSeatNoAsc(1L).get(0).getId();
+        seatingService.manualAssign(new ManualAssignSeatRequest(1L, seatId));
+
+        assertThatThrownBy(() -> attendeeService.review(1L, new ReviewRequest(ReviewStatus.REJECTED, "资料不完整", null, null)))
+                .isInstanceOf(BusinessException.class)
+                .hasMessageContaining("已分配座位，不能拒绝");
+        assertThat(attendeeRepository.findById(1L).orElseThrow().getReviewStatus()).isEqualTo(ReviewStatus.APPROVED);
+    }
+
+    @Test
+    void reviewedAttendeeWithRoomAssignmentCannotBeRejected() {
+        ensureRoom("1801");
+        roomService.assign(new AssignRoomRequest(1L, "1801", "拒绝规则测试"));
+
+        assertThatThrownBy(() -> attendeeService.review(1L, new ReviewRequest(ReviewStatus.REJECTED, "资料不完整", null, null)))
+                .isInstanceOf(BusinessException.class)
+                .hasMessageContaining("已分配住宿，不能拒绝");
+        assertThat(attendeeRepository.findById(1L).orElseThrow().getReviewStatus()).isEqualTo(ReviewStatus.APPROVED);
+    }
+
+    @Test
+    void reviewedAttendeeWithDinnerAssignmentCannotBeRejected() {
+        dinnerService.assign(new DinnerAssignRequest(1L, "A1", "拒绝规则测试"));
+
+        assertThatThrownBy(() -> attendeeService.review(1L, new ReviewRequest(ReviewStatus.REJECTED, "资料不完整", null, null)))
+                .isInstanceOf(BusinessException.class)
+                .hasMessageContaining("已分配晚宴，不能拒绝");
+        assertThat(attendeeRepository.findById(1L).orElseThrow().getReviewStatus()).isEqualTo(ReviewStatus.APPROVED);
+    }
+
+    @Test
+    void batchRejectStopsWhenSelectedAttendeeHasAssignedResource() {
+        ensureRoom("1802");
+        roomService.assign(new AssignRoomRequest(1L, "1802", "批量拒绝规则测试"));
+
+        assertThatThrownBy(() -> attendeeService.batchReview(new ReviewRequest(ReviewStatus.REJECTED, "批量拒绝", null, List.of(1L, 2L))))
+                .isInstanceOf(BusinessException.class)
+                .hasMessageContaining("已分配住宿，不能拒绝");
+        assertThat(attendeeRepository.findById(1L).orElseThrow().getReviewStatus()).isEqualTo(ReviewStatus.APPROVED);
+        assertThat(attendeeRepository.findById(2L).orElseThrow().getReviewStatus()).isEqualTo(ReviewStatus.APPROVED);
     }
 
     @Test
@@ -184,5 +295,12 @@ class AttendeeSearchAndCheckinRuleTest {
         assertThat(closedInfo.open()).isFalse();
         assertThat(closedInfo.registrationUrl()).isNull();
         assertThat(closedInfo.message()).contains("不在报名开放状态");
+    }
+
+    private void ensureRoom(String roomNo) {
+        if (roomRepository.findByMeetingIdAndRoomNo(1L, roomNo).isPresent()) {
+            return;
+        }
+        roomService.create(new RoomRequest(1L, roomNo, "双床房", "北京会议中心酒店", "14:00 后可入住", 2, RoomStatus.AVAILABLE));
     }
 }

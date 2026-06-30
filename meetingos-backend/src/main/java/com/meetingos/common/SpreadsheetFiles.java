@@ -68,7 +68,7 @@ public final class SpreadsheetFiles {
                 Object value = c < values.size() ? values.get(c) : "";
                 Cell cell = row.createCell(c);
                 cell.setCellStyle(textStyle);
-                cell.setCellValue(protectFormula(value == null ? "" : String.valueOf(value)));
+                cell.setCellValue(protectFormula(ExportDisplayFormatter.value(value)));
             }
         }
         applyColumnWidths(sheet, table);
@@ -94,7 +94,7 @@ public final class SpreadsheetFiles {
             int max = visualLength(table.headers().get(c));
             for (List<?> row : table.rows()) {
                 Object value = c < row.size() ? row.get(c) : "";
-                max = Math.max(max, visualLength(value == null ? "" : String.valueOf(value)));
+                max = Math.max(max, visualLength(ExportDisplayFormatter.value(value)));
             }
             int width = Math.min(42, Math.max(10, max + 2));
             sheet.setColumnWidth(c, width * 256);

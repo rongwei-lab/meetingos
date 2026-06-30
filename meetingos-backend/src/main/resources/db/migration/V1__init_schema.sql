@@ -1,6 +1,6 @@
 -- MeetingOS 当前完整初始化结构。
 -- 注意：这是合并后的 Flyway 基线脚本，适用于新库或可重建的开发库。
--- 已经执行过旧版 V1~V18 的数据库需要重建，避免 Flyway 历史版本和 checksum 不一致。
+-- 已经执行过拆分版 V1~V5 的数据库需要重建或修正 Flyway 历史，避免版本缺失和 checksum 不一致。
 
 create table app_users (
   id bigint primary key auto_increment,
@@ -39,10 +39,13 @@ create table meetings (
   cover_image_url varchar(500),
   contact_name varchar(80),
   contact_phone varchar(40),
+  dinner_venue varchar(160),
+  dinner_time varchar(120),
   status varchar(40) not null,
   created_by varchar(64),
   seat_query_enabled boolean not null default false,
   room_query_enabled boolean not null default false,
+  dinner_query_enabled boolean not null default false,
   checkin_enabled boolean not null default true,
   public_query_fields varchar(255) not null default 'PHONE,NAME',
   public_query_match_mode varchar(20) not null default 'FUZZY',
@@ -57,19 +60,23 @@ create table meetings (
   public_query_empty_message varchar(255) not null default '未查询到结果，请核对信息后重试',
   public_query_seat_notice text,
   public_query_room_notice text,
+  public_query_dinner_notice text,
   public_query_theme_color varchar(20) not null default '#2563eb',
   public_query_logo_url varchar(500),
   public_query_background_url varchar(500),
   public_query_result_layout varchar(20) not null default 'CARD',
-  public_query_visible_result_fields varchar(500) not null default 'ATTENDEE_NAME,SEAT_AREA,SEAT_ROW,SEAT_NO,SEAT_CODE,HOTEL_NAME,ROOM_TYPE,ROOM_NO,ROOM_REMARK,CHECKIN_TIPS',
+  public_query_visible_result_fields varchar(500) not null default 'ATTENDEE_NAME,SEAT_AREA,SEAT_ROW,SEAT_NO,SEAT_CODE,HOTEL_NAME,ROOM_TYPE,ROOM_NO,ROOM_REMARK,CHECKIN_TIPS,DINNER_TABLE_NO,DINNER_VENUE,DINNER_TIME,DINNER_REMARK',
   public_query_masked_result_fields varchar(500) not null default '',
-  public_query_highlight_result_fields varchar(500) not null default 'SEAT_CODE,ROOM_NO',
+  public_query_highlight_result_fields varchar(500) not null default 'SEAT_CODE,ROOM_NO,DINNER_TABLE_NO',
   public_query_seat_visible_result_fields varchar(500) not null default 'ATTENDEE_NAME,SEAT_AREA,SEAT_ROW,SEAT_NO,SEAT_CODE',
   public_query_seat_masked_result_fields varchar(500) not null default '',
   public_query_seat_highlight_result_fields varchar(500) not null default 'SEAT_CODE',
   public_query_room_visible_result_fields varchar(500) not null default 'ATTENDEE_NAME,HOTEL_NAME,ROOM_TYPE,ROOM_NO,ROOM_REMARK,CHECKIN_TIPS',
   public_query_room_masked_result_fields varchar(500) not null default '',
   public_query_room_highlight_result_fields varchar(500) not null default 'ROOM_NO',
+  public_query_dinner_visible_result_fields varchar(500) not null default 'ATTENDEE_NAME,DINNER_TABLE_NO,DINNER_VENUE,DINNER_TIME,DINNER_REMARK',
+  public_query_dinner_masked_result_fields varchar(500) not null default '',
+  public_query_dinner_highlight_result_fields varchar(500) not null default 'DINNER_TABLE_NO',
   constraint uk_meeting_code unique (code)
 );
 
@@ -220,6 +227,39 @@ create table rooms (
   constraint uk_room_meeting_no unique (meeting_id, room_no)
 );
 
+create table dinner_assignments (
+  id bigint primary key auto_increment,
+  created_at datetime(6) not null,
+  updated_at datetime(6) not null,
+  meeting_id bigint not null,
+  attendee_id bigint not null,
+  table_no varchar(80) not null,
+  venue varchar(160),
+  dinner_time varchar(120),
+  remark varchar(500),
+  assigned_by varchar(64),
+  constraint fk_dinner_assignment_meeting foreign key (meeting_id) references meetings(id),
+  constraint fk_dinner_assignment_attendee foreign key (attendee_id) references attendees(id),
+  constraint uk_dinner_assignment_attendee unique (meeting_id, attendee_id),
+  index idx_dinner_assignment_meeting_table (meeting_id, table_no)
+);
+
+create table dinner_tables (
+  id bigint primary key auto_increment,
+  created_at datetime(6) not null,
+  updated_at datetime(6) not null,
+  meeting_id bigint not null,
+  table_no varchar(80) not null,
+  capacity int not null default 10,
+  venue varchar(160),
+  dinner_time varchar(120),
+  remark varchar(500),
+  created_by varchar(64),
+  constraint fk_dinner_table_meeting foreign key (meeting_id) references meetings(id),
+  constraint uk_dinner_table_meeting_no unique (meeting_id, table_no),
+  index idx_dinner_table_meeting (meeting_id, table_no)
+);
+
 create table checkin_records (
   id bigint primary key auto_increment,
   created_at datetime(6) not null,
@@ -342,17 +382,19 @@ insert into app_user_roles (user_id, role) values (1, 'SUPER_ADMIN'), (1, 'MEETI
 insert into meetings (
   id, created_at, updated_at, code, name, organizer, start_time, end_time,
   registration_start_time, registration_end_time, location, venue_name, capacity,
-  description, contact_name, contact_phone, status, created_by,
-  public_query_seat_notice, public_query_room_notice
+  description, contact_name, contact_phone, dinner_venue, dinner_time, status, created_by,
+  public_query_seat_notice, public_query_room_notice, public_query_dinner_notice
 ) values (
   1, now(6), now(6), 'NDEF2026', '2026年全国数字经济发展论坛', '数字经济产业联盟',
   '2026-07-15 09:00:00', '2026-07-15 18:00:00',
   '2026-06-01 09:00:00', '2026-07-10 18:00:00',
   '北京国家会议中心', '主会场', 500,
-  '覆盖报名、排座、住宿和签到的演示会议', '会务组', '400-000-2026',
+  '覆盖报名、排座、住宿、晚宴和签到的演示会议', '会务组', '400-000-2026',
+  '北京国家会议中心三层宴会厅', '2026-07-15 18:30',
   'REGISTRATION_OPEN', 'admin',
   '请按会议通知时间到达会场，凭会议证件从指定入口进入，对号入座。',
-  '凭会议证件及身份证办理入住，接待台位于酒店大堂。'
+  '凭会议证件及身份证办理入住，接待台位于酒店大堂。',
+  '请按现场指引前往晚宴区域入座，如有调整请以会务组通知为准。'
 );
 
 insert into tduck_form_bindings (
@@ -387,6 +429,12 @@ values
   (1, now(6), now(6), 1, '1801', '大床房', '北京会议中心酒店', '凭身份证办理入住', 1, 'AVAILABLE'),
   (2, now(6), now(6), 1, '1802', '双床房', '北京会议中心酒店', '14:00 后可入住', 2, 'AVAILABLE'),
   (3, now(6), now(6), 1, '1803', '双床房', '北京会议中心酒店', '早餐在二楼', 2, 'AVAILABLE');
+
+insert into dinner_tables (id, created_at, updated_at, meeting_id, table_no, capacity, venue, dinner_time, remark, created_by)
+values
+  (1, now(6), now(6), 1, 'A1', 10, '北京国家会议中心三层宴会厅', '2026-07-15 18:30', '主桌预留', 'admin'),
+  (2, now(6), now(6), 1, 'A2', 10, '北京国家会议中心三层宴会厅', '2026-07-15 18:30', null, 'admin'),
+  (3, now(6), now(6), 1, 'A3', 10, '北京国家会议中心三层宴会厅', '2026-07-15 18:30', null, 'admin');
 
 insert into seat_layouts (id, created_at, updated_at, meeting_id, venue_name, area_name, row_count, seats_per_row, sort_order, numbering_rule, aisle_settings, stage_direction)
 values (1, now(6), now(6), 1, '主会场', 'A区', 4, 6, 0, 'row-seat', '3号座后过道', '北');

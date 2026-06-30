@@ -147,12 +147,15 @@
               <span>用于处理 Webhook 漏投或失败重试</span>
             </div>
           </div>
+          <n-button block secondary :loading="pullingAllSync" :disabled="!currentMeeting || pullingSync" @click="pullAllSyncSubmissions">
+            一键同步全部报名
+          </n-button>
           <n-input v-model:value="pullSyncDataId" placeholder="输入 TDuck 数据 ID，例如 211748" clearable />
-          <n-button block type="primary" :loading="pullingSync" :disabled="!currentMeeting || !pullSyncDataId.trim()" @click="pullSyncSubmission">
+          <n-button block type="primary" :loading="pullingSync" :disabled="!currentMeeting || pullingAllSync || !pullSyncDataId.trim()" @click="pullSyncSubmission">
             同步这条报名
           </n-button>
           <div class="hint-box">
-            从 TDuck 后台复制数据 ID 后在这里补拉，成功后会刷新参会人和同步日志。
+            一键同步会拉取当前绑定表单的最新报名；也可从 TDuck 后台复制数据 ID 后单条补拉。
           </div>
         </div>
       </div>
@@ -169,7 +172,7 @@
         </div>
       </template>
       <div class="mobile-scroll-table">
-        <n-data-table :columns="logColumns" :data="store.syncLogs" :pagination="{ pageSize: 5 }" />
+        <n-data-table :columns="logColumns" :data="currentSyncLogs" :pagination="{ pageSize: 5 }" />
       </div>
     </n-card>
 
@@ -206,6 +209,7 @@ const savingBinding = ref(false);
 const syncingFields = ref(false);
 const savingMappings = ref(false);
 const pullingSync = ref(false);
+const pullingAllSync = ref(false);
 const openingTduck = ref(false);
 const openingTduckEditor = ref(false);
 const pullSyncDataId = ref("");
@@ -299,7 +303,13 @@ const canSaveMappings = computed(() =>
   Boolean(currentMeeting.value && fieldMappings.value.some((item) => item.tduckFieldKey && item.tduckFieldKey !== "-" && item.attendeeField))
 );
 
-const latestSyncLog = computed(() => store.syncLogs[0] || null);
+const currentSyncLogs = computed(() => {
+  const meetingId = store.currentMeetingId;
+  if (!meetingId) return [];
+  return store.syncLogs.filter((log) => log.meetingId === meetingId);
+});
+
+const latestSyncLog = computed(() => currentSyncLogs.value[0] || null);
 
 const webhookStatusLabel = computed(() => {
   if (currentBinding.value?.webhookStatus === "CONFIGURED") return "已配置";
@@ -542,6 +552,31 @@ async function pullSyncSubmission() {
   }
 }
 
+async function pullAllSyncSubmissions() {
+  if (!store.currentMeetingId) {
+    message.warning("请先选择会议");
+    return;
+  }
+  pullingAllSync.value = true;
+  try {
+    const result = await store.pullAllTduckSync(store.currentMeetingId);
+    const summary = result.message || `已扫描 ${result.scanned} 条，成功 ${result.success} 条，已同步跳过 ${result.duplicateIgnored} 条，失败 ${result.failed} 条`;
+    if (result.failed > 0) {
+      const failurePreview = result.failures
+        ?.slice(0, 3)
+        .map((item) => `${item.dataId}: ${item.message}`)
+        .join("；");
+      message.warning(failurePreview ? `${summary}。失败样例：${failurePreview}` : `${summary}，请查看同步日志`);
+      return;
+    }
+    message.success(summary);
+  } catch (error) {
+    message.error(extractErrorMessage(error, "一键同步失败"));
+  } finally {
+    pullingAllSync.value = false;
+  }
+}
+
 function openRegistrationEntry() {
   if (!currentMeeting.value) return;
   if (bindingValidationStatus.value === "INVALID") {
@@ -656,7 +691,10 @@ async function syncRegistrationContext() {
   bindingValidationStatus.value = binding?.validationStatus || (selectedFormKey.value ? "UNKNOWN" : "");
   bindingValidationMessage.value = binding?.validationMessage || "";
   upsertCurrentBindingOption();
-  await loadSavedMappings();
+  await Promise.allSettled([
+    loadSavedMappings(),
+    store.loadSyncLogs(store.currentMeetingId)
+  ]);
   await drawQr();
 }
 

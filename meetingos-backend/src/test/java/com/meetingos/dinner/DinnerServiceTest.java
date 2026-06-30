@@ -7,6 +7,7 @@ import com.meetingos.attendee.ReviewStatus;
 import com.meetingos.common.BusinessException;
 import com.meetingos.common.ExportTable;
 import com.meetingos.common.ImportResult;
+import com.meetingos.common.SpreadsheetFiles;
 import com.meetingos.meeting.Meeting;
 import com.meetingos.meeting.MeetingRepository;
 import com.meetingos.operationlog.OperationLogService;
@@ -173,10 +174,14 @@ class DinnerServiceTest {
 
         assertThat(table.headers()).containsExactly("姓名", "手机号", "单位", "职务", "参会类型", "桌号", "晚宴地点", "晚宴时间", "备注");
         assertThat(table.rows()).hasSize(1);
-        // 导出行里既有字符串也有枚举，显式构造 Object 列表，避免 AssertJ 在混合类型 varargs 上推断失败。
         assertThat(table.rows().get(0)).isEqualTo(List.of(
                 "张三", "13800000000", "示例公司", "总监", AttendeeType.VIP, "3号桌", "三层宴会厅", "18:30", "主桌"
         ));
+        try (XSSFWorkbook workbook = new XSSFWorkbook(new java.io.ByteArrayInputStream(SpreadsheetFiles.toXlsx(List.of(table))))) {
+            assertThat(workbook.getSheet("晚宴安排").getRow(1).getCell(4).getStringCellValue()).isEqualTo("VIP");
+        } catch (java.io.IOException ex) {
+            throw new AssertionError("晚宴导出 XLSX 读取失败", ex);
+        }
     }
 
     @Test

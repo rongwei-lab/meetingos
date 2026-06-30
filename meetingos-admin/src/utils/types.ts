@@ -89,8 +89,12 @@ export interface Attendee {
   roomNo?: string;
   roomRemark?: string;
   roomId?: string;
+  seatAssigned?: boolean;
+  roomAssigned?: boolean;
+  dinnerAssigned?: boolean;
   seatQueried?: boolean;
   roomQueried?: boolean;
+  dinnerQueried?: boolean;
   checkinStatus: "NOT_CHECKED_IN" | "CHECKED_IN";
   checkinTime?: string;
   formValues?: Record<string, unknown>;

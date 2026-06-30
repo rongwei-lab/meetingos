@@ -2,8 +2,9 @@ package com.meetingos.room;
 
 import com.meetingos.attendee.Attendee;
 import com.meetingos.common.ApiResponse;
-import com.meetingos.common.CsvFiles;
 import com.meetingos.common.ImportResult;
+import com.meetingos.common.SpreadsheetFiles;
+import com.meetingos.exporttask.ExportFile;
 import com.meetingos.exporttask.ExportTaskService;
 import com.meetingos.operationlog.AuditLog;
 import jakarta.validation.Valid;
@@ -82,10 +83,8 @@ public class RoomController {
                                          @RequestParam(defaultValue = "assignments") String type) {
         String exportType = "inventory".equalsIgnoreCase(type) ? "room-inventory" : "rooms";
         exportTaskService.assertDownloadAllowed(meetingId, exportType);
-        String csv = "inventory".equalsIgnoreCase(type)
-                ? roomService.exportRoomInventoryCsv(meetingId)
-                : roomService.exportRoomsCsv(meetingId);
-        return CsvFiles.download("meetingos-rooms.csv", csv);
+        ExportFile file = exportTaskService.build(meetingId, exportType, "xlsx", null, null);
+        return SpreadsheetFiles.download(file.filename(), file.content(), file.contentType());
     }
 
     @GetMapping("/query")

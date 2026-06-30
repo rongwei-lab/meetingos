@@ -8,7 +8,6 @@
       <div class="surface stat-card dashboard-stat-card" v-for="item in stats" :key="item.label">
         <div class="stat-value">{{ item.value }}</div>
         <div class="stat-label">{{ item.label }}</div>
-        <n-tag size="small" :type="item.type" round>{{ item.note }}</n-tag>
       </div>
     </div>
 
@@ -154,10 +153,10 @@ const accommodationRequiredCount = computed(() => overview.value?.accommodationR
 const roomAssignedRequiredCount = computed(() => overview.value?.roomAssignedRequiredCount ?? 0);
 const roomUnassignedRequiredCount = computed(() => overview.value?.roomUnassignedRequiredCount ?? 0);
 const stats = computed(() => [
-  { label: "报名总人数", value: registrationCount.value, note: "当前会议", type: "success" as const },
-  { label: "今日新增", value: todayRegistrationCount.value, note: "当天报名", type: "info" as const },
-  { label: "近 7 日新增", value: rangeRegistrationCount.value, note: "报名增长", type: "success" as const },
-  { label: "已签到人数", value: checkedInCount.value, note: `签到率 ${checkinRate.value}`, type: "info" as const }
+  { label: "报名总人数", value: registrationCount.value },
+  { label: "今日新增", value: todayRegistrationCount.value },
+  { label: "近 7 日新增", value: rangeRegistrationCount.value },
+  { label: "已签到人数", value: checkedInCount.value }
 ]);
 
 function goRegistration() {

@@ -45,7 +45,7 @@ public final class CsvFiles {
         if (value == null) {
             return "";
         }
-        String text = protectFormula(String.valueOf(value));
+        String text = protectFormula(ExportDisplayFormatter.value(value));
         boolean shouldQuote = text.contains(",") || text.contains("\"") || text.contains("\n") || text.contains("\r");
         String escaped = text.replace("\"", "\"\"");
         return shouldQuote ? "\"" + escaped + "\"" : escaped;

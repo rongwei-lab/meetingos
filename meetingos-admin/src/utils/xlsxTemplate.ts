@@ -3,18 +3,36 @@ interface XlsxEntry {
   content: string;
 }
 
+export interface XlsxTemplateOptions {
+  sheetName?: string;
+  instructions?: string[];
+}
+
 const XLSX_MIME = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet";
 const textEncoder = new TextEncoder();
 const crcTable = buildCrcTable();
 
-export function downloadXlsxTemplate(filename: string, headers: string[], rows: string[][], sheetName = "导入模板") {
-  const workbookRows = [headers, ...rows];
+export function downloadXlsxTemplate(
+  filename: string,
+  headers: string[],
+  rows: string[][],
+  sheetNameOrOptions: string | XlsxTemplateOptions = "导入模板",
+  instructions: string[] = []
+) {
+  const options = normalizeOptions(sheetNameOrOptions, instructions);
+  const worksheets = [
+    { name: options.sheetName, rows: [headers, ...rows] },
+    ...instructionWorksheets(options.instructions)
+  ];
   const entries: XlsxEntry[] = [
-    { path: "[Content_Types].xml", content: contentTypesXml() },
+    { path: "[Content_Types].xml", content: contentTypesXml(worksheets.length) },
     { path: "_rels/.rels", content: rootRelsXml() },
-    { path: "xl/workbook.xml", content: workbookXml(sheetName) },
-    { path: "xl/_rels/workbook.xml.rels", content: workbookRelsXml() },
-    { path: "xl/worksheets/sheet1.xml", content: worksheetXml(workbookRows) }
+    { path: "xl/workbook.xml", content: workbookXml(worksheets.map((sheet) => sheet.name)) },
+    { path: "xl/_rels/workbook.xml.rels", content: workbookRelsXml(worksheets.length) },
+    ...worksheets.map((sheet, index) => ({
+      path: `xl/worksheets/sheet${index + 1}.xml`,
+      content: worksheetXml(sheet.rows)
+    }))
   ];
   const blob = new Blob([zipStore(entries)], { type: XLSX_MIME });
   const url = URL.createObjectURL(blob);
@@ -25,6 +43,37 @@ export function downloadXlsxTemplate(filename: string, headers: string[], rows: 
   link.click();
   document.body.removeChild(link);
   URL.revokeObjectURL(url);
+}
+
+function normalizeOptions(sheetNameOrOptions: string | XlsxTemplateOptions, fallbackInstructions: string[]) {
+  if (typeof sheetNameOrOptions === "string") {
+    return {
+      sheetName: sheetNameOrOptions,
+      instructions: fallbackInstructions
+    };
+  }
+  return {
+    sheetName: sheetNameOrOptions.sheetName || "导入模板",
+    instructions: sheetNameOrOptions.instructions || []
+  };
+}
+
+function instructionWorksheets(instructions: string[]) {
+  if (!instructions.length) {
+    return [];
+  }
+  /*
+   * 后端导入只读取第一个工作表。说明内容单独放在第二张表，
+   * 既方便会务人员查看，也避免把说明行误当成待导入数据。
+   */
+  return [{
+    name: "导入说明",
+    rows: [
+      ["导入说明"],
+      ["序号", "说明"],
+      ...instructions.map((text, index) => [String(index + 1), text])
+    ]
+  }];
 }
 
 function worksheetXml(rows: string[][]) {
@@ -61,15 +110,21 @@ function worksheetXml(rows: string[][]) {
   </worksheet>`);
 }
 
-function workbookXml(sheetName: string) {
+function workbookXml(sheetNames: string[]) {
+  const sheets = sheetNames.map((sheetName, index) =>
+    `<sheet name="${escapeXmlAttribute(sheetName)}" sheetId="${index + 1}" r:id="rId${index + 1}"/>`
+  ).join("");
   return xmlDeclaration(`<workbook xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships">
-    <sheets><sheet name="${escapeXmlAttribute(sheetName)}" sheetId="1" r:id="rId1"/></sheets>
+    <sheets>${sheets}</sheets>
   </workbook>`);
 }
 
-function workbookRelsXml() {
+function workbookRelsXml(sheetCount: number) {
+  const relationships = Array.from({ length: sheetCount }, (_, index) =>
+    `<Relationship Id="rId${index + 1}" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" Target="worksheets/sheet${index + 1}.xml"/>`
+  ).join("");
   return xmlDeclaration(`<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">
-    <Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" Target="worksheets/sheet1.xml"/>
+    ${relationships}
   </Relationships>`);
 }
 
@@ -79,12 +134,15 @@ function rootRelsXml() {
   </Relationships>`);
 }
 
-function contentTypesXml() {
+function contentTypesXml(sheetCount: number) {
+  const worksheetOverrides = Array.from({ length: sheetCount }, (_, index) =>
+    `<Override PartName="/xl/worksheets/sheet${index + 1}.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml"/>`
+  ).join("");
   return xmlDeclaration(`<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types">
     <Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/>
     <Default Extension="xml" ContentType="application/xml"/>
     <Override PartName="/xl/workbook.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet.main+xml"/>
-    <Override PartName="/xl/worksheets/sheet1.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml"/>
+    ${worksheetOverrides}
   </Types>`);
 }
 

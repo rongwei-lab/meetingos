@@ -45,52 +45,6 @@
         </div>
         <div ref="trendChartRef" class="chart-canvas"></div>
       </section>
-
-      <section class="surface chart-panel">
-        <div class="section-head">
-          <div>
-            <h2>审核状态分布</h2>
-            <span>当前会议全量</span>
-          </div>
-        </div>
-        <div ref="reviewChartRef" class="chart-canvas"></div>
-      </section>
-
-      <section class="surface chart-panel">
-        <div class="section-head">
-          <div>
-            <h2>酒店房间分布</h2>
-            <span>按房间数量统计</span>
-          </div>
-        </div>
-        <div ref="hotelChartRef" class="chart-canvas"></div>
-      </section>
-
-      <section class="surface chart-panel">
-        <div class="section-head">
-          <div>
-            <h2>签到入口分布</h2>
-            <span>成功签到记录</span>
-          </div>
-        </div>
-        <div ref="checkinEntranceChartRef" class="chart-canvas"></div>
-      </section>
-
-      <section class="surface chart-panel">
-        <div class="section-head">
-          <div>
-            <h2>参会类型分布</h2>
-            <span>报名人员结构</span>
-          </div>
-        </div>
-        <div class="distribution-list">
-          <div v-for="item in attendeeTypeRows" :key="item.label" class="distribution-row">
-            <span>{{ item.label }}</span>
-            <strong>{{ item.value }}</strong>
-          </div>
-          <n-empty v-if="!attendeeTypeRows.length" size="small" description="暂无数据" />
-        </div>
-      </section>
     </div>
   </div>
 </template>
@@ -100,7 +54,6 @@ import { computed, defineAsyncComponent, nextTick, onBeforeUnmount, onMounted, r
 import PageHeader from "@/components/PageHeader.vue";
 import { useRouteMeeting } from "@/composables/useRouteMeeting";
 import { useMeetingStore, type StatisticsOverviewDto } from "@/stores/meeting";
-import { attendeeTypeLabel } from "@/utils/meetingDisplay";
 
 type RangeMode = "today" | "7d" | "30d" | "custom";
 type ChartInstance = import("echarts").ECharts;
@@ -121,9 +74,6 @@ const rangeMode = ref<RangeMode>("7d");
 const customRange = ref<[number, number] | null>(null);
 const echartsModule = shallowRef<EChartsModule | null>(null);
 const trendChartRef = ref<HTMLDivElement | null>(null);
-const reviewChartRef = ref<HTMLDivElement | null>(null);
-const hotelChartRef = ref<HTMLDivElement | null>(null);
-const checkinEntranceChartRef = ref<HTMLDivElement | null>(null);
 const chartInstances: ChartInstance[] = [];
 
 const activeRange = computed(() => {
@@ -202,8 +152,6 @@ const metricGroups = computed(() => {
   ];
 });
 
-const attendeeTypeRows = computed(() => toRows(overview.value?.attendeeTypeDistribution, attendeeTypeLabel));
-
 function loadStatisticsPage(meetingId = routeMeetingId.value) {
   if (!meetingId) return;
   void store.loadStatisticsWithRange(meetingId, activeRange.value).then(renderCharts);
@@ -240,9 +188,6 @@ async function renderCharts() {
   if (!data) return;
   const echarts = await ensureEcharts();
   renderTrendChart(echarts, data);
-  renderReviewChart(echarts, data);
-  renderHotelChart(echarts, data);
-  renderCheckinEntranceChart(echarts, data);
 }
 
 function chartFor(echarts: EChartsModule, element: HTMLDivElement | null) {
@@ -273,70 +218,12 @@ function renderTrendChart(echarts: EChartsModule, data: StatisticsOverviewDto) {
   });
 }
 
-function renderReviewChart(echarts: EChartsModule, data: StatisticsOverviewDto) {
-  const chart = chartFor(echarts, reviewChartRef.value);
-  if (!chart) return;
-  const rows = toRows(data.reviewStatusDistribution, reviewStatusLabel);
-  chart.setOption({
-    tooltip: { trigger: "item" },
-    legend: { bottom: 0 },
-    series: [
-      {
-        type: "pie",
-        radius: ["44%", "70%"],
-        center: ["50%", "44%"],
-        data: rows.map((item) => ({ name: item.label, value: item.value }))
-      }
-    ]
-  });
-}
-
-function renderHotelChart(echarts: EChartsModule, data: StatisticsOverviewDto) {
-  const chart = chartFor(echarts, hotelChartRef.value);
-  if (!chart) return;
-  const rows = toRows(data.hotelDistribution).slice(0, 8);
-  chart.setOption(barOption(rows, "房间数"));
-}
-
-function renderCheckinEntranceChart(echarts: EChartsModule, data: StatisticsOverviewDto) {
-  const chart = chartFor(echarts, checkinEntranceChartRef.value);
-  if (!chart) return;
-  const rows = toRows(data.checkinEntranceDistribution).slice(0, 8);
-  chart.setOption(barOption(rows, "签到数"));
-}
-
-function barOption(rows: Array<{ label: string; value: number }>, seriesName: string) {
-  return {
-    tooltip: { trigger: "axis" },
-    grid: { top: 18, left: 42, right: 18, bottom: 46 },
-    xAxis: { type: "category", data: rows.map((item) => item.label), axisLabel: { interval: 0, rotate: rows.length > 4 ? 30 : 0 } },
-    yAxis: { type: "value", minInterval: 1 },
-    series: [{ name: seriesName, type: "bar", barMaxWidth: 34, data: rows.map((item) => item.value) }]
-  };
-}
-
 function resizeCharts() {
   chartInstances.forEach((chart) => chart.resize());
 }
 
-function toRows(source?: Record<string, number>, formatLabel: (value: string) => string = (value) => value) {
-  return Object.entries(source || {})
-    .map(([label, value]) => ({ label: formatLabel(label), value }))
-    .sort((a, b) => b.value - a.value);
-}
-
 function toTrendRows(source?: Record<string, number>) {
   return Object.entries(source || {}).map(([date, count]) => ({ date, count }));
-}
-
-function reviewStatusLabel(value: string) {
-  const labels: Record<string, string> = {
-    PENDING: "待审核",
-    APPROVED: "已通过",
-    REJECTED: "已拒绝",
-    CANCELLED: "已取消"
-  };
-  return labels[value] || value || "-";
 }
 
 function percent(value?: number) {
@@ -451,25 +338,6 @@ function formatLocalDate(value: Date) {
   height: 310px;
 }
 
-.distribution-list {
-  min-height: 310px;
-  display: grid;
-  align-content: start;
-}
-
-.distribution-row {
-  display: flex;
-  justify-content: space-between;
-  gap: 12px;
-  padding: 10px 0;
-  border-top: 1px solid var(--border-color);
-  color: var(--text-secondary);
-}
-
-.distribution-row strong {
-  color: var(--text-primary);
-}
-
 @media (max-width: 1120px) {
   .summary-grid,
   .chart-grid {
@@ -507,10 +375,8 @@ function formatLocalDate(value: Date) {
     width: 100%;
   }
 
-  .chart-canvas,
-  .distribution-list {
+  .chart-canvas {
     height: 250px;
-    min-height: 250px;
   }
 }
 </style>

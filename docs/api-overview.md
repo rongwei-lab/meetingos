@@ -162,8 +162,8 @@ MEETINGOS-CHECKIN:{meetingId}:{attendeeCode}
 | `GET` | `/api/admin/exports?meetingId={meetingId}` | 查询已创建导出任务 |
 | `GET` | `/api/admin/exports/download?meetingId={meetingId}&type={type}` | 下载导出文件，默认 CSV，可通过 `format=xlsx` 下载 XLSX |
 | `GET` | `/api/admin/operation-logs` | 操作日志 |
-| `GET` | `/api/admin/settings` | 读取系统设置，不返回 Webhook Token 明文 |
-| `PUT` | `/api/admin/settings` | 保存系统设置，Webhook Token 留空表示不轮换 |
+| `GET` | `/api/admin/settings` | 读取系统设置，Webhook Token 仅返回脱敏状态 |
+| `PUT` | `/api/admin/settings` | 保存系统设置，忽略请求中的 Webhook Token，密钥仅由 `TDUCK_WEBHOOK_TOKEN` 管理 |
 | `GET` | `/api/admin/meetings/{meetingId}/query-settings` | 查询会议公开座位/住宿/晚宴/签到配置 |
 | `PUT` | `/api/admin/meetings/{meetingId}/query-settings` | 保存会议公开座位/住宿/晚宴/签到配置 |
 | `POST` | `/api/admin/meetings/{meetingId}/queries/seat` | 后台座位查询候选，最多返回 20 条 |

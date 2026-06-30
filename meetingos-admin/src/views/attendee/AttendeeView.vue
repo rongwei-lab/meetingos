@@ -59,7 +59,7 @@
         :row-key="rowKey"
         :columns="columns"
         :data="filteredAttendees"
-        :pagination="{ pageSize: 8 }"
+        :pagination="{ pageSize: 10 }"
         :scroll-x="tableScrollX"
       />
       <div v-else class="mobile-card-list attendee-card-list">
@@ -113,12 +113,13 @@
               通过
             </n-button>
             <n-button
-              v-if="canAuditTo(attendee, 'REJECTED')"
+              v-if="canShowAuditTo(attendee, 'REJECTED')"
               size="small"
               type="error"
               secondary
               :loading="rowAuditLoading(attendee.id, 'REJECTED')"
-              :disabled="isRowAuditing(attendee.id)"
+              :disabled="isRowAuditing(attendee.id) || Boolean(rejectionBlockTitle(attendee))"
+              :title="rejectionBlockTitle(attendee)"
               @click="auditOne(attendee, 'REJECTED')"
             >
               拒绝
@@ -400,7 +401,7 @@ const systemColumns = [
         : "-"
   },
   { title: "审核", key: "auditStatus", minWidth: 96, render: (row: Attendee) => h(StatusTag, { value: row.auditStatus }) },
-  { title: "座位", key: "seatLabel", minWidth: 120, render: (row: Attendee) => row.seatLabel || "-" },
+  { title: "座位", key: "seatLabel", minWidth: 160, render: (row: Attendee) => h("span", seatLabelCellProps(), row.seatLabel || "-") },
   { title: "房间", key: "roomNo", minWidth: 96, render: (row: Attendee) => row.roomNo || "-" },
   { title: "座位查询", key: "seatQueried", minWidth: 100, render: (row: Attendee) => renderQueryTag(row.seatQueried) },
   { title: "住宿查询", key: "roomQueried", minWidth: 100, render: (row: Attendee) => renderQueryTag(row.roomQueried) },
@@ -410,7 +411,7 @@ const systemColumns = [
     key: "actions",
     minWidth: 210,
     render: (row: Attendee) =>
-      h("div", { class: "action-buttons" }, [
+      h("div", actionCellProps(), [
         ...renderAuditActions(row),
         h(NButton, { text: true, onClick: () => openTagEditor(row) }, { default: () => "标签" })
       ])
@@ -425,6 +426,36 @@ const columns = computed(() => [
 
 function renderQueryTag(queried?: boolean) {
   return h(NTag, { size: "small", round: true, type: queried ? "success" : "default" }, { default: () => (queried ? "已查询" : "未查询") });
+}
+
+function seatLabelCellProps() {
+  return {
+    class: "seat-label-cell",
+    style: {
+      display: "inline-block",
+      maxWidth: "100%",
+      overflow: "hidden",
+      textOverflow: "ellipsis",
+      whiteSpace: "nowrap",
+      verticalAlign: "middle"
+    }
+  };
+}
+
+function actionCellProps() {
+  return {
+    class: "action-buttons",
+    style: {
+      /*
+       * 该列通过 render 函数生成，不会自动带上 SFC scoped style 的属性。
+       * 关键布局放到 VNode 上，避免“已通过拒绝标签”在生产构建里挤在一起。
+       */
+      display: "inline-flex",
+      alignItems: "center",
+      gap: "12px",
+      whiteSpace: "nowrap"
+    }
+  };
 }
 
 const detailFormFields = computed(() =>
@@ -723,8 +754,13 @@ function batchAudit(status: AuditStatus) {
     message.warning("请先选择参会人");
     return;
   }
+  const lockedRejectCount = status === "REJECTED" ? rejectionBlockedRows(checkedKeys.value).length : 0;
   const targetIds = auditTargetIds(checkedKeys.value, status);
   if (!targetIds.length) {
+    if (lockedRejectCount > 0) {
+      message.warning("所选参会人已有查询或分配记录，不能拒绝");
+      return;
+    }
     message.info("所选参会人没有可审核项");
     return;
   }
@@ -740,7 +776,7 @@ function batchAudit(status: AuditStatus) {
       .then(() => {
         invalidateRemoteAttendeeResults();
         checkedKeys.value = checkedKeys.value.filter((id) => !targetIds.includes(String(id)));
-        message.success("批量审核完成");
+        message.success(lockedRejectCount > 0 ? `批量审核完成，已跳过 ${lockedRejectCount} 名已有查询或分配记录的参会人` : "批量审核完成");
       })
       .catch((error) => {
         message.error(error instanceof Error ? error.message : "批量审核失败");
@@ -763,8 +799,37 @@ function canAuditTo(row: Attendee, status: AuditStatus) {
    * TDuck 报名默认通过，因此允许管理员把“已通过”改为“已拒绝”。
    * 已拒绝/已取消不在普通入口里恢复，避免误操作重新放行无效报名。
    */
+  if (status === "REJECTED" && rejectionBlockReasons(row).length) return false;
   if (row.auditStatus === "PENDING") return status === "APPROVED" || status === "REJECTED";
   return row.auditStatus === "APPROVED" && status === "REJECTED";
+}
+
+function canShowAuditTo(row: Attendee, status: AuditStatus) {
+  if (status !== "REJECTED") return canAuditTo(row, status);
+  if (row.auditStatus === "PENDING") return true;
+  return row.auditStatus === "APPROVED";
+}
+
+function hasPublicQueryRecord(row: Attendee) {
+  return Boolean(row.seatQueried || row.roomQueried || row.dinnerQueried);
+}
+
+function hasAssignedResource(row: Attendee) {
+  return Boolean(row.seatAssigned || row.seatLabel || row.roomAssigned || row.roomNo || row.dinnerAssigned);
+}
+
+function rejectionBlockReasons(row: Attendee) {
+  const reasons: string[] = [];
+  if (row.seatAssigned || row.seatLabel) reasons.push("已分配座位");
+  if (row.roomAssigned || row.roomNo) reasons.push("已分配住宿");
+  if (row.dinnerAssigned) reasons.push("已分配晚宴");
+  if (hasPublicQueryRecord(row)) reasons.push("已有查询记录");
+  return reasons;
+}
+
+function rejectionBlockTitle(row: Attendee) {
+  const reasons = rejectionBlockReasons(row);
+  return reasons.length ? `${reasons.join("、")}，不能拒绝` : undefined;
 }
 
 function renderAuditActions(row: Attendee) {
@@ -787,7 +852,8 @@ function renderAuditActions(row: Attendee) {
           text: true,
           type: "error",
           loading: rowAuditLoading(row.id, "REJECTED"),
-          disabled: isRowAuditing(row.id),
+          disabled: isRowAuditing(row.id) || Boolean(rejectionBlockTitle(row)),
+          title: rejectionBlockTitle(row),
           onClick: () => auditOne(row, "REJECTED")
         },
         { default: () => "拒绝" }
@@ -808,7 +874,8 @@ function renderAuditActions(row: Attendee) {
           text: true,
           type: "error",
           loading: rowAuditLoading(row.id, "REJECTED"),
-          disabled: isRowAuditing(row.id),
+          disabled: isRowAuditing(row.id) || Boolean(rejectionBlockTitle(row)),
+          title: rejectionBlockTitle(row),
           onClick: () => auditOne(row, "REJECTED")
         },
         { default: () => "拒绝" }
@@ -845,7 +912,13 @@ function auditTargetIds(ids: Array<string | number>, status: AuditStatus) {
     .map((attendee) => attendee.id);
 }
 
+function rejectionBlockedRows(ids: Array<string | number>) {
+  const selected = new Set(ids.map(String));
+  return store.currentAttendees.filter((attendee) => selected.has(attendee.id) && (hasPublicQueryRecord(attendee) || hasAssignedResource(attendee)));
+}
+
 function canBatchAuditTo(status: AuditStatus) {
+  if (status === "REJECTED" && rejectionBlockedRows(checkedKeys.value).length > 0) return true;
   return auditTargetIds(checkedKeys.value, status).length > 0;
 }
 
@@ -889,8 +962,8 @@ function importAttendees(options: UploadCustomRequestOptions) {
 }
 
 function exportAttendees() {
-  void store.downloadExport("attendees").then(() => {
-    message.success("参会人 CSV 已开始下载");
+  void store.downloadExport("attendees", { format: "xlsx" }).then(() => {
+    message.success("参会人 XLSX 已开始下载");
   }).catch((error) => {
     message.error(error instanceof Error ? error.message : "导出失败，请确认后端服务已启动");
   });

@@ -10,11 +10,17 @@ import com.meetingos.common.PageResponse;
 import com.meetingos.common.SensitiveDataMasker;
 import com.meetingos.common.TableFileReader;
 import com.meetingos.common.TableRow;
+import com.meetingos.dinner.DinnerAssignmentRepository;
 import com.meetingos.meeting.Meeting;
 import com.meetingos.meeting.MeetingRepository;
 import com.meetingos.permission.MeetingAccessService;
+import com.meetingos.publicapi.PublicQueryHistoryRepository;
+import com.meetingos.publicapi.PublicQueryType;
 import com.meetingos.security.SecurityUtils;
+import com.meetingos.seating.SeatAssignmentRepository;
 import com.meetingos.settings.SystemSettingsService;
+import com.meetingos.tduck.TduckFieldMapping;
+import com.meetingos.tduck.TduckFieldMappingRepository;
 import com.meetingos.tduck.TduckSubmissionFields;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -31,19 +37,37 @@ import java.util.UUID;
 @Service
 public class AttendeeService {
 
+    private static final List<PublicQueryType> REJECTION_LOCK_QUERY_TYPES = List.of(
+            PublicQueryType.SEAT,
+            PublicQueryType.ROOM,
+            PublicQueryType.DINNER
+    );
+
     private final AttendeeRepository attendeeRepository;
     private final MeetingRepository meetingRepository;
     private final MeetingAccessService meetingAccessService;
     private final SystemSettingsService systemSettingsService;
+    private final TduckFieldMappingRepository tduckFieldMappingRepository;
+    private final PublicQueryHistoryRepository publicQueryHistoryRepository;
+    private final SeatAssignmentRepository seatAssignmentRepository;
+    private final DinnerAssignmentRepository dinnerAssignmentRepository;
 
     public AttendeeService(AttendeeRepository attendeeRepository,
                            MeetingRepository meetingRepository,
                            MeetingAccessService meetingAccessService,
-                           SystemSettingsService systemSettingsService) {
+                           SystemSettingsService systemSettingsService,
+                           TduckFieldMappingRepository tduckFieldMappingRepository,
+                           PublicQueryHistoryRepository publicQueryHistoryRepository,
+                           SeatAssignmentRepository seatAssignmentRepository,
+                           DinnerAssignmentRepository dinnerAssignmentRepository) {
         this.attendeeRepository = attendeeRepository;
         this.meetingRepository = meetingRepository;
         this.meetingAccessService = meetingAccessService;
         this.systemSettingsService = systemSettingsService;
+        this.tduckFieldMappingRepository = tduckFieldMappingRepository;
+        this.publicQueryHistoryRepository = publicQueryHistoryRepository;
+        this.seatAssignmentRepository = seatAssignmentRepository;
+        this.dinnerAssignmentRepository = dinnerAssignmentRepository;
     }
 
     @Transactional
@@ -207,7 +231,7 @@ public class AttendeeService {
                 "审核人", "审核时间", "报名时间", "签到状态", "签到时间", "签到入口",
                 "签到操作人", "参会码", "标签", "备注"
         );
-        List<FormValueColumn> formColumns = formValueColumns(attendees);
+        List<FormValueColumn> formColumns = formValueColumns(meetingId, attendees);
         List<String> headers = new ArrayList<>(baseHeaders);
         headers.addAll(formColumns.stream().map(FormValueColumn::header).toList());
         boolean masked = systemSettingsService.maskSensitiveEnabled();
@@ -247,6 +271,7 @@ public class AttendeeService {
              */
             throw BusinessException.badRequest("当前审核状态不允许执行该操作");
         }
+        assertRejectable(attendee, status);
         attendee.setReviewStatus(status);
         attendee.setReviewReason(reason);
         attendee.setReviewRemark(remark);
@@ -260,6 +285,32 @@ public class AttendeeService {
             return targetStatus == ReviewStatus.APPROVED || targetStatus == ReviewStatus.REJECTED;
         }
         return currentStatus == ReviewStatus.APPROVED && targetStatus == ReviewStatus.REJECTED;
+    }
+
+    private void assertRejectable(Attendee attendee, ReviewStatus targetStatus) {
+        if (targetStatus != ReviewStatus.REJECTED || attendee.getId() == null) {
+            return;
+        }
+        /*
+         * 已分配座位、住宿或晚宴说明后台已经把参会人纳入正式接待资源。
+         * 此时直接拒绝会产生“资源仍占用但报名已拒绝”的脏状态，要求管理员先清空对应分配再审核。
+         */
+        if (seatAssignmentRepository.existsByAttendeeId(attendee.getId())) {
+            throw BusinessException.badRequest("该参会人已分配座位，不能拒绝");
+        }
+        if (attendee.getRoomNo() != null && !attendee.getRoomNo().isBlank()) {
+            throw BusinessException.badRequest("该参会人已分配住宿，不能拒绝");
+        }
+        if (dinnerAssignmentRepository.existsByAttendeeId(attendee.getId())) {
+            throw BusinessException.badRequest("该参会人已分配晚宴，不能拒绝");
+        }
+        /*
+         * 一旦参会人已经查过座位、住宿或晚宴结果，说明对方已按“通过报名”的状态进入公开查询链路。
+         * 此时再拒绝会让已看到的信息和后台状态冲突，因此在后端统一拦截，防止绕过前端按钮直接调用审核接口。
+         */
+        if (publicQueryHistoryRepository.existsByAttendeeIdAndQueryTypeIn(attendee.getId(), REJECTION_LOCK_QUERY_TYPES)) {
+            throw BusinessException.badRequest("该参会人已有查询记录，不能拒绝");
+        }
     }
 
     private String generateAttendeeCode(Meeting meeting) {
@@ -408,7 +459,8 @@ public class AttendeeService {
         return row;
     }
 
-    private List<FormValueColumn> formValueColumns(List<Attendee> attendees) {
+    private List<FormValueColumn> formValueColumns(Long meetingId, List<Attendee> attendees) {
+        Map<String, String> fieldLabels = tduckFieldLabels(meetingId);
         Map<String, FormValueColumn> columns = new LinkedHashMap<>();
         for (Attendee attendee : attendees) {
             Map<String, Object> snapshot = attendee.getRawDataSnapshot();
@@ -422,12 +474,28 @@ public class AttendeeService {
                 }
                 /*
                  * 动态报名字段属于参会人主数据的一部分，但字段结构来自 TDuck 表单，不能建固定列。
-                 * CSV 按首次出现顺序展开，表头保留原始 key，避免不同表单同名字段发生歧义。
+                 * CSV/XLSX 按首次出现顺序展开；如果已经同步过 TDuck 字段，表头使用填写页中文标签，
+                 * 避免导出文件出现 input/radio 这类组件内部 key。
                  */
-                columns.putIfAbsent(key, new FormValueColumn(key, key, key + "label"));
+                columns.putIfAbsent(key, new FormValueColumn(fieldLabels.getOrDefault(key, key), key, key + "label"));
             }
         }
         return new ArrayList<>(columns.values());
+    }
+
+    private Map<String, String> tduckFieldLabels(Long meetingId) {
+        Map<String, String> labels = new LinkedHashMap<>();
+        if (meetingId == null) {
+            return labels;
+        }
+        for (TduckFieldMapping mapping : tduckFieldMappingRepository.findByMeetingId(meetingId)) {
+            String key = mapping.getTduckFieldKey();
+            String label = mapping.getTduckFieldLabel();
+            if (key != null && !key.isBlank() && label != null && !label.isBlank()) {
+                labels.putIfAbsent(key, label.trim());
+            }
+        }
+        return labels;
     }
 
     private boolean hasExportableFormValueKey(String key) {

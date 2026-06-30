@@ -243,7 +243,7 @@
           v-if="!isMobile"
           :columns="tableMemberColumns"
           :data="selectedTableAssignments"
-          :pagination="{ pageSize: 6 }"
+          :pagination="{ pageSize: 10 }"
           :row-key="rowKey"
         >
           <template #empty>
@@ -413,6 +413,7 @@ import { useIsMobile } from "@/composables/useResponsive";
 import type { DinnerAssignment, DinnerTable } from "@/utils/types";
 import type { ImportResultDto } from "@/stores/meeting";
 import { useMeetingStore } from "@/stores/meeting";
+import { attendeeTypeLabel } from "@/utils/meetingDisplay";
 import { downloadXlsxTemplate } from "@/utils/xlsxTemplate";
 
 type DinnerStatusFilter = "ALL" | "ASSIGNED" | "UNASSIGNED";
@@ -1202,7 +1203,16 @@ function downloadImportTemplate() {
   downloadXlsxTemplate("晚宴分配导入模板", ["姓名", "手机号", "证件号", "单位", "桌号", "备注"], [
     ["张三", "13800000000", "", "示例公司", "1号桌", "主桌"],
     ["李四", "", "110101199001010000", "示例公司", "2号桌", "清真"]
-  ]);
+  ], {
+    instructions: [
+      "请在“导入模板”工作表填写数据，不要修改第一行表头名称。",
+      "桌号为必填；如果桌号不存在，系统会自动创建该桌，默认可就餐人数为 10 人。",
+      "参会人匹配优先使用手机号，其次使用证件号；两者都为空时，使用姓名+单位匹配。",
+      "如果姓名+单位匹配到多人，请改填手机号或证件号，避免误分配。",
+      "系统会校验桌号容量，超过可就餐人数的行会导入失败。",
+      "备注可填写主桌、清真、素食等现场用餐提示。"
+    ]
+  });
   message.success("晚宴分配导入模板已开始下载");
 }
 
@@ -1219,7 +1229,7 @@ function exportDinnerAttendeeList() {
       row.attendeePhone || "",
       row.organization || "",
       row.title || "",
-      row.attendeeType || "",
+      attendeeTypeLabel(row.attendeeType),
       row.assigned ? "已安排" : "未安排",
       row.tableNo || "",
       row.remark || ""

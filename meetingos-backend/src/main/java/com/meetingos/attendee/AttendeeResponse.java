@@ -20,6 +20,7 @@ public record AttendeeResponse(
         boolean accommodationRequired,
         String roomNo,
         String roomRemark,
+        String seatLabel,
         String remark,
         String tags,
         ReviewStatus reviewStatus,
@@ -34,28 +35,72 @@ public record AttendeeResponse(
         String checkinOperator,
         String attendeeCode,
         String tduckDataId,
+        boolean seatAssigned,
+        boolean roomAssigned,
+        boolean dinnerAssigned,
         boolean seatQueried,
         boolean roomQueried,
+        boolean dinnerQueried,
         Map<String, Object> formValues
 ) {
 
     public static AttendeeResponse masked(Attendee attendee) {
-        return from(attendee, true, Set.of(), Set.of());
+        return from(attendee, true, Set.of(), Set.of(), Set.of());
     }
 
     public static AttendeeResponse raw(Attendee attendee) {
-        return from(attendee, false, Set.of(), Set.of());
+        return from(attendee, false, Set.of(), Set.of(), Set.of());
     }
 
     public static AttendeeResponse masked(Attendee attendee, Set<Long> seatQueriedAttendeeIds, Set<Long> roomQueriedAttendeeIds) {
-        return from(attendee, true, seatQueriedAttendeeIds, roomQueriedAttendeeIds);
+        return from(attendee, true, seatQueriedAttendeeIds, roomQueriedAttendeeIds, Set.of());
     }
 
     public static AttendeeResponse raw(Attendee attendee, Set<Long> seatQueriedAttendeeIds, Set<Long> roomQueriedAttendeeIds) {
-        return from(attendee, false, seatQueriedAttendeeIds, roomQueriedAttendeeIds);
+        return from(attendee, false, seatQueriedAttendeeIds, roomQueriedAttendeeIds, Set.of());
     }
 
-    private static AttendeeResponse from(Attendee attendee, boolean masked, Set<Long> seatQueriedAttendeeIds, Set<Long> roomQueriedAttendeeIds) {
+    public static AttendeeResponse masked(Attendee attendee, String seatLabel, Set<Long> seatQueriedAttendeeIds, Set<Long> roomQueriedAttendeeIds) {
+        return from(attendee, true, seatLabel, false, seatQueriedAttendeeIds, roomQueriedAttendeeIds, Set.of());
+    }
+
+    public static AttendeeResponse raw(Attendee attendee, String seatLabel, Set<Long> seatQueriedAttendeeIds, Set<Long> roomQueriedAttendeeIds) {
+        return from(attendee, false, seatLabel, false, seatQueriedAttendeeIds, roomQueriedAttendeeIds, Set.of());
+    }
+
+    public static AttendeeResponse masked(Attendee attendee,
+                                          String seatLabel,
+                                          boolean dinnerAssigned,
+                                          Set<Long> seatQueriedAttendeeIds,
+                                          Set<Long> roomQueriedAttendeeIds,
+                                          Set<Long> dinnerQueriedAttendeeIds) {
+        return from(attendee, true, seatLabel, dinnerAssigned, seatQueriedAttendeeIds, roomQueriedAttendeeIds, dinnerQueriedAttendeeIds);
+    }
+
+    public static AttendeeResponse raw(Attendee attendee,
+                                       String seatLabel,
+                                       boolean dinnerAssigned,
+                                       Set<Long> seatQueriedAttendeeIds,
+                                       Set<Long> roomQueriedAttendeeIds,
+                                       Set<Long> dinnerQueriedAttendeeIds) {
+        return from(attendee, false, seatLabel, dinnerAssigned, seatQueriedAttendeeIds, roomQueriedAttendeeIds, dinnerQueriedAttendeeIds);
+    }
+
+    private static AttendeeResponse from(Attendee attendee,
+                                         boolean masked,
+                                         Set<Long> seatQueriedAttendeeIds,
+                                         Set<Long> roomQueriedAttendeeIds,
+                                         Set<Long> dinnerQueriedAttendeeIds) {
+        return from(attendee, masked, null, false, seatQueriedAttendeeIds, roomQueriedAttendeeIds, dinnerQueriedAttendeeIds);
+    }
+
+    private static AttendeeResponse from(Attendee attendee,
+                                         boolean masked,
+                                         String seatLabel,
+                                         boolean dinnerAssigned,
+                                         Set<Long> seatQueriedAttendeeIds,
+                                         Set<Long> roomQueriedAttendeeIds,
+                                         Set<Long> dinnerQueriedAttendeeIds) {
         String phone = attendee.getPhone();
         String identityNo = attendee.getIdentityNo();
         String email = attendee.getEmail();
@@ -82,6 +127,7 @@ public record AttendeeResponse(
                 attendee.isAccommodationRequired(),
                 attendee.getRoomNo(),
                 attendee.getRoomRemark(),
+                seatLabel,
                 attendee.getRemark(),
                 attendee.getTags(),
                 attendee.getReviewStatus(),
@@ -96,8 +142,12 @@ public record AttendeeResponse(
                 attendee.getCheckinOperator(),
                 attendee.getAttendeeCode(),
                 attendee.getTduckDataId(),
+                seatLabel != null && !seatLabel.isBlank(),
+                attendee.getRoomNo() != null && !attendee.getRoomNo().isBlank(),
+                dinnerAssigned,
                 containsId(seatQueriedAttendeeIds, attendee.getId()),
                 containsId(roomQueriedAttendeeIds, attendee.getId()),
+                containsId(dinnerQueriedAttendeeIds, attendee.getId()),
                 formValues
         );
     }

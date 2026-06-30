@@ -379,6 +379,7 @@ import { useRouteMeeting } from "@/composables/useRouteMeeting";
 import { useIsMobile } from "@/composables/useResponsive";
 import type { CreateRoomPayload, ImportResultDto } from "@/stores/meeting";
 import { useMeetingStore } from "@/stores/meeting";
+import { attendeeTypeLabel } from "@/utils/meetingDisplay";
 import { downloadXlsxTemplate } from "@/utils/xlsxTemplate";
 import type { Attendee, Room, RoomStatus } from "@/utils/types";
 
@@ -952,8 +953,8 @@ function importAssignments(options: UploadCustomRequestOptions) {
 }
 
 function exportRooms() {
-  void store.downloadExport("rooms").then(() => {
-    message.success("住宿安排 CSV 已开始下载");
+  void store.downloadExport("rooms", { format: "xlsx" }).then(() => {
+    message.success("住宿安排 XLSX 已开始下载");
   }).catch((error) => {
     message.error(error instanceof Error ? error.message : "导出失败，请确认后端服务已启动");
   });
@@ -972,7 +973,7 @@ function exportRoomAttendeeList() {
       row.attendeePhone || "",
       row.organization || "",
       row.title || "",
-      row.attendeeType || "",
+      attendeeTypeLabel(row.attendeeType),
       row.assigned ? "已安排" : "未安排",
       row.roomNo || "",
       row.roomRemark || ""
@@ -989,7 +990,9 @@ function downloadImportTemplate(key: string | number) {
     message.warning("未找到导入模板");
     return;
   }
-  downloadXlsxTemplate(template.filename, template.headers, template.rows);
+  downloadXlsxTemplate(template.filename, template.headers, template.rows, {
+    instructions: template.instructions
+  });
   message.success(`${template.filename} 已开始下载`);
 }
 
@@ -1071,13 +1074,20 @@ function errorMessageOf(error: unknown, fallback: string) {
   return error instanceof Error ? error.message : fallback;
 }
 
-const importTemplates: Record<ImportTemplateKey, { filename: string; headers: string[]; rows: string[][] }> = {
+const importTemplates: Record<ImportTemplateKey, { filename: string; headers: string[]; rows: string[][]; instructions: string[] }> = {
   rooms: {
     filename: "房间号导入模板",
     headers: ["房间号", "酒店", "房型", "可入住人数", "入住提示"],
     rows: [
       ["1801", "上海会议中心酒店", "标准间", "2", "14:00 后可入住，凭身份证办理入住"],
       ["1802", "上海会议中心酒店", "大床房", "1", "VIP 嘉宾优先安排"]
+    ],
+    instructions: [
+      "请在“导入模板”工作表填写数据，不要修改第一行表头名称。",
+      "房间号为必填，且同一会议内不能重复。",
+      "可入住人数请填写正整数；为空时系统按 1 人处理。",
+      "酒店、房型、入住提示可为空，入住提示会在住宿查询结果中展示。",
+      "导入文件仅支持 .xlsx 格式；系统只读取第一个工作表的数据。"
     ]
   },
   assignments: {
@@ -1086,6 +1096,14 @@ const importTemplates: Record<ImportTemplateKey, { filename: string; headers: st
     rows: [
       ["张三", "13800000000", "", "示例公司", "1801", "同住人：李四"],
       ["李四", "", "110101199001010000", "示例公司", "1801", "与张三同住"]
+    ],
+    instructions: [
+      "请先导入或创建房间号，再导入房间分配。",
+      "房间号为必填，必须是当前会议已经存在且未停用的房间号。",
+      "参会人匹配优先使用手机号，其次使用证件号；两者都为空时，使用姓名+单位匹配。",
+      "如果姓名+单位匹配到多人，请改填手机号或证件号，避免误分配。",
+      "系统会校验房间容量，超过可入住人数的行会导入失败。",
+      "房间备注可填写同住人、特殊需求等现场可见备注。"
     ]
   }
 };

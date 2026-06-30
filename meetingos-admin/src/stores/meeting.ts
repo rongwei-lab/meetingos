@@ -107,9 +107,14 @@ interface AttendeeDto {
   registeredAt?: string;
   roomNo?: string;
   roomRemark?: string;
+  seatLabel?: string;
   remark?: string;
+  seatAssigned?: boolean;
+  roomAssigned?: boolean;
+  dinnerAssigned?: boolean;
   seatQueried?: boolean;
   roomQueried?: boolean;
+  dinnerQueried?: boolean;
   checkinStatus?: Attendee["checkinStatus"];
   checkedInAt?: string;
   attendeeCode?: string;
@@ -388,6 +393,20 @@ export interface TduckSyncResultDto {
   syncLogId?: number;
   attendeeId?: number;
   message?: string;
+}
+
+export interface TduckBatchSyncFailureDto {
+  dataId: string;
+  message: string;
+}
+
+export interface TduckBatchSyncResultDto {
+  scanned: number;
+  success: number;
+  duplicateIgnored: number;
+  failed: number;
+  failures: TduckBatchSyncFailureDto[];
+  message: string;
 }
 
 export interface TduckBrowserSessionDto {
@@ -1729,6 +1748,20 @@ export const useMeetingStore = defineStore("meeting", {
       ]);
       return result;
     },
+    async pullAllTduckSync(meetingId: string) {
+      const normalizedMeetingId = requireMeetingId(meetingId);
+      const result = unwrapApi(
+        await http.post<TduckBatchSyncResultDto>("/admin/tduck/sync/pull/all", {
+          meetingId: backendId(normalizedMeetingId)
+        })
+      );
+      await Promise.allSettled([
+        this.loadAttendees(normalizedMeetingId),
+        this.loadSyncLogs(normalizedMeetingId),
+        this.loadStatistics(normalizedMeetingId)
+      ]);
+      return result;
+    },
     async auditAttendees(ids: string[], status: Attendee["auditStatus"], reason = "") {
       const auditedAt = nowIso();
       try {
@@ -1772,8 +1805,12 @@ export const useMeetingStore = defineStore("meeting", {
                 // 标签接口返回的实体可能暂时缺少排座/住宿展示字段，这里保留前端已合并出的展示信息。
                 seatLabel: attendee?.seatLabel,
                 roomId: attendee?.roomId,
+                seatAssigned: attendee?.seatAssigned,
+                roomAssigned: attendee?.roomAssigned,
+                dinnerAssigned: attendee?.dinnerAssigned,
                 seatQueried: attendee?.seatQueried,
-                roomQueried: attendee?.roomQueried
+                roomQueried: attendee?.roomQueried,
+                dinnerQueried: attendee?.dinnerQueried
               }
             : item
         );
@@ -1893,6 +1930,7 @@ export const useMeetingStore = defineStore("meeting", {
         attendee.roomNo = room.roomNo;
         attendee.roomId = room.id;
         attendee.roomRemark = normalizedRoomRemark;
+        attendee.roomAssigned = true;
         room.status = "ASSIGNED";
       }
       this.reconcileAssignments();
@@ -1910,6 +1948,7 @@ export const useMeetingStore = defineStore("meeting", {
         attendee.roomNo = undefined;
         attendee.roomId = undefined;
         attendee.roomRemark = undefined;
+        attendee.roomAssigned = false;
         if (room && !this.attendees.some((item) => item.id !== attendeeId && (item.roomId === room.id || item.roomNo === room.roomNo))) {
           room.status = "AVAILABLE";
         }
@@ -1935,6 +1974,7 @@ export const useMeetingStore = defineStore("meeting", {
           ...this.dinnerAssignments.filter((item) => !(item.meetingId === assignment.meetingId && item.attendeeId === assignment.attendeeId)),
           assignment
         ];
+        attendee.dinnerAssigned = true;
         await this.loadDinnerTables(meetingId);
         return assignment;
       } catch (error) {
@@ -1956,18 +1996,22 @@ export const useMeetingStore = defineStore("meeting", {
           ...this.dinnerAssignments.filter((item) => !(item.meetingId === meetingId && item.attendeeId === attendee.id)),
           assignment
         ];
+        attendee.dinnerAssigned = true;
         return assignment;
       }
     },
     async clearDinnerAssignment(attendeeId: string) {
       const meetingId = requireMeetingId(this.currentMeetingId);
+      const attendee = this.attendees.find((item) => item.id === attendeeId);
       try {
         await http.post("/admin/dinner/clear", undefined, { params: { attendeeId: backendId(attendeeId) } });
         this.dinnerAssignments = this.dinnerAssignments.filter((item) => !(item.meetingId === meetingId && item.attendeeId === attendeeId));
+        if (attendee) attendee.dinnerAssigned = false;
         await this.loadDinnerTables(meetingId);
       } catch (error) {
         if (this.apiAvailable || !canUseDemoFallback(error)) throw error;
         this.dinnerAssignments = this.dinnerAssignments.filter((item) => !(item.meetingId === meetingId && item.attendeeId === attendeeId));
+        if (attendee) attendee.dinnerAssigned = false;
       }
     },
     async importAttendees(file: File) {
@@ -2226,18 +2270,26 @@ export const useMeetingStore = defineStore("meeting", {
     },
     reconcileAssignments() {
       const seatLabelByAttendee = new Map<string, string>();
+      const hasLoadedSeatsForMeeting = this.currentSeats.length > 0;
       for (const seat of this.currentSeats) {
         if (seat.attendeeId) {
           seatLabelByAttendee.set(seat.attendeeId, `${seat.areaName} ${seat.rowNo}排${seat.seatNo}座`);
         }
       }
       const roomByNo = new Map(this.currentRooms.map((room) => [room.roomNo, room]));
+      const dinnerAssignedAttendeeIds = new Set(this.currentDinnerAssignments.map((assignment) => assignment.attendeeId));
       this.attendees = this.attendees.map((attendee) => {
         if (attendee.meetingId !== this.currentMeetingId) return attendee;
         const room = attendee.roomNo ? roomByNo.get(attendee.roomNo) : undefined;
+        const seatLabel = hasLoadedSeatsForMeeting ? seatLabelByAttendee.get(attendee.id) : attendee.seatLabel;
         return {
           ...attendee,
-          seatLabel: seatLabelByAttendee.get(attendee.id),
+          // 参会人接口会直接返回 seatLabel；只有当前会议座位图已加载时，才用座位图结果覆盖它。
+          // 否则首次进入参会人管理页时会因为 currentSeats 为空，把真实座位号误清成空值。
+          seatLabel,
+          seatAssigned: hasLoadedSeatsForMeeting ? seatLabelByAttendee.has(attendee.id) : attendee.seatAssigned || Boolean(seatLabel),
+          roomAssigned: Boolean(attendee.roomNo),
+          dinnerAssigned: dinnerAssignedAttendeeIds.has(attendee.id) || Boolean(attendee.dinnerAssigned),
           roomId: room?.id || attendee.roomId
         };
       });
@@ -2318,6 +2370,7 @@ export const useMeetingStore = defineStore("meeting", {
         seat.attendeeName = attendee.name;
         seat.attendeeTags = attendee.tags.join(",");
         attendee.seatLabel = `${seat.areaName} ${seat.rowNo}排${seat.seatNo}座`;
+        attendee.seatAssigned = true;
       }
     },
     assignSeatLocally(attendeeId: string, seatId: string) {
@@ -2335,6 +2388,7 @@ export const useMeetingStore = defineStore("meeting", {
       seat.attendeeName = attendee.name;
       seat.attendeeTags = attendee.tags.join(",");
       attendee.seatLabel = `${seat.areaName} ${seat.rowNo}排${seat.seatNo}座`;
+      attendee.seatAssigned = true;
     },
     clearSeatLocally(attendeeId: string) {
       const attendee = this.attendees.find((item) => item.id === attendeeId);
@@ -2344,7 +2398,10 @@ export const useMeetingStore = defineStore("meeting", {
         seat.attendeeName = undefined;
         seat.attendeeTags = undefined;
       }
-      if (attendee) attendee.seatLabel = undefined;
+      if (attendee) {
+        attendee.seatLabel = undefined;
+        attendee.seatAssigned = false;
+      }
     },
     swapSeatsLocally(firstAttendeeId: string, secondAttendeeId: string) {
       if (firstAttendeeId === secondAttendeeId) return;
@@ -2367,6 +2424,8 @@ export const useMeetingStore = defineStore("meeting", {
       secondSeat.attendeeTags = firstAttendee.tags.join(",");
       firstAttendee.seatLabel = `${secondSeat.areaName} ${secondSeat.rowNo}排${secondSeat.seatNo}座`;
       secondAttendee.seatLabel = `${firstSeat.areaName} ${firstSeat.rowNo}排${firstSeat.seatNo}座`;
+      firstAttendee.seatAssigned = true;
+      secondAttendee.seatAssigned = true;
     },
     setSeatLockedLocally(seatId: string, locked: boolean) {
       const seat = this.seats.find((item) => item.id === seatId);
@@ -2601,8 +2660,13 @@ function mapAttendee(item: AttendeeDto, meetingId: string): Attendee {
     registeredAt: item.registeredAt || "",
     roomNo: item.roomNo,
     roomRemark: item.roomRemark,
+    seatLabel: item.seatLabel,
+    seatAssigned: Boolean(item.seatAssigned || item.seatLabel),
+    roomAssigned: Boolean(item.roomAssigned || item.roomNo),
+    dinnerAssigned: Boolean(item.dinnerAssigned),
     seatQueried: Boolean(item.seatQueried),
     roomQueried: Boolean(item.roomQueried),
+    dinnerQueried: Boolean(item.dinnerQueried),
     checkinStatus: item.checkinStatus || "NOT_CHECKED_IN",
     checkinTime: item.checkedInAt,
     formValues: item.formValues || {}

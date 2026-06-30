@@ -109,7 +109,7 @@ docker compose --env-file ../.env --profile tduck up -d
 - 会议管理员不能访问未授权会议。
 - 普通管理员不能删除操作日志。
 - 会议管理员创建会议后可继续查看、编辑和流转自己创建的会议。
-- 系统设置接口只允许超级管理员访问；Webhook Token 保存后不回显明文，空值保存不覆盖旧密钥。
+- 系统设置接口只允许超级管理员访问；Webhook Token 仅由 `TDUCK_WEBHOOK_TOKEN` 环境变量管理，后台保存配置不能覆盖密钥。
 
 ## 安全测试
 
@@ -143,6 +143,6 @@ docker compose --env-file ../.env --profile tduck up -d
 
 - P0/P1 缺陷清零。
 - 核心报名、审核、排座、住宿、签到链路通过端到端测试。
-- 默认密码、Webhook Token、JWT Secret 已替换。
+- 默认密码、`TDUCK_WEBHOOK_TOKEN`、JWT Secret 已替换为强随机值。
 - 备份、恢复、日志和权限策略完成检查。
 - 已形成 TDuck 联调记录和字段映射表。

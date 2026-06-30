@@ -457,6 +457,59 @@ public class TduckService {
         return syncTrusted(webhookRequest, "pull-sync");
     }
 
+    @Transactional
+    public TduckBatchPullSyncResponse batchPullSync(TduckBatchPullSyncRequest request) {
+        TduckFormBinding binding = bindingRepository.findByMeetingId(request.meetingId())
+                .orElseThrow(() -> BusinessException.notFound("会议未绑定 TDuck 表单"));
+        int limit = normalizeBatchLimit(request.limit());
+        List<String> dataIds;
+        try {
+            dataIds = tduckClient.listFormDataIds(binding.getFormKey(), limit);
+        } catch (TduckClientException ex) {
+            throw BusinessException.badRequest("调用 TDuck 报名列表失败: " + ex.getMessage());
+        }
+
+        int success = 0;
+        int duplicateIgnored = 0;
+        int failed = 0;
+        List<TduckBatchPullSyncFailure> failures = new ArrayList<>();
+        for (String dataId : dataIds) {
+            try {
+                TduckFormDataDetails details = fetchRemoteData(binding.getFormKey(), dataId);
+                ensureRemoteDataBelongsToBinding(binding.getFormKey(), details);
+                TduckWebhookRequest webhookRequest = new TduckWebhookRequest(
+                        "pull-sync-" + binding.getFormKey() + "-" + details.dataId(),
+                        "PULL_SYNC",
+                        binding.getFormKey(),
+                        details.dataId(),
+                        details.formData(),
+                        Map.of("source", "batch-pull-sync", "dataId", details.dataId(), "data", details.formData(), "raw", details.raw())
+                );
+                TduckWebhookResult result = syncTrusted(webhookRequest, "pull-sync");
+                if (result.status() == SyncStatus.SUCCESS) {
+                    success++;
+                } else if (result.status() == SyncStatus.DUPLICATE_IGNORED) {
+                    duplicateIgnored++;
+                } else {
+                    failed++;
+                    addBatchFailure(failures, details.dataId(), result.message());
+                }
+            } catch (RuntimeException ex) {
+                /*
+                 * 一键同步是补偿工具，必须让单条脏数据或映射问题暴露出来但不能中断整批。
+                 * 具体失败仍会进入同步日志；响应里只保留少量样例，避免前端弹窗过大。
+                 */
+                failed++;
+                addBatchFailure(failures, dataId, ex.getMessage());
+            }
+        }
+        String message = "已扫描 " + dataIds.size()
+                + " 条，成功 " + success
+                + " 条，已同步跳过 " + duplicateIgnored
+                + " 条，失败 " + failed + " 条";
+        return new TduckBatchPullSyncResponse(dataIds.size(), success, duplicateIgnored, failed, failures, message);
+    }
+
     private Attendee upsertAttendee(Meeting meeting, MappedAttendeeData mapped, TduckWebhookRequest request) {
         // 同一会议手机号唯一：TDuck 重推或用户修改报名时更新原记录，而不是生成第二条业务主数据。
         Attendee attendee = attendeeRepository.findByMeetingAndPhone(meeting, mapped.phone())
@@ -607,21 +660,42 @@ public class TduckService {
     private TduckFormDataDetails fetchRemoteData(String formKey, String dataId) {
         try {
             TduckFormDataDetails details = tduckClient.formDataDetails(dataId);
-            if (!StringUtils.hasText(details.formKey())) {
-                throw BusinessException.badRequest("TDuck 报名数据缺少 formKey，无法确认来源表单");
-            }
-            if (!formKey.equals(details.formKey())) {
-                throw BusinessException.badRequest("TDuck 报名数据不属于当前绑定表单，请检查 dataId 是否填错");
-            }
-            if (details.formData() == null || details.formData().isEmpty()) {
-                throw BusinessException.badRequest("TDuck 同步接口返回空数据");
-            }
+            ensureRemoteDataBelongsToBinding(formKey, details);
             return details;
         } catch (BusinessException ex) {
             throw ex;
         } catch (TduckClientException ex) {
             throw BusinessException.badRequest("调用 TDuck 单条报名详情失败: " + ex.getMessage());
         }
+    }
+
+    private void ensureRemoteDataBelongsToBinding(String formKey, TduckFormDataDetails details) {
+        if (!StringUtils.hasText(details.formKey())) {
+            throw BusinessException.badRequest("TDuck 报名数据缺少 formKey，无法确认来源表单");
+        }
+        if (!formKey.equals(details.formKey())) {
+            throw BusinessException.badRequest("TDuck 报名数据不属于当前绑定表单，请检查 dataId 是否填错");
+        }
+        if (details.formData() == null || details.formData().isEmpty()) {
+            throw BusinessException.badRequest("TDuck 同步接口返回空数据");
+        }
+    }
+
+    private int normalizeBatchLimit(Integer limit) {
+        if (limit == null) {
+            return 1_000;
+        }
+        return Math.min(Math.max(limit, 1), 1_000);
+    }
+
+    private void addBatchFailure(List<TduckBatchPullSyncFailure> failures, String dataId, String message) {
+        if (failures.size() >= 10) {
+            return;
+        }
+        failures.add(new TduckBatchPullSyncFailure(
+                safeValue(dataId),
+                firstNonBlank(message, "同步失败")
+        ));
     }
 
     private TduckSyncLog successLog(TduckWebhookRequest request, Meeting meeting, String eventId, Attendee attendee) {

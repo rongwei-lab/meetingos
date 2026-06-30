@@ -65,16 +65,13 @@
           <div class="panel-heading">
             <div>
               <h2>TDuck 接入</h2>
-              <span>域名、前后端地址和 Webhook Token</span>
+              <span>域名和 TDuck 前后端地址</span>
             </div>
           </div>
           <n-form class="settings-form" label-placement="left" label-width="150">
             <n-form-item label="会议系统域名"><n-input v-model:value="settings.baseUrl" /></n-form-item>
             <n-form-item label="TDuck 前端地址"><n-input v-model:value="settings.tduckFrontUrl" /></n-form-item>
             <n-form-item label="TDuck 后端地址"><n-input v-model:value="settings.tduckApiUrl" /></n-form-item>
-            <n-form-item label="Webhook Token">
-              <n-input v-model:value="settings.webhookToken" type="password" show-password-on="click" :placeholder="settings.webhookTokenMasked || '留空表示不修改'" />
-            </n-form-item>
           </n-form>
           <n-space justify="end" class="settings-actions">
             <n-button :loading="loadingSettings" @click="loadSettings">刷新配置</n-button>
@@ -348,8 +345,6 @@ const settings = reactive({
   baseUrl: "https://meeting.example.com",
   tduckFrontUrl: "https://meeting.example.com/tduck/",
   tduckApiUrl: "https://meeting.example.com/tduck-api/",
-  webhookToken: "",
-  webhookTokenMasked: "",
   maskSensitive: true,
   exportApproval: true,
   brandName: "会议管理系统",
@@ -583,8 +578,6 @@ function loadSettings() {
       settings.baseUrl = loaded.baseUrl;
       settings.tduckFrontUrl = loaded.tduckFrontUrl;
       settings.tduckApiUrl = loaded.tduckApiUrl;
-      settings.webhookToken = "";
-      settings.webhookTokenMasked = loaded.webhookTokenMasked || "";
       settings.maskSensitive = loaded.maskSensitive;
       settings.exportApproval = loaded.exportApproval;
       settings.brandName = loaded.brandName || "会议管理系统";
@@ -614,7 +607,6 @@ function saveSettings() {
     baseUrl: settings.baseUrl,
     tduckFrontUrl: settings.tduckFrontUrl,
     tduckApiUrl: settings.tduckApiUrl,
-    webhookToken: settings.webhookToken.trim() || undefined,
     maskSensitive: settings.maskSensitive,
     exportApproval: settings.exportApproval,
     brandName: settings.brandName.trim(),
@@ -624,8 +616,6 @@ function saveSettings() {
     faviconUrl: settings.faviconUrl.trim() || settings.logoUrl.trim()
   })
     .then((saved) => {
-      settings.webhookToken = "";
-      settings.webhookTokenMasked = saved.webhookTokenMasked || "";
       settings.brandName = saved.brandName;
       settings.browserTitle = saved.browserTitle;
       settings.metaDescription = saved.metaDescription;

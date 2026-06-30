@@ -118,6 +118,13 @@ public class TduckController {
         return ApiResponse.ok(tduckService.pullSync(request));
     }
 
+    @PostMapping({"/api/tduck/sync/pull/all", "/api/admin/tduck/sync/pull/all"})
+    @PreAuthorize("@meetingAccess.canManage(#request.meetingId())")
+    @AuditLog(action = "TDUCK_BATCH_PULL_SYNC", targetType = "TDUCK_DATA")
+    public ApiResponse<TduckBatchPullSyncResponse> batchPullSync(@Valid @RequestBody TduckBatchPullSyncRequest request) {
+        return ApiResponse.ok(tduckService.batchPullSync(request));
+    }
+
     @PostMapping({
             "/api/tduck/webhook",
             "/api/public/tduck/webhook",

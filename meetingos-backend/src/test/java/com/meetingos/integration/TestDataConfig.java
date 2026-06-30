@@ -69,11 +69,11 @@ class TestDataConfig {
             binding.setWebhookStatus(WebhookStatus.CONFIGURED);
             bindingRepository.save(binding);
 
-            mappingRepository.save(mapping(meeting, AttendeeField.NAME, "name", true));
-            mappingRepository.save(mapping(meeting, AttendeeField.PHONE, "phone", true));
-            mappingRepository.save(mapping(meeting, AttendeeField.ORGANIZATION, "organization", false));
-            mappingRepository.save(mapping(meeting, AttendeeField.TITLE, "title", false));
-            mappingRepository.save(mapping(meeting, AttendeeField.ATTENDEE_TYPE, "attendeeType", false));
+            mappingRepository.save(mapping(meeting, AttendeeField.NAME, "name", "姓名", true));
+            mappingRepository.save(mapping(meeting, AttendeeField.PHONE, "phone", "手机号", true));
+            mappingRepository.save(mapping(meeting, AttendeeField.ORGANIZATION, "organization", "单位", false));
+            mappingRepository.save(mapping(meeting, AttendeeField.TITLE, "title", "职务", false));
+            mappingRepository.save(mapping(meeting, AttendeeField.ATTENDEE_TYPE, "attendeeType", "参会类型", false));
 
             Attendee vip = attendee(meeting, "陈嘉宁", "13800000001", AttendeeType.VIP, "NDEF2026-0001");
             Attendee guest = attendee(meeting, "王子墨", "13800000002", AttendeeType.GUEST, "NDEF2026-0002");
@@ -97,12 +97,12 @@ class TestDataConfig {
         };
     }
 
-    private TduckFieldMapping mapping(Meeting meeting, AttendeeField field, String tduckFieldKey, boolean required) {
+    private TduckFieldMapping mapping(Meeting meeting, AttendeeField field, String tduckFieldKey, String label, boolean required) {
         TduckFieldMapping mapping = new TduckFieldMapping();
         mapping.setMeeting(meeting);
         mapping.setAttendeeField(field);
         mapping.setTduckFieldKey(tduckFieldKey);
-        mapping.setTduckFieldLabel(tduckFieldKey);
+        mapping.setTduckFieldLabel(label);
         mapping.setRequiredMapping(required);
         return mapping;
     }

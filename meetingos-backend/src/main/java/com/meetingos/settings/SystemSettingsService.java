@@ -15,7 +15,6 @@ public class SystemSettingsService {
     private static final String BASE_URL = "baseUrl";
     private static final String TDUCK_FRONT_URL = "tduckFrontUrl";
     private static final String TDUCK_API_URL = "tduckApiUrl";
-    private static final String WEBHOOK_TOKEN = "webhookToken";
     private static final String MASK_SENSITIVE = "maskSensitive";
     private static final String EXPORT_APPROVAL = "exportApproval";
     private static final String BRAND_NAME = "brandName";
@@ -41,7 +40,7 @@ public class SystemSettingsService {
 
     @Transactional(readOnly = true)
     public SystemSettingsResponse current() {
-        String token = get(WEBHOOK_TOKEN, tduckProperties.webhookSecret());
+        String token = webhookToken();
         return new SystemSettingsResponse(
                 get(BASE_URL, appProperties.publicBaseUrl()),
                 get(TDUCK_FRONT_URL, tduckProperties.publicBaseUrl()),
@@ -63,10 +62,8 @@ public class SystemSettingsService {
         put(BASE_URL, normalizeUrl(request.baseUrl(), "会议系统域名"));
         put(TDUCK_FRONT_URL, normalizeUrl(request.tduckFrontUrl(), "TDuck 前端地址"));
         put(TDUCK_API_URL, normalizeUrl(request.tduckApiUrl(), "TDuck 后端地址"));
-        // 空 token 表示不轮换，避免前端保存页面时把原有密钥覆盖为空。
-        if (request.webhookToken() != null && !request.webhookToken().isBlank()) {
-            put(WEBHOOK_TOKEN, request.webhookToken().trim());
-        }
+        // Webhook Token 属于部署密钥，只允许由 TDUCK_WEBHOOK_TOKEN 环境变量管理。
+        // 这里故意忽略请求中的 webhookToken，避免后台页面或旧客户端把密钥写入数据库并覆盖 env。
         put(MASK_SENSITIVE, String.valueOf(request.maskSensitive()));
         put(EXPORT_APPROVAL, String.valueOf(request.exportApproval()));
         put(BRAND_NAME, normalizeText(request.brandName(), DEFAULT_BRAND_NAME));
@@ -90,7 +87,7 @@ public class SystemSettingsService {
 
     @Transactional(readOnly = true)
     public String webhookToken() {
-        return get(WEBHOOK_TOKEN, tduckProperties.webhookSecret());
+        return tduckProperties.webhookSecret();
     }
 
     @Transactional(readOnly = true)

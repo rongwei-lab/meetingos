@@ -6,6 +6,7 @@ import com.meetingos.checkin.CheckinRecord;
 import com.meetingos.checkin.CheckinRecordRepository;
 import com.meetingos.common.BusinessException;
 import com.meetingos.common.CsvFiles;
+import com.meetingos.common.ExportDisplayFormatter;
 import com.meetingos.common.ExportTable;
 import com.meetingos.common.SensitiveDataMasker;
 import com.meetingos.common.SpreadsheetFiles;
@@ -324,7 +325,16 @@ public class ExportTaskService {
     }
 
     private void addDistribution(List<List<?>> rows, String group, Map<String, Long> distribution) {
-        distribution.forEach((key, value) -> rows.add(List.of(group, key, value)));
+        distribution.forEach((key, value) -> rows.add(List.of(group, distributionLabel(group, key), value)));
+    }
+
+    private String distributionLabel(String group, String key) {
+        return switch (group) {
+            case "审核状态" -> ExportDisplayFormatter.reviewStatus(key);
+            case "参会类型" -> ExportDisplayFormatter.attendeeType(key);
+            case "签到方式" -> ExportDisplayFormatter.checkinType(key);
+            default -> key;
+        };
     }
 
     private String percent(double value) {

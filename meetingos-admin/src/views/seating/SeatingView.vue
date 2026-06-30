@@ -572,7 +572,7 @@ const zoomPercent = computed(() => `${Math.round(seatZoom.value * 100)}%`);
 const seatMetricsStyle = computed(() => {
   // 用尺寸变量缩放座位图，滚动区域会按缩放后的真实尺寸重新计算，避免 transform 缩放造成“看起来变小但仍按原尺寸占位”。
   const width = Math.round(72 * seatZoom.value);
-  const height = Math.round(52 * seatZoom.value);
+  const height = Math.round(46 * seatZoom.value);
   const gap = Math.max(6, Math.round(10 * seatZoom.value));
   return {
     "--seat-width": `${width}px`,

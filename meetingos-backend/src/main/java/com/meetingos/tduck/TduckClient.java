@@ -175,6 +175,44 @@ public class TduckClient {
         );
     }
 
+    public List<String> listFormDataIds(String formKey, int limit) {
+        if (!StringUtils.hasText(formKey)) {
+            throw new TduckClientException("TDuck formKey 不能为空");
+        }
+        int maxRows = Math.min(Math.max(limit, 1), 1_000);
+        int pageSize = Math.min(maxRows, 100);
+        List<String> result = new ArrayList<>();
+        /*
+         * TDuck 管理端列表接口按 id 倒序返回，且 current 是 0 基页码。这里先只分页读取数据 ID，
+         * 详情由调用方逐条拉取，确保单条异常不会让整批补偿同步直接中断。
+         */
+        for (int current = 0; result.size() < maxRows; current++) {
+            Map<String, Object> body = new LinkedHashMap<>();
+            body.put("formKey", formKey.trim());
+            body.put("current", current);
+            body.put("size", pageSize);
+            Map<String, Object> response = withTokenRetry(token -> requestPost(apiUrl("/user/form/data/query"), body, token));
+            Object data = unwrapTduckData(response);
+            List<Map<String, Object>> rows = extractRows(data);
+            if (rows.isEmpty()) {
+                break;
+            }
+            for (Map<String, Object> row : rows) {
+                if (result.size() >= maxRows) {
+                    break;
+                }
+                String dataId = firstText(row, "id", "dataId");
+                if (StringUtils.hasText(dataId)) {
+                    result.add(dataId);
+                }
+            }
+            if (rows.size() < pageSize) {
+                break;
+            }
+        }
+        return result;
+    }
+
     public TduckBrowserSessionResponse browserSession() {
         String token = adminToken();
         Map<String, Object> userInfo = new LinkedHashMap<>();

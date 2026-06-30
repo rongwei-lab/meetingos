@@ -8,7 +8,11 @@ import com.meetingos.exporttask.ExportTaskService;
 import com.meetingos.operationlog.AuditLog;
 import com.meetingos.publicapi.PublicQueryHistoryRepository;
 import com.meetingos.publicapi.PublicQueryType;
+import com.meetingos.seating.Seat;
+import com.meetingos.seating.SeatAssignment;
+import com.meetingos.seating.SeatAssignmentRepository;
 import com.meetingos.settings.SystemSettingsService;
+import com.meetingos.dinner.DinnerAssignmentRepository;
 import jakarta.validation.Valid;
 import org.springframework.http.ResponseEntity;
 import org.springframework.http.MediaType;
@@ -25,7 +29,9 @@ import org.springframework.web.bind.annotation.RequestPart;
 import org.springframework.web.bind.annotation.RestController;
 import org.springframework.web.multipart.MultipartFile;
 
+import java.util.Map;
 import java.util.Set;
+import java.util.stream.Collectors;
 
 @RestController
 @RequestMapping({"/api/attendees", "/api/admin/attendees"})
@@ -35,15 +41,21 @@ public class AttendeeController {
     private final SystemSettingsService systemSettingsService;
     private final ExportTaskService exportTaskService;
     private final PublicQueryHistoryRepository publicQueryHistoryRepository;
+    private final SeatAssignmentRepository seatAssignmentRepository;
+    private final DinnerAssignmentRepository dinnerAssignmentRepository;
 
     public AttendeeController(AttendeeService attendeeService,
                               SystemSettingsService systemSettingsService,
                               ExportTaskService exportTaskService,
-                              PublicQueryHistoryRepository publicQueryHistoryRepository) {
+                              PublicQueryHistoryRepository publicQueryHistoryRepository,
+                              SeatAssignmentRepository seatAssignmentRepository,
+                              DinnerAssignmentRepository dinnerAssignmentRepository) {
         this.attendeeService = attendeeService;
         this.systemSettingsService = systemSettingsService;
         this.exportTaskService = exportTaskService;
         this.publicQueryHistoryRepository = publicQueryHistoryRepository;
+        this.seatAssignmentRepository = seatAssignmentRepository;
+        this.dinnerAssignmentRepository = dinnerAssignmentRepository;
     }
 
     @PostMapping
@@ -72,8 +84,39 @@ public class AttendeeController {
          */
         Set<Long> seatQueriedAttendeeIds = Set.copyOf(publicQueryHistoryRepository.findQueriedAttendeeIds(meetingId, PublicQueryType.SEAT));
         Set<Long> roomQueriedAttendeeIds = Set.copyOf(publicQueryHistoryRepository.findQueriedAttendeeIds(meetingId, PublicQueryType.ROOM));
+        Set<Long> dinnerQueriedAttendeeIds = Set.copyOf(publicQueryHistoryRepository.findQueriedAttendeeIds(meetingId, PublicQueryType.DINNER));
+        var seatAssignments = seatAssignmentRepository.findWithAttendeeAndSeatByMeetingId(meetingId);
+        Set<Long> seatAssignedAttendeeIds = seatAssignments.stream()
+                .filter(assignment -> assignment.getAttendee() != null)
+                .map(assignment -> assignment.getAttendee().getId())
+                .collect(Collectors.toSet());
+        Set<Long> dinnerAssignedAttendeeIds = dinnerAssignmentRepository.findByMeetingIdOrderByTableNoAscIdAsc(meetingId).stream()
+                .filter(assignment -> assignment.getAttendee() != null)
+                .map(assignment -> assignment.getAttendee().getId())
+                .collect(Collectors.toSet());
+        Map<Long, String> seatLabelByAttendeeId = seatAssignments.stream()
+                .filter(assignment -> assignment.getAttendee() != null
+                        && assignment.getSeat() != null
+                        && assignment.getSeat().getAreaName() != null
+                        && !assignment.getSeat().getAreaName().isBlank())
+                .collect(Collectors.toMap(
+                        assignment -> assignment.getAttendee().getId(),
+                        this::seatLabel,
+                        (existing, replacement) -> existing
+                ));
         return ApiResponse.ok(new PageResponse<>(
-                result.content().stream().map(attendee -> response(attendee, masked, seatQueriedAttendeeIds, roomQueriedAttendeeIds)).toList(),
+                result.content().stream()
+                        .map(attendee -> response(
+                                attendee,
+                                seatLabelByAttendeeId.get(attendee.getId()),
+                                seatAssignedAttendeeIds.contains(attendee.getId()),
+                                dinnerAssignedAttendeeIds.contains(attendee.getId()),
+                                masked,
+                                seatQueriedAttendeeIds,
+                                roomQueriedAttendeeIds,
+                                dinnerQueriedAttendeeIds
+                        ))
+                        .toList(),
                 result.page(),
                 result.size(),
                 result.totalElements(),
@@ -147,5 +190,28 @@ public class AttendeeController {
         return masked
                 ? AttendeeResponse.masked(attendee, seatQueriedAttendeeIds, roomQueriedAttendeeIds)
                 : AttendeeResponse.raw(attendee, seatQueriedAttendeeIds, roomQueriedAttendeeIds);
+    }
+
+    private AttendeeResponse response(Attendee attendee,
+                                      String seatLabel,
+                                      boolean seatAssigned,
+                                      boolean dinnerAssigned,
+                                      boolean masked,
+                                      Set<Long> seatQueriedAttendeeIds,
+                                      Set<Long> roomQueriedAttendeeIds,
+                                      Set<Long> dinnerQueriedAttendeeIds) {
+        /*
+         * seatAssigned 与 seatLabel 在正常数据下等价；这里在极端旧数据缺少座位展示字段时，
+         * 仍然用兜底标签告诉前端“已有座位分配”，避免误放开拒绝操作。
+         */
+        String effectiveSeatLabel = seatAssigned && (seatLabel == null || seatLabel.isBlank()) ? "已分配座位" : seatLabel;
+        return masked
+                ? AttendeeResponse.masked(attendee, effectiveSeatLabel, dinnerAssigned, seatQueriedAttendeeIds, roomQueriedAttendeeIds, dinnerQueriedAttendeeIds)
+                : AttendeeResponse.raw(attendee, effectiveSeatLabel, dinnerAssigned, seatQueriedAttendeeIds, roomQueriedAttendeeIds, dinnerQueriedAttendeeIds);
+    }
+
+    private String seatLabel(SeatAssignment assignment) {
+        Seat seat = assignment.getSeat();
+        return seat.getAreaName() + " " + seat.getRowNo() + "排" + seat.getSeatNo() + "座";
     }
 }

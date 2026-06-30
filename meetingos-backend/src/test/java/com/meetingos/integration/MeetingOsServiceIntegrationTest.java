@@ -50,6 +50,8 @@ import com.meetingos.security.UserStatus;
 import com.meetingos.settings.SystemSettingsRequest;
 import com.meetingos.settings.SystemSettingsService;
 import com.meetingos.tduck.SyncStatus;
+import com.meetingos.tduck.TduckFieldMapping;
+import com.meetingos.tduck.TduckFieldMappingRepository;
 import com.meetingos.tduck.TduckService;
 import com.meetingos.tduck.TduckWebhookRequest;
 import com.meetingos.tduck.TduckWebhookResult;
@@ -114,6 +116,9 @@ class MeetingOsServiceIntegrationTest {
 
     @Autowired
     private TduckService tduckService;
+
+    @Autowired
+    private TduckFieldMappingRepository tduckFieldMappingRepository;
 
     @Autowired
     private AttendeeService attendeeService;
@@ -1123,9 +1128,11 @@ class MeetingOsServiceIntegrationTest {
         String seatCsv = new String(seatFile.content(), StandardCharsets.UTF_8);
 
         assertThat(attendeeFile.filename()).isEqualTo("meetingos-attendees.csv");
-        assertThat(attendeeCsv).contains("姓名", "陈嘉宁", "****0001");
+        assertThat(attendeeCsv).contains("姓名", "陈嘉宁", "****0001", "VIP", "已通过", "未签到");
+        assertThat(attendeeCsv).doesNotContain("APPROVED", "NOT_CHECKED_IN");
         assertThat(attendeeCsv).doesNotContain("13800000001");
-        assertThat(seatCsv).contains("座位码", "A区-1-1");
+        assertThat(seatCsv).contains("座位码", "A区-1-1", "VIP", "嘉宾");
+        assertThat(seatCsv).doesNotContain("GUEST");
     }
 
     @Test
@@ -1144,11 +1151,15 @@ class MeetingOsServiceIntegrationTest {
             assertThat(workbook.getSheetAt(0).getSheetName()).isEqualTo("参会名单");
             assertThat(workbook.getSheetAt(0).getRow(0).getCell(1).getStringCellValue()).isEqualTo("姓名");
             assertThat(workbook.getSheetAt(0).getRow(1).getCell(1).getStringCellValue()).isEqualTo("陈嘉宁");
+            assertThat(workbook.getSheetAt(0).getRow(1).getCell(11).getStringCellValue()).isEqualTo("已通过");
+            assertThat(workbook.getSheetAt(0).getRow(1).getCell(15).getStringCellValue()).matches("\\d{4}-\\d{2}-\\d{2} \\d{2}:\\d{2}:\\d{2}");
+            assertThat(workbook.getSheetAt(0).getRow(1).getCell(17).getStringCellValue()).isEqualTo("未签到");
         }
         try (XSSFWorkbook workbook = new XSSFWorkbook(new ByteArrayInputStream(statisticsXlsx.content()))) {
             assertThat(workbook.getNumberOfSheets()).isEqualTo(3);
             assertThat(workbook.getSheet("统计概览").getRow(1).getCell(1).getStringCellValue()).isEqualTo("报名总人数");
             assertThat(workbook.getSheet("趋势").getRow(0).getCell(0).getStringCellValue()).isEqualTo("日期");
+            assertThat(sheetText(workbook.getSheet("分布"))).contains("审核状态", "已通过", "参会类型", "嘉宾");
         }
     }
 
@@ -1309,6 +1320,9 @@ class MeetingOsServiceIntegrationTest {
     @Test
     void attendeeCsvExportIncludesTduckRawFormFieldsAsMainData() {
         var attendee = attendeeRepository.findById(1L).orElseThrow();
+        saveTduckFieldMapping("number1782317193399", "同行人数");
+        saveTduckFieldMapping("radio1782317193403", "是否住宿");
+        saveTduckFieldMapping("checkbox1782317193404", "用餐偏好");
         attendee.setRawDataSnapshot(Map.of(
                 "number1782317193399", 3,
                 "radio1782317193403", 1,
@@ -1322,8 +1336,9 @@ class MeetingOsServiceIntegrationTest {
 
         String csv = attendeeService.exportCsv(1L, "attendees");
 
-        assertThat(csv).contains("number1782317193399", "radio1782317193403", "checkbox1782317193404");
+        assertThat(csv).contains("同行人数", "是否住宿", "用餐偏好");
         assertThat(csv).contains("3", "需要", "\"a,b\"");
+        assertThat(csv).doesNotContain("number1782317193399", "radio1782317193403", "checkbox1782317193404");
         assertThat(csv).doesNotContain("radio1782317193403label", "formKey", "submitUa", "params", "source");
     }
 
@@ -1344,7 +1359,7 @@ class MeetingOsServiceIntegrationTest {
     }
 
     @Test
-    void systemSettingsPersistWebhookTokenWithoutEchoingSecretAndAffectWebhookVerification() {
+    void systemSettingsIgnoreWebhookTokenFromRequestAndUseEnvironmentSecret() {
         var saved = systemSettingsService.update(new SystemSettingsRequest(
                 "https://meeting.example.com",
                 "https://meeting.example.com/tduck",
@@ -1360,7 +1375,7 @@ class MeetingOsServiceIntegrationTest {
         ));
 
         assertThat(saved.webhookTokenConfigured()).isTrue();
-        assertThat(saved.webhookTokenMasked()).isEqualTo("rota****cret");
+        assertThat(saved.webhookTokenMasked()).isEqualTo("test****cret");
         assertThat(saved.brandName()).isEqualTo("会务控制台");
         assertThat(systemSettingsService.branding().browserTitle()).isEqualTo("会务控制台");
 
@@ -1377,7 +1392,7 @@ class MeetingOsServiceIntegrationTest {
                 "/favicon.svg",
                 "/favicon.svg"
         ));
-        assertThat(unchanged.webhookTokenMasked()).isEqualTo("rota****cret");
+        assertThat(unchanged.webhookTokenMasked()).isEqualTo("test****cret");
 
         TduckWebhookRequest request = new TduckWebhookRequest(
                 "event-rotated-token",
@@ -1388,7 +1403,7 @@ class MeetingOsServiceIntegrationTest {
                 Map.of("eventId", "event-rotated-token")
         );
 
-        assertThatThrownBy(() -> tduckService.handleWebhook(request, null, "test-webhook-secret", "{}"))
+        assertThatThrownBy(() -> tduckService.handleWebhook(request, null, "rotated-webhook-secret", "{}"))
                 .isInstanceOf(BusinessException.class)
                 .hasMessageContaining("Webhook 签名校验失败");
 
@@ -1400,7 +1415,7 @@ class MeetingOsServiceIntegrationTest {
                 request.data(),
                 Map.of("eventId", "event-rotated-token-success")
         );
-        TduckWebhookResult result = tduckService.handleWebhook(retriedWithNewEvent, null, "rotated-webhook-secret", "{}");
+        TduckWebhookResult result = tduckService.handleWebhook(retriedWithNewEvent, null, "test-webhook-secret", "{}");
         assertThat(result.status()).isEqualTo(SyncStatus.SUCCESS);
     }
 
@@ -1509,6 +1524,22 @@ class MeetingOsServiceIntegrationTest {
             return;
         }
         roomService.create(new RoomRequest(1L, roomNo, "双床房", "北京会议中心酒店", "14:00 后可入住", 2, RoomStatus.AVAILABLE));
+    }
+
+    private String sheetText(org.apache.poi.ss.usermodel.Sheet sheet) {
+        StringBuilder builder = new StringBuilder();
+        sheet.forEach(row -> row.forEach(cell -> builder.append(cell).append('\n')));
+        return builder.toString();
+    }
+
+    private void saveTduckFieldMapping(String fieldKey, String label) {
+        TduckFieldMapping mapping = new TduckFieldMapping();
+        mapping.setMeeting(attendeeRepository.findById(1L).orElseThrow().getMeeting());
+        mapping.setAttendeeField(null);
+        mapping.setTduckFieldKey(fieldKey);
+        mapping.setTduckFieldLabel(label);
+        mapping.setRequiredMapping(false);
+        tduckFieldMappingRepository.save(mapping);
     }
 
     private void withCurrentUser(Long userId, String username, Set<Role> roles, Runnable action) {

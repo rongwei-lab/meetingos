@@ -23,7 +23,7 @@ TDuck 不并入本仓库，按独立前后端服务部署，再通过 Nginx 反�
 cp .env.example .env
 ```
 
-2. 修改 `.env` 中的数据库、JWT、Webhook Token 和管理员初始密码；Redis/MinIO 当前主要供 TDuck 和后续多副本限流、异步导出存储预留。
+2. 修改 `.env` 中的数据库、JWT、`TDUCK_WEBHOOK_TOKEN` 和管理员初始密码；Redis/MinIO 当前主要供 TDuck 和后续多副本限流、异步导出存储预留。
 
 3. 启动基础依赖：
 
@@ -65,7 +65,7 @@ docker compose --env-file ../.env --profile tduck up -d
 6. 在 MeetingOS 字段映射页拉取或录入 TDuck 字段，映射姓名、手机号等标准字段。
 7. 保存绑定时 MeetingOS 会自动在 TDuck 配置 Webhook；如需内网回调，配置 `MEETINGOS_WEBHOOK_INTERNAL_URL`。
 8. 使用 `/r/{meetingCode}` 作为报名二维码内容，由 MeetingOS 中转到 TDuck 表单。
-9. 如需在运行期轮换 Webhook Token 或调整 TDuck 地址，可在 MeetingOS「系统设置」中保存；Token 不会明文回显，留空保存表示不修改。
+9. TDuck 地址可在 MeetingOS「系统设置」中保存；Webhook Token 仅通过 `.env` 的 `TDUCK_WEBHOOK_TOKEN` 管理，轮换时修改环境变量、重启后端，并同步确认 TDuck Webhook 回调携带同一个 token。
 
 > 容器部署时不要把浏览器访问的 `http://127.0.0.1/tduck-api` 当作后端内部访问地址；在后端容器里 `127.0.0.1` 指向容器自己。`TDUCK_ADMIN_API_URL` 应指向容器网络里的 TDuck 后端，例如 `http://tduck-backend:8999`。`MEETINGOS_WEBHOOK_INTERNAL_URL` 也同理，本地 Docker Compose 建议使用 `http://nginx/api/integrations/tduck/webhook`。
 
@@ -156,9 +156,9 @@ cd deploy && docker compose --env-file ../.env down
 ## 安全与上线风险
 
 - 默认密码：MeetingOS 初始管理员和 TDuck 默认管理员必须在首次登录后修改；TDuck 禁止继续使用 `123456`。
-- Webhook Token：必须使用高强度随机值，并避免在前端、日志和错误响应中泄露。
+- `TDUCK_WEBHOOK_TOKEN`：必须使用高强度随机值，并避免在前端、日志和错误响应中泄露。
 - 敏感信息：手机号、证件号、邮箱在列表和日志中应脱敏；导出需要独立权限。
-- 系统设置：Webhook Token 可运行期轮换，但需要同步更新 TDuck Webhook 配置。
+- 系统设置：只维护域名和 TDuck 地址等运行配置；Webhook Token 不在前端展示或运行期轮换。
 - 导出权限：住宿名单、签到记录、全量报名数据属于敏感导出；生产应开启导出审批并记录操作日志。
 - 部署边界：MySQL、Redis、MinIO 不应暴露到公网；Nginx 若开放 443 必须有真实 TLS 配置。
 - 镜像供应链：生产镜像应固定版本 tag 或 digest，不使用 `latest`。

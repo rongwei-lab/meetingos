@@ -6,6 +6,7 @@ import org.springframework.data.jpa.repository.JpaRepository;
 import org.springframework.data.jpa.repository.Query;
 import org.springframework.data.repository.query.Param;
 
+import java.util.Collection;
 import java.util.List;
 
 public interface PublicQueryHistoryRepository extends JpaRepository<PublicQueryHistory, Long> {
@@ -43,4 +44,12 @@ public interface PublicQueryHistoryRepository extends JpaRepository<PublicQueryH
             """)
     List<Long> findQueriedAttendeeIds(@Param("meetingId") Long meetingId,
                                       @Param("queryType") PublicQueryType queryType);
+
+    @Query("""
+            select count(h) > 0 from PublicQueryHistory h
+            where h.attendee.id = :attendeeId
+              and h.queryType in :queryTypes
+            """)
+    boolean existsByAttendeeIdAndQueryTypeIn(@Param("attendeeId") Long attendeeId,
+                                             @Param("queryTypes") Collection<PublicQueryType> queryTypes);
 }
