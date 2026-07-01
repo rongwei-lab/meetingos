@@ -44,16 +44,22 @@
 }
 
 .public-card h1 {
-  margin: 0 0 10px;
-  font-size: 28px;
-  line-height: 1.2;
+  margin: 0 0 8px;
+  font-size: 26px;
+  line-height: 1.28;
+  font-weight: 800;
   color: #0f172a;
   letter-spacing: 0;
 }
 
+.public-card-wide h1 {
+  font-size: 30px;
+  line-height: 1.26;
+}
+
 .public-card p {
   color: #64748b;
-  line-height: 1.7;
+  line-height: 1.55;
 }
 
 .public-logo {
@@ -72,7 +78,9 @@
 }
 
 .public-subtitle {
-  margin: -4px 0 18px;
+  margin: 0 0 22px;
+  font-size: 15px;
+  font-weight: 500;
 }
 
 .public-alert {
@@ -80,7 +88,7 @@
 }
 
 .public-form {
-  margin-top: 14px;
+  margin-top: 18px;
 }
 
 .captcha-row {
@@ -332,6 +340,18 @@
 
   .public-card {
     padding: 22px;
+  }
+
+  .public-card h1,
+  .public-card-wide h1 {
+    font-size: 23px;
+    line-height: 1.32;
+  }
+
+  .public-subtitle {
+    margin-bottom: 20px;
+    font-size: 14px;
+    line-height: 1.5;
   }
 
   .public-card-result-only {

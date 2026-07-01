@@ -6,8 +6,11 @@ import jakarta.persistence.Entity;
 import jakarta.persistence.EnumType;
 import jakarta.persistence.Enumerated;
 import jakarta.persistence.Table;
+import org.hibernate.annotations.JdbcTypeCode;
+import org.hibernate.type.SqlTypes;
 
 import java.time.LocalDateTime;
+import java.util.Map;
 
 @Entity
 @Table(name = "meetings")
@@ -81,6 +84,9 @@ public class Meeting extends BaseEntity {
     @Column(nullable = false)
     private boolean checkinEnabled = true;
 
+    @Column(nullable = false)
+    private boolean selfCheckinEnabled = true;
+
     @Column(nullable = false, length = 255)
     private String publicQueryFields = "PHONE,NAME";
 
@@ -120,6 +126,10 @@ public class Meeting extends BaseEntity {
 
     @Column(columnDefinition = "text")
     private String publicQueryDinnerNotice = "请按现场指引前往晚宴区域入座，如有调整请以会务组通知为准。";
+
+    @JdbcTypeCode(SqlTypes.JSON)
+    @Column(columnDefinition = "json")
+    private Map<String, PublicQueryPageContent> publicQueryPageContent;
 
     @Column(nullable = false, length = 20)
     private String publicQueryThemeColor = "#2563eb";
@@ -361,6 +371,14 @@ public class Meeting extends BaseEntity {
         this.checkinEnabled = checkinEnabled;
     }
 
+    public boolean isSelfCheckinEnabled() {
+        return selfCheckinEnabled;
+    }
+
+    public void setSelfCheckinEnabled(boolean selfCheckinEnabled) {
+        this.selfCheckinEnabled = selfCheckinEnabled;
+    }
+
     public String getPublicQueryFields() {
         return publicQueryFields;
     }
@@ -471,6 +489,14 @@ public class Meeting extends BaseEntity {
 
     public void setPublicQueryDinnerNotice(String publicQueryDinnerNotice) {
         this.publicQueryDinnerNotice = publicQueryDinnerNotice;
+    }
+
+    public Map<String, PublicQueryPageContent> getPublicQueryPageContent() {
+        return publicQueryPageContent;
+    }
+
+    public void setPublicQueryPageContent(Map<String, PublicQueryPageContent> publicQueryPageContent) {
+        this.publicQueryPageContent = publicQueryPageContent;
     }
 
     public String getPublicQueryThemeColor() {

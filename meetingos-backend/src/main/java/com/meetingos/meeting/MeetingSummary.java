@@ -22,6 +22,7 @@ public record MeetingSummary(
         boolean roomQueryEnabled,
         boolean dinnerQueryEnabled,
         boolean checkinEnabled,
+        boolean selfCheckinEnabled,
         String publicQueryFields,
         String publicQueryMatchMode
 ) {

@@ -1,7 +1,10 @@
 package com.meetingos.publicapi;
 
+import com.meetingos.meeting.PublicQueryPageContent;
+
 import java.time.LocalDateTime;
 import java.util.List;
+import java.util.Map;
 
 public record MeetingQuerySettingsResponse(
         Long meetingId,
@@ -11,6 +14,7 @@ public record MeetingQuerySettingsResponse(
         boolean roomQueryEnabled,
         boolean dinnerQueryEnabled,
         boolean checkinEnabled,
+        boolean selfCheckinEnabled,
         boolean queryPaused,
         List<PublicQueryField> fields,
         PublicQueryMatchMode matchMode,
@@ -25,6 +29,7 @@ public record MeetingQuerySettingsResponse(
         String seatNotice,
         String roomNotice,
         String dinnerNotice,
+        Map<String, PublicQueryPageContent> pageContents,
         String themeColor,
         String logoUrl,
         String backgroundUrl,

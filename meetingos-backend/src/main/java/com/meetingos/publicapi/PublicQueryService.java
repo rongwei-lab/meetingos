@@ -9,6 +9,7 @@ import com.meetingos.dinner.DinnerQueryResult;
 import com.meetingos.dinner.DinnerService;
 import com.meetingos.meeting.Meeting;
 import com.meetingos.meeting.MeetingRepository;
+import com.meetingos.meeting.PublicQueryPageContent;
 import com.meetingos.room.Room;
 import com.meetingos.room.RoomQueryResult;
 import com.meetingos.room.RoomRepository;
@@ -23,6 +24,7 @@ import org.springframework.transaction.annotation.Transactional;
 import java.time.LocalDateTime;
 import java.util.Arrays;
 import java.util.EnumSet;
+import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Locale;
@@ -84,6 +86,7 @@ public class PublicQueryService {
     private static final String DEFAULT_SEAT_NOTICE = "请按会议通知时间到达会场，凭会议证件从指定入口进入，对号入座。";
     private static final String DEFAULT_ROOM_NOTICE = "凭会议证件及身份证办理入住，接待台位于酒店大堂。";
     private static final String DEFAULT_DINNER_NOTICE = "请按现场指引前往晚宴区域入座，如有调整请以会务组通知为准。";
+    private static final List<String> PUBLIC_PAGE_CONTENT_KEYS = List.of("entry", "combined", "seat", "room", "dinner", "checkin");
     private static final int ADMIN_QUERY_LIMIT = 20;
 
     private final MeetingRepository meetingRepository;
@@ -122,9 +125,7 @@ public class PublicQueryService {
     public PublicAttendeeMatch resolvePublicAttendee(PublicQueryRequest request) {
         Meeting meeting = resolveMeeting(request.meetingId(), request.meetingCode());
         ensureQueryWindowOpen(meeting);
-        if (!meeting.isCheckinEnabled()) {
-            throw BusinessException.badRequest("签到尚未开放");
-        }
+        ensureCheckinSourceOpen(meeting, request);
         Attendee attendee = resolveSinglePublicAttendee(meeting, request.values());
         return new PublicAttendeeMatch(meeting, attendee);
     }
@@ -159,6 +160,7 @@ public class PublicQueryService {
         meeting.setRoomQueryEnabled(request.roomQueryEnabled());
         meeting.setDinnerQueryEnabled(request.dinnerQueryEnabled());
         meeting.setCheckinEnabled(request.checkinEnabled());
+        meeting.setSelfCheckinEnabled(request.selfCheckinEnabled());
         meeting.setPublicQueryPaused(request.queryPaused());
         meeting.setPublicQueryFields(serializeFields(fields));
         meeting.setPublicQueryMatchMode((request.matchMode() == null ? PublicQueryMatchMode.FUZZY : request.matchMode()).name());
@@ -173,6 +175,13 @@ public class PublicQueryService {
         meeting.setPublicQuerySeatNotice(blankToNull(request.seatNotice()));
         meeting.setPublicQueryRoomNotice(blankToNull(request.roomNotice()));
         meeting.setPublicQueryDinnerNotice(blankToNull(request.dinnerNotice()));
+        /*
+         * 页面文案已经从“全局一套”升级成“按公开入口配置”。旧字段继续保存用于兼容旧前端和默认值，
+         * 新配置集中放到 JSON 列里，避免每新增一个公开页就继续扩表。
+         */
+        if (request.pageContents() != null) {
+            meeting.setPublicQueryPageContent(normalizePageContents(request.pageContents()));
+        }
         meeting.setPublicQueryThemeColor(normalizeThemeColor(request.themeColor()));
         meeting.setPublicQueryLogoUrl(limit(blankToNull(request.logoUrl()), 500));
         meeting.setPublicQueryBackgroundUrl(limit(blankToNull(request.backgroundUrl()), 500));
@@ -594,6 +603,28 @@ public class PublicQueryService {
         throw BusinessException.badRequest("请提供会议 ID 或会议编号");
     }
 
+    private void ensureCheckinSourceOpen(Meeting meeting, PublicQueryRequest request) {
+        String source = request.checkinSource() == null ? "SELF" : request.checkinSource().trim().toUpperCase(Locale.ROOT);
+        /*
+         * /public/checkin 被两个前端入口复用：
+         * 1. SELF：独立自助签到页，适合现场扫码；
+         * 2. RESULT：座位/住宿/晚宴查询成功后的“立即签到”按钮。
+         * 两个入口由后台独立开关控制，避免关闭独立页时误伤查询结果按钮，反之亦然。
+         */
+        if ("RESULT".equals(source)) {
+            if (!meeting.isCheckinEnabled()) {
+                throw BusinessException.badRequest("查询后签到按钮尚未开放");
+            }
+            return;
+        }
+        if (!"SELF".equals(source)) {
+            throw BusinessException.badRequest("签到来源不支持");
+        }
+        if (!meeting.isSelfCheckinEnabled()) {
+            throw BusinessException.badRequest("签到独立页尚未开放");
+        }
+    }
+
     private MeetingQuerySettingsResponse toSettingsResponse(Meeting meeting) {
         List<PublicQueryResultField> seatVisible = parseResultFields(
                 meeting.getPublicQuerySeatVisibleResultFields(),
@@ -639,6 +670,7 @@ public class PublicQueryService {
                 meeting.isRoomQueryEnabled(),
                 meeting.isDinnerQueryEnabled(),
                 meeting.isCheckinEnabled(),
+                meeting.isSelfCheckinEnabled(),
                 meeting.isPublicQueryPaused(),
                 parseFields(meeting),
                 parseMatchMode(meeting),
@@ -653,6 +685,7 @@ public class PublicQueryService {
                 firstNonBlank(meeting.getPublicQuerySeatNotice(), DEFAULT_SEAT_NOTICE),
                 firstNonBlank(meeting.getPublicQueryRoomNotice(), DEFAULT_ROOM_NOTICE),
                 firstNonBlank(meeting.getPublicQueryDinnerNotice(), DEFAULT_DINNER_NOTICE),
+                resolvePageContents(meeting),
                 firstNonBlank(meeting.getPublicQueryThemeColor(), "#2563eb"),
                 meeting.getPublicQueryLogoUrl(),
                 meeting.getPublicQueryBackgroundUrl(),
@@ -677,6 +710,107 @@ public class PublicQueryService {
                         .map(field -> new QueryResultFieldOption(field, field.label()))
                         .toList()
         );
+    }
+
+    private Map<String, PublicQueryPageContent> resolvePageContents(Meeting meeting) {
+        Map<String, PublicQueryPageContent> defaults = defaultPageContents(meeting);
+        Map<String, PublicQueryPageContent> stored = meeting.getPublicQueryPageContent();
+        if (stored == null || stored.isEmpty()) {
+            return defaults;
+        }
+
+        Map<String, PublicQueryPageContent> merged = new LinkedHashMap<>();
+        for (String key : PUBLIC_PAGE_CONTENT_KEYS) {
+            merged.put(key, mergePageContent(stored.get(key), defaults.get(key)));
+        }
+        return merged;
+    }
+
+    private Map<String, PublicQueryPageContent> normalizePageContents(Map<String, PublicQueryPageContent> rawContents) {
+        Map<String, PublicQueryPageContent> normalized = new LinkedHashMap<>();
+        for (String key : PUBLIC_PAGE_CONTENT_KEYS) {
+            PublicQueryPageContent raw = rawContents.get(key);
+            if (raw != null) {
+                normalized.put(key, cleanPageContent(raw));
+            }
+        }
+        return normalized;
+    }
+
+    private Map<String, PublicQueryPageContent> defaultPageContents(Meeting meeting) {
+        String title = firstNonBlank(meeting.getPublicQueryTitle(), meeting.getName() + "查询");
+        String description = meeting.getPublicQueryDescription();
+        String announcement = meeting.getPublicQueryAnnouncement();
+        String publisher = meeting.getPublicQueryPublisher();
+        String buttonText = firstNonBlank(meeting.getPublicQueryButtonText(), "立即查询");
+        String emptyMessage = firstNonBlank(meeting.getPublicQueryEmptyMessage(), "未查询到结果，请核对信息后重试");
+
+        Map<String, PublicQueryPageContent> defaults = new LinkedHashMap<>();
+        defaults.put("entry", new PublicQueryPageContent(title, description, announcement, publisher, null, null, null));
+        defaults.put("combined", new PublicQueryPageContent(title, description, announcement, publisher, buttonText, emptyMessage, null));
+        defaults.put("seat", new PublicQueryPageContent(
+                title,
+                description,
+                announcement,
+                publisher,
+                buttonText,
+                emptyMessage,
+                firstNonBlank(meeting.getPublicQuerySeatNotice(), DEFAULT_SEAT_NOTICE)
+        ));
+        defaults.put("room", new PublicQueryPageContent(
+                title,
+                description,
+                announcement,
+                publisher,
+                buttonText,
+                emptyMessage,
+                firstNonBlank(meeting.getPublicQueryRoomNotice(), DEFAULT_ROOM_NOTICE)
+        ));
+        defaults.put("dinner", new PublicQueryPageContent(
+                title,
+                description,
+                announcement,
+                publisher,
+                buttonText,
+                emptyMessage,
+                firstNonBlank(meeting.getPublicQueryDinnerNotice(), DEFAULT_DINNER_NOTICE)
+        ));
+        defaults.put("checkin", new PublicQueryPageContent(title, description, announcement, publisher, "自助签到", null, null));
+        return defaults;
+    }
+
+    private PublicQueryPageContent mergePageContent(PublicQueryPageContent stored, PublicQueryPageContent fallback) {
+        if (stored == null) {
+            return fallback;
+        }
+        return new PublicQueryPageContent(
+                stored.title() == null ? fallback.title() : stored.title(),
+                stored.description() == null ? fallback.description() : stored.description(),
+                stored.announcement() == null ? fallback.announcement() : stored.announcement(),
+                stored.publisher() == null ? fallback.publisher() : stored.publisher(),
+                stored.buttonText() == null ? fallback.buttonText() : stored.buttonText(),
+                stored.emptyMessage() == null ? fallback.emptyMessage() : stored.emptyMessage(),
+                stored.notice() == null ? fallback.notice() : stored.notice()
+        );
+    }
+
+    private PublicQueryPageContent cleanPageContent(PublicQueryPageContent raw) {
+        return new PublicQueryPageContent(
+                limitOptional(raw.title(), 160),
+                limitOptional(raw.description(), 500),
+                limitOptional(raw.announcement(), 2000),
+                limitOptional(raw.publisher(), 160),
+                limitOptional(raw.buttonText(), 40),
+                limitOptional(raw.emptyMessage(), 255),
+                limitOptional(raw.notice(), 2000)
+        );
+    }
+
+    private String limitOptional(String value, int maxLength) {
+        if (value == null) {
+            return null;
+        }
+        return limit(value.trim(), maxLength);
     }
 
     private List<PublicQueryField> parseFields(Meeting meeting) {

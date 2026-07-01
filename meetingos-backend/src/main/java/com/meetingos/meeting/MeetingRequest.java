@@ -31,6 +31,7 @@ public record MeetingRequest(
         Boolean roomQueryEnabled,
         Boolean dinnerQueryEnabled,
         Boolean checkinEnabled,
+        Boolean selfCheckinEnabled,
         List<PublicQueryField> publicQueryFields,
         PublicQueryMatchMode publicQueryMatchMode
 ) {

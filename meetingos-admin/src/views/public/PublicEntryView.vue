@@ -2,12 +2,12 @@
   <main class="public-page" :style="publicPageStyle(settings)">
     <section class="public-card">
       <img v-if="safeLogoUrl" class="public-logo" :src="safeLogoUrl" alt="会议 Logo" />
-      <p v-if="settings?.publisher" class="public-kicker">{{ settings.publisher }}</p>
-      <h1>{{ pageTitle(settings, "参会人入口") }}</h1>
-      <p class="public-subtitle">{{ settings?.pageDescription || "查询座位、住宿、晚宴桌号，或完成自助签到。" }}</p>
+      <p v-if="publisher" class="public-kicker">{{ publisher }}</p>
+      <h1>{{ pageTitleFor(settings, "entry", "参会人入口") }}</h1>
+      <p class="public-subtitle">{{ subtitle }}</p>
 
-      <n-alert v-if="settings?.announcement" class="public-alert" type="info" :bordered="false">
-        {{ settings.announcement }}
+      <n-alert v-if="announcement" class="public-alert" type="info" :bordered="false">
+        {{ announcement }}
       </n-alert>
       <n-alert v-if="settings && !windowState.available" class="public-alert" type="warning" :bordered="false">
         {{ windowState.message }}
@@ -51,7 +51,7 @@
         <n-button
           block
           size="large"
-          :disabled="queryDisabled || !settings?.checkinEnabled"
+          :disabled="queryDisabled || !settings?.selfCheckinEnabled"
           @click="goPublic('checkin')"
         >
           自助签到
@@ -73,7 +73,7 @@ import { useMessage } from "naive-ui";
 import { useMeetingStore } from "@/stores/meeting";
 import type { MeetingQuerySettings } from "@/utils/types";
 import { sanitizeImageUrl } from "@/utils/safeUrl";
-import { pageTitle, publicPageStyle, queryWindowState } from "./queryDisplay";
+import { pageAnnouncementFor, pageDescriptionFor, pagePublisherFor, pageTitleFor, publicPageStyle, queryWindowState } from "./queryDisplay";
 
 const route = useRoute();
 const router = useRouter();
@@ -92,8 +92,11 @@ const anyPublicEntryEnabled = computed(() => Boolean(
   settings.value?.seatQueryEnabled ||
   settings.value?.roomQueryEnabled ||
   settings.value?.dinnerQueryEnabled ||
-  settings.value?.checkinEnabled
+  settings.value?.selfCheckinEnabled
 ));
+const publisher = computed(() => pagePublisherFor(settings.value, "entry"));
+const subtitle = computed(() => pageDescriptionFor(settings.value, "entry", "查询座位、住宿、晚宴桌号，或完成自助签到。"));
+const announcement = computed(() => pageAnnouncementFor(settings.value, "entry"));
 const safeLogoUrl = computed(() => sanitizeImageUrl(settings.value?.logoUrl));
 
 onMounted(async () => {

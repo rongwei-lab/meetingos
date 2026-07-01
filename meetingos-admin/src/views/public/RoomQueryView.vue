@@ -3,16 +3,16 @@
     <section class="public-card" :class="{ 'public-card-result-only': result && resultRows.length }">
       <template v-if="!result || !resultRows.length">
         <img v-if="safeLogoUrl" class="public-logo" :src="safeLogoUrl" alt="会议 Logo" />
-        <p v-if="settings?.publisher" class="public-kicker">{{ settings.publisher }}</p>
-        <h1>{{ pageTitle(settings, "房间号查询") }}</h1>
+        <p v-if="publisher" class="public-kicker">{{ publisher }}</p>
+        <h1>{{ pageTitleFor(settings, "room", "房间号查询") }}</h1>
         <p v-if="subtitle" class="public-subtitle">{{ subtitle }}</p>
       </template>
 
       <n-alert v-if="!settings" class="public-alert" :type="errorText ? 'warning' : 'info'" :bordered="false">
         {{ errorText || "查询设置加载中" }}
       </n-alert>
-      <n-alert v-else-if="settings.announcement" class="public-alert" type="info" :bordered="false">
-        {{ settings.announcement }}
+      <n-alert v-else-if="announcement" class="public-alert" type="info" :bordered="false">
+        {{ announcement }}
       </n-alert>
       <n-alert v-if="settings && !settings.roomQueryEnabled" class="public-alert" type="warning" :bordered="false">
         住宿查询尚未开放
@@ -32,7 +32,7 @@
           </div>
         </n-form-item>
         <n-button type="primary" block :color="settings?.themeColor" :loading="loading" @click="query">
-          {{ settings?.buttonText || "立即查询" }}
+          {{ buttonText }}
         </n-button>
       </n-form>
 
@@ -45,7 +45,7 @@
         kind="room"
         :attendee-name="result.attendeeName"
         :rows="resultRows"
-        :notice="settings?.roomNotice"
+        :notice="roomNotice"
       />
       <public-result-checkin-action
         v-if="result && resultRows.length"
@@ -73,7 +73,12 @@ import PublicResultTicket from "./PublicResultTicket.vue";
 import {
   buildRoomRows,
   normalizePublicQueryError,
-  pageTitle,
+  pageAnnouncementFor,
+  pageButtonTextFor,
+  pageDescriptionFor,
+  pageNoticeFor,
+  pagePublisherFor,
+  pageTitleFor,
   publicPageStyle,
   queryWindowState
 } from "./queryDisplay";
@@ -105,7 +110,11 @@ const queryMeetingId = computed(() => {
 });
 const queryMeetingCode = computed(() => String(route.query.meetingCode || route.params.meetingCode || ""));
 const activeFields = computed(() => settings.value?.fields || []);
-const subtitle = computed(() => settings.value?.pageDescription || settings.value?.meetingName || "");
+const publisher = computed(() => pagePublisherFor(settings.value, "room"));
+const subtitle = computed(() => pageDescriptionFor(settings.value, "room"));
+const announcement = computed(() => pageAnnouncementFor(settings.value, "room"));
+const buttonText = computed(() => pageButtonTextFor(settings.value, "room"));
+const roomNotice = computed(() => pageNoticeFor(settings.value, "room"));
 const windowState = computed(() => queryWindowState(settings.value));
 const resultRows = computed(() => buildRoomRows(settings.value, result.value));
 const hasTicketResult = computed(() => Boolean(result.value && resultRows.value.length));
@@ -162,7 +171,7 @@ async function query() {
     });
   } catch (error) {
     const rawMessage = error instanceof Error ? error.message : "住宿查询失败";
-    errorText.value = normalizePublicQueryError(rawMessage, settings.value);
+    errorText.value = normalizePublicQueryError(rawMessage, settings.value, "room");
     message.error(errorText.value);
     if (settings.value.captchaEnabled) {
       await loadCaptcha();

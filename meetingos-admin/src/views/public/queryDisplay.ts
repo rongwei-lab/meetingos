@@ -1,5 +1,5 @@
 import type { CSSProperties } from "vue";
-import type { DinnerQueryResult, MeetingQuerySettings, PublicQueryResultField, RoomQueryResult, SeatQueryResult } from "@/utils/types";
+import type { DinnerQueryResult, MeetingQuerySettings, PublicPageContent, PublicPageKey, PublicQueryResultField, RoomQueryResult, SeatQueryResult } from "@/utils/types";
 import { sanitizeImageUrl } from "@/utils/safeUrl";
 
 export type QueryResultKind = "seat" | "room" | "dinner";
@@ -23,6 +23,43 @@ const dinnerFields = new Set<PublicQueryResultField>(["DINNER_TABLE_NO", "DINNER
 
 export function pageTitle(settings: MeetingQuerySettings | null, fallback: string) {
   return settings?.pageTitle?.trim() || fallback;
+}
+
+export function pageContent(settings: MeetingQuerySettings | null, key: PublicPageKey): PublicPageContent {
+  return settings?.pageContents?.[key] || {};
+}
+
+export function pageTitleFor(settings: MeetingQuerySettings | null, key: PublicPageKey, fallback: string) {
+  return pageContent(settings, key).title?.trim() || pageTitle(settings, fallback);
+}
+
+export function pageDescriptionFor(settings: MeetingQuerySettings | null, key: PublicPageKey, fallback = "") {
+  const content = pageContent(settings, key);
+  return content.description ?? settings?.pageDescription ?? settings?.meetingName ?? fallback;
+}
+
+export function pageAnnouncementFor(settings: MeetingQuerySettings | null, key: PublicPageKey) {
+  return pageContent(settings, key).announcement ?? settings?.announcement ?? "";
+}
+
+export function pagePublisherFor(settings: MeetingQuerySettings | null, key: PublicPageKey) {
+  return pageContent(settings, key).publisher ?? settings?.publisher ?? "";
+}
+
+export function pageButtonTextFor(settings: MeetingQuerySettings | null, key: PublicPageKey, fallback = "立即查询") {
+  return pageContent(settings, key).buttonText?.trim() || settings?.buttonText || fallback;
+}
+
+export function pageEmptyMessageFor(settings: MeetingQuerySettings | null, key: PublicPageKey) {
+  return pageContent(settings, key).emptyMessage || settings?.emptyMessage || "未查询到结果，请核对信息后重试";
+}
+
+export function pageNoticeFor(settings: MeetingQuerySettings | null, key: Extract<PublicPageKey, "seat" | "room" | "dinner">) {
+  const contentNotice = pageContent(settings, key).notice;
+  if (contentNotice !== undefined) return contentNotice;
+  if (key === "seat") return settings?.seatNotice || "";
+  if (key === "room") return settings?.roomNotice || "";
+  return settings?.dinnerNotice || "";
 }
 
 export function fieldLabel(settings: MeetingQuerySettings | null, field: PublicQueryResultField) {
@@ -66,9 +103,9 @@ export function queryWindowState(settings: MeetingQuerySettings | null): QueryWi
   return { available: true, message: "" };
 }
 
-export function normalizePublicQueryError(message: string, settings: MeetingQuerySettings | null) {
+export function normalizePublicQueryError(message: string, settings: MeetingQuerySettings | null, pageKey?: PublicPageKey) {
   if (message.includes("未找到匹配") || message.includes("未查询到")) {
-    return settings?.emptyMessage || message;
+    return pageKey ? pageEmptyMessageFor(settings, pageKey) : settings?.emptyMessage || message;
   }
   return message;
 }

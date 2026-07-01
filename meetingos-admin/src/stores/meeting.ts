@@ -12,6 +12,9 @@ import type {
   DinnerQueryResult,
   Meeting,
   MeetingQuerySettings,
+  PublicPageContent,
+  PublicPageKey,
+  PublicCheckinSource,
   PublicCheckinResult,
   PublicQueryField,
   PublicQueryHistory,
@@ -49,6 +52,7 @@ interface MeetingSummaryDto {
   roomQueryEnabled?: boolean;
   dinnerQueryEnabled?: boolean;
   checkinEnabled?: boolean;
+  selfCheckinEnabled?: boolean;
   publicQueryFields?: string;
   publicQueryMatchMode?: PublicQueryMatchMode;
 }
@@ -79,6 +83,7 @@ interface MeetingDetailDto {
     roomQueryEnabled?: boolean;
     dinnerQueryEnabled?: boolean;
     checkinEnabled?: boolean;
+    selfCheckinEnabled?: boolean;
     publicQueryFields?: string;
     publicQueryMatchMode?: PublicQueryMatchMode;
   };
@@ -199,6 +204,7 @@ interface MeetingQuerySettingsDto {
   roomQueryEnabled: boolean;
   dinnerQueryEnabled?: boolean;
   checkinEnabled?: boolean;
+  selfCheckinEnabled?: boolean;
   queryPaused?: boolean;
   fields: PublicQueryField[];
   matchMode: PublicQueryMatchMode;
@@ -213,6 +219,7 @@ interface MeetingQuerySettingsDto {
   seatNotice?: string;
   roomNotice?: string;
   dinnerNotice?: string;
+  pageContents?: Partial<Record<PublicPageKey, PublicPageContent>>;
   themeColor?: string;
   logoUrl?: string;
   backgroundUrl?: string;
@@ -652,6 +659,7 @@ function meetingRequestFrom(meeting: Partial<Meeting>, fallback?: Meeting) {
     roomQueryEnabled: meeting.roomQueryEnabled ?? fallback?.roomQueryEnabled ?? false,
     dinnerQueryEnabled: meeting.dinnerQueryEnabled ?? fallback?.dinnerQueryEnabled ?? false,
     checkinEnabled: meeting.checkinEnabled ?? fallback?.checkinEnabled ?? true,
+    selfCheckinEnabled: meeting.selfCheckinEnabled ?? fallback?.selfCheckinEnabled ?? true,
     publicQueryFields: meeting.publicQueryFields || fallback?.publicQueryFields || (["PHONE", "NAME"] as PublicQueryField[]),
     publicQueryMatchMode: meeting.publicQueryMatchMode || fallback?.publicQueryMatchMode || "FUZZY"
   };
@@ -730,6 +738,10 @@ const defaultRoomVisibleResultFields: PublicQueryResultField[] = [
   "CHECKIN_TIPS"
 ];
 const defaultDinnerVisibleResultFields: PublicQueryResultField[] = ["ATTENDEE_NAME", "DINNER_TABLE_NO", "DINNER_VENUE", "DINNER_TIME", "DINNER_REMARK"];
+const publicPageKeys: PublicPageKey[] = ["entry", "combined", "seat", "room", "dinner", "checkin"];
+const defaultSeatNotice = "请按会议通知时间到达会场，凭会议证件从指定入口进入，对号入座。";
+const defaultRoomNotice = "凭会议证件及身份证办理入住，接待台位于酒店大堂。";
+const defaultDinnerNotice = "请按现场指引前往晚宴区域入座，如有调整请以会务组通知为准。";
 
 let bootstrapPromise: Promise<void> | null = null;
 const workspaceLoadPromises = new Map<string, Promise<void>>();
@@ -935,6 +947,7 @@ export const useMeetingStore = defineStore("meeting", {
         | "roomQueryEnabled"
         | "dinnerQueryEnabled"
         | "checkinEnabled"
+        | "selfCheckinEnabled"
         | "queryPaused"
         | "fields"
         | "matchMode"
@@ -949,6 +962,7 @@ export const useMeetingStore = defineStore("meeting", {
         | "seatNotice"
         | "roomNotice"
         | "dinnerNotice"
+        | "pageContents"
         | "themeColor"
         | "logoUrl"
         | "backgroundUrl"
@@ -976,6 +990,7 @@ export const useMeetingStore = defineStore("meeting", {
               roomQueryEnabled: settings.roomQueryEnabled,
               dinnerQueryEnabled: settings.dinnerQueryEnabled,
               checkinEnabled: settings.checkinEnabled,
+              selfCheckinEnabled: settings.selfCheckinEnabled,
               queryPaused: settings.queryPaused,
               fields: settings.fields,
               matchMode: settings.matchMode,
@@ -990,6 +1005,7 @@ export const useMeetingStore = defineStore("meeting", {
               seatNotice: settings.seatNotice,
               roomNotice: settings.roomNotice,
               dinnerNotice: settings.dinnerNotice,
+              pageContents: settings.pageContents,
               themeColor: settings.themeColor,
               logoUrl: settings.logoUrl,
               backgroundUrl: settings.backgroundUrl,
@@ -1020,6 +1036,7 @@ export const useMeetingStore = defineStore("meeting", {
           roomQueryEnabled: settings.roomQueryEnabled,
           dinnerQueryEnabled: settings.dinnerQueryEnabled,
           checkinEnabled: settings.checkinEnabled,
+          selfCheckinEnabled: settings.selfCheckinEnabled,
           queryPaused: settings.queryPaused,
           fields: [...settings.fields],
           matchMode: settings.matchMode,
@@ -1034,6 +1051,7 @@ export const useMeetingStore = defineStore("meeting", {
           seatNotice: settings.seatNotice,
           roomNotice: settings.roomNotice,
           dinnerNotice: settings.dinnerNotice,
+          pageContents: clonePageContents(settings.pageContents),
           themeColor: settings.themeColor,
           logoUrl: settings.logoUrl,
           backgroundUrl: settings.backgroundUrl,
@@ -1133,6 +1151,7 @@ export const useMeetingStore = defineStore("meeting", {
       values: Record<PublicQueryField, string>;
       captchaId?: string | null;
       captchaAnswer?: string | null;
+      checkinSource?: PublicCheckinSource;
     }) {
       try {
         return unwrapApi(await http.post<PublicCheckinResult>("/public/checkin", payload));
@@ -1194,6 +1213,7 @@ export const useMeetingStore = defineStore("meeting", {
       meeting.roomQueryEnabled = settings.roomQueryEnabled;
       meeting.dinnerQueryEnabled = settings.dinnerQueryEnabled;
       meeting.checkinEnabled = settings.checkinEnabled;
+      meeting.selfCheckinEnabled = settings.selfCheckinEnabled;
       meeting.publicQueryFields = [...settings.fields];
       meeting.publicQueryMatchMode = settings.matchMode;
     },
@@ -1556,6 +1576,7 @@ export const useMeetingStore = defineStore("meeting", {
           roomQueryEnabled: payload.roomQueryEnabled || false,
           dinnerQueryEnabled: payload.dinnerQueryEnabled || false,
           checkinEnabled: payload.checkinEnabled ?? true,
+          selfCheckinEnabled: payload.selfCheckinEnabled ?? true,
           publicQueryFields: payload.publicQueryFields || ["PHONE", "NAME"],
           publicQueryMatchMode: payload.publicQueryMatchMode || "FUZZY"
         };
@@ -1597,6 +1618,7 @@ export const useMeetingStore = defineStore("meeting", {
           roomQueryEnabled: request.roomQueryEnabled,
           dinnerQueryEnabled: request.dinnerQueryEnabled,
           checkinEnabled: request.checkinEnabled,
+          selfCheckinEnabled: request.selfCheckinEnabled,
           publicQueryFields: request.publicQueryFields,
           publicQueryMatchMode: request.publicQueryMatchMode
         };
@@ -2582,6 +2604,7 @@ function mapMeetingSummary(item: MeetingSummaryDto): Meeting {
     roomQueryEnabled: Boolean(item.roomQueryEnabled),
     dinnerQueryEnabled: Boolean(item.dinnerQueryEnabled),
     checkinEnabled: item.checkinEnabled ?? true,
+    selfCheckinEnabled: item.selfCheckinEnabled ?? true,
     publicQueryFields: parseQueryFields(item.publicQueryFields),
     publicQueryMatchMode: item.publicQueryMatchMode || "FUZZY"
   };
@@ -2633,6 +2656,7 @@ function mapMeetingEntity(item: MeetingDetailDto["meeting"]): Meeting {
     roomQueryEnabled: Boolean(item.roomQueryEnabled),
     dinnerQueryEnabled: Boolean(item.dinnerQueryEnabled),
     checkinEnabled: item.checkinEnabled ?? true,
+    selfCheckinEnabled: item.selfCheckinEnabled ?? true,
     publicQueryFields: parseQueryFields(item.publicQueryFields),
     publicQueryMatchMode: item.publicQueryMatchMode || "FUZZY"
   };
@@ -2813,6 +2837,81 @@ function mergeResultFields(...groups: PublicQueryResultField[][]) {
   return Array.from(new Set(groups.flat()));
 }
 
+function clonePageContents(contents: Record<PublicPageKey, PublicPageContent>): Record<PublicPageKey, PublicPageContent> {
+  return publicPageKeys.reduce(
+    (result, key) => {
+      result[key] = { ...contents[key] };
+      return result;
+    },
+    {} as Record<PublicPageKey, PublicPageContent>
+  );
+}
+
+function buildDefaultPageContents(base: {
+  meetingName: string;
+  pageTitle?: string;
+  pageDescription?: string;
+  announcement?: string;
+  publisher?: string;
+  buttonText?: string;
+  emptyMessage?: string;
+  seatNotice?: string;
+  roomNotice?: string;
+  dinnerNotice?: string;
+}): Record<PublicPageKey, PublicPageContent> {
+  const title = base.pageTitle || `${base.meetingName}查询`;
+  const description = base.pageDescription || "";
+  const announcement = base.announcement || "";
+  const publisher = base.publisher || "";
+  const buttonText = base.buttonText || "立即查询";
+  const emptyMessage = base.emptyMessage || "未查询到结果，请核对信息后重试";
+  return {
+    entry: { title, description, announcement, publisher },
+    combined: { title, description, announcement, publisher, buttonText, emptyMessage },
+    seat: {
+      title,
+      description,
+      announcement,
+      publisher,
+      buttonText,
+      emptyMessage,
+      notice: base.seatNotice || defaultSeatNotice
+    },
+    room: {
+      title,
+      description,
+      announcement,
+      publisher,
+      buttonText,
+      emptyMessage,
+      notice: base.roomNotice || defaultRoomNotice
+    },
+    dinner: {
+      title,
+      description,
+      announcement,
+      publisher,
+      buttonText,
+      emptyMessage,
+      notice: base.dinnerNotice || defaultDinnerNotice
+    },
+    checkin: { title, description, announcement, publisher, buttonText: "自助签到" }
+  };
+}
+
+function normalizePageContents(
+  raw: Partial<Record<PublicPageKey, PublicPageContent>> | undefined,
+  fallback: Record<PublicPageKey, PublicPageContent>
+): Record<PublicPageKey, PublicPageContent> {
+  return publicPageKeys.reduce(
+    (result, key) => {
+      result[key] = { ...fallback[key], ...(raw?.[key] || {}) };
+      return result;
+    },
+    {} as Record<PublicPageKey, PublicPageContent>
+  );
+}
+
 function mapQuerySettings(item: MeetingQuerySettingsDto): MeetingQuerySettings {
   const visibleResultFields = parseResultFields(item.visibleResultFields, defaultVisibleResultFields);
   const maskedResultFields = parseResultFields(item.maskedResultFields, []);
@@ -2832,6 +2931,30 @@ function mapQuerySettings(item: MeetingQuerySettingsDto): MeetingQuerySettings {
     item.dinnerHighlightResultFields,
     dinnerResultFields(highlightResultFields).length ? dinnerResultFields(highlightResultFields) : ["DINNER_TABLE_NO"]
   );
+  const pageTitle = item.pageTitle || `${item.meetingName}查询`;
+  const pageDescription = item.pageDescription || "";
+  const announcement = item.announcement || "";
+  const publisher = item.publisher || "";
+  const buttonText = item.buttonText || "立即查询";
+  const emptyMessage = item.emptyMessage || "未查询到结果，请核对信息后重试";
+  const seatNotice = item.seatNotice || defaultSeatNotice;
+  const roomNotice = item.roomNotice || defaultRoomNotice;
+  const dinnerNotice = item.dinnerNotice || defaultDinnerNotice;
+  const pageContents = normalizePageContents(
+    item.pageContents,
+    buildDefaultPageContents({
+      meetingName: item.meetingName,
+      pageTitle,
+      pageDescription,
+      announcement,
+      publisher,
+      buttonText,
+      emptyMessage,
+      seatNotice,
+      roomNotice,
+      dinnerNotice
+    })
+  );
   return {
     meetingId: idOf(item.meetingId),
     meetingCode: item.meetingCode,
@@ -2840,20 +2963,22 @@ function mapQuerySettings(item: MeetingQuerySettingsDto): MeetingQuerySettings {
     roomQueryEnabled: item.roomQueryEnabled,
     dinnerQueryEnabled: item.dinnerQueryEnabled ?? false,
     checkinEnabled: item.checkinEnabled ?? true,
+    selfCheckinEnabled: item.selfCheckinEnabled ?? true,
     queryPaused: Boolean(item.queryPaused),
     fields: parseQueryFields(item.fields),
     matchMode: item.matchMode || "FUZZY",
-    pageTitle: item.pageTitle || `${item.meetingName}查询`,
-    pageDescription: item.pageDescription,
-    announcement: item.announcement,
-    publisher: item.publisher,
+    pageTitle,
+    pageDescription,
+    announcement,
+    publisher,
     startTime: item.startTime,
     endTime: item.endTime,
-    buttonText: item.buttonText || "立即查询",
-    emptyMessage: item.emptyMessage || "未查询到结果，请核对信息后重试",
-    seatNotice: item.seatNotice || "请按会议通知时间到达会场，凭会议证件从指定入口进入，对号入座。",
-    roomNotice: item.roomNotice || "凭会议证件及身份证办理入住，接待台位于酒店大堂。",
-    dinnerNotice: item.dinnerNotice || "请按现场指引前往晚宴区域入座，如有调整请以会务组通知为准。",
+    buttonText,
+    emptyMessage,
+    seatNotice,
+    roomNotice,
+    dinnerNotice,
+    pageContents,
     themeColor: item.themeColor || "#2563eb",
     logoUrl: item.logoUrl,
     backgroundUrl: item.backgroundUrl,
@@ -2878,6 +3003,18 @@ function mapQuerySettings(item: MeetingQuerySettingsDto): MeetingQuerySettings {
 
 function meetingToQuerySettings(meeting?: Meeting | null): MeetingQuerySettings {
   const meetingName = meeting?.name || "当前会议";
+  const pageContents = buildDefaultPageContents({
+    meetingName,
+    pageTitle: `${meetingName}查询`,
+    pageDescription: "",
+    announcement: "",
+    publisher: "",
+    buttonText: "立即查询",
+    emptyMessage: "未查询到结果，请核对信息后重试",
+    seatNotice: defaultSeatNotice,
+    roomNotice: defaultRoomNotice,
+    dinnerNotice: defaultDinnerNotice
+  });
   return {
     meetingId: meeting?.id || "",
     meetingCode: meeting?.code || "",
@@ -2886,6 +3023,7 @@ function meetingToQuerySettings(meeting?: Meeting | null): MeetingQuerySettings 
     roomQueryEnabled: meeting?.roomQueryEnabled ?? true,
     dinnerQueryEnabled: meeting?.dinnerQueryEnabled ?? false,
     checkinEnabled: meeting?.checkinEnabled ?? true,
+    selfCheckinEnabled: meeting?.selfCheckinEnabled ?? true,
     queryPaused: false,
     fields: meeting?.publicQueryFields?.length ? meeting.publicQueryFields : ["PHONE", "NAME"],
     matchMode: meeting?.publicQueryMatchMode || "FUZZY",
@@ -2895,9 +3033,10 @@ function meetingToQuerySettings(meeting?: Meeting | null): MeetingQuerySettings 
     publisher: "",
     buttonText: "立即查询",
     emptyMessage: "未查询到结果，请核对信息后重试",
-    seatNotice: "请按会议通知时间到达会场，凭会议证件从指定入口进入，对号入座。",
-    roomNotice: "凭会议证件及身份证办理入住，接待台位于酒店大堂。",
-    dinnerNotice: "请按现场指引前往晚宴区域入座，如有调整请以会务组通知为准。",
+    seatNotice: defaultSeatNotice,
+    roomNotice: defaultRoomNotice,
+    dinnerNotice: defaultDinnerNotice,
+    pageContents,
     themeColor: "#2563eb",
     resultLayout: "CARD",
     visibleResultFields: [...defaultVisibleResultFields],
@@ -3033,10 +3172,15 @@ function localDinnerQuery(
 
 function localPublicSelfCheckin(
   store: ReturnType<typeof useMeetingStore>,
-  payload: { meetingId?: string | number | null; meetingCode?: string | null; values: Record<PublicQueryField, string> }
+  payload: { meetingId?: string | number | null; meetingCode?: string | null; values: Record<PublicQueryField, string>; checkinSource?: PublicCheckinSource }
 ): PublicCheckinResult {
   const meeting = resolveLocalMeeting(store, payload);
-  if (!meeting.checkinEnabled) throw new Error("签到尚未开放");
+  const source = payload.checkinSource || "SELF";
+  if (source === "RESULT") {
+    if (!meeting.checkinEnabled) throw new Error("查询后签到按钮尚未开放");
+  } else if (!meeting.selfCheckinEnabled) {
+    throw new Error("签到独立页尚未开放");
+  }
   const attendee = resolveSingleLocalAttendee(store, meeting, payload.values);
   if (attendee.auditStatus !== "APPROVED") {
     return {

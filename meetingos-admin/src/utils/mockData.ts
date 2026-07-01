@@ -26,6 +26,7 @@ export const mockMeetings: Meeting[] = [
     roomQueryEnabled: true,
     dinnerQueryEnabled: true,
     checkinEnabled: true,
+    selfCheckinEnabled: true,
     publicQueryFields: ["PHONE", "NAME"],
     publicQueryMatchMode: "FUZZY"
   },
@@ -52,6 +53,7 @@ export const mockMeetings: Meeting[] = [
     roomQueryEnabled: false,
     dinnerQueryEnabled: false,
     checkinEnabled: true,
+    selfCheckinEnabled: true,
     publicQueryFields: ["PHONE", "NAME"],
     publicQueryMatchMode: "FUZZY"
   },
@@ -78,6 +80,7 @@ export const mockMeetings: Meeting[] = [
     roomQueryEnabled: false,
     dinnerQueryEnabled: false,
     checkinEnabled: true,
+    selfCheckinEnabled: true,
     publicQueryFields: ["PHONE", "NAME"],
     publicQueryMatchMode: "FUZZY"
   }

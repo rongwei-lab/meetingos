@@ -8,6 +8,7 @@ export type PublicQueryField = "NAME" | "PHONE" | "PHONE_LAST4" | "ATTENDEE_CODE
 export type PublicQueryMatchMode = "FUZZY" | "EXACT";
 export type PublicQueryType = "SEAT" | "ROOM" | "DINNER" | "CHECKIN";
 export type PublicQueryStatus = "SUCCESS" | "FAILED";
+export type PublicCheckinSource = "SELF" | "RESULT";
 export type PublicQueryResultField =
   | "ATTENDEE_NAME"
   | "ATTENDEE_PHONE"
@@ -62,6 +63,7 @@ export interface Meeting {
   roomQueryEnabled: boolean;
   dinnerQueryEnabled: boolean;
   checkinEnabled: boolean;
+  selfCheckinEnabled: boolean;
   publicQueryFields: PublicQueryField[];
   publicQueryMatchMode: PublicQueryMatchMode;
 }
@@ -140,6 +142,18 @@ export interface QueryResultFieldOption {
   label: string;
 }
 
+export type PublicPageKey = "entry" | "combined" | "seat" | "room" | "dinner" | "checkin";
+
+export interface PublicPageContent {
+  title?: string;
+  description?: string;
+  announcement?: string;
+  publisher?: string;
+  buttonText?: string;
+  emptyMessage?: string;
+  notice?: string;
+}
+
 export interface MeetingQuerySettings {
   meetingId: string;
   meetingCode: string;
@@ -148,6 +162,7 @@ export interface MeetingQuerySettings {
   roomQueryEnabled: boolean;
   dinnerQueryEnabled: boolean;
   checkinEnabled: boolean;
+  selfCheckinEnabled: boolean;
   queryPaused: boolean;
   fields: PublicQueryField[];
   matchMode: PublicQueryMatchMode;
@@ -162,6 +177,7 @@ export interface MeetingQuerySettings {
   seatNotice: string;
   roomNotice: string;
   dinnerNotice: string;
+  pageContents: Record<PublicPageKey, PublicPageContent>;
   themeColor: string;
   logoUrl?: string;
   backgroundUrl?: string;

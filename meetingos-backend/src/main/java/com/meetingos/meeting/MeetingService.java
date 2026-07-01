@@ -140,6 +140,7 @@ public class MeetingService {
                 meeting.isRoomQueryEnabled(),
                 meeting.isDinnerQueryEnabled(),
                 meeting.isCheckinEnabled(),
+                meeting.isSelfCheckinEnabled(),
                 meeting.getPublicQueryFields(),
                 meeting.getPublicQueryMatchMode()
         );
@@ -178,6 +179,9 @@ public class MeetingService {
         }
         if (request.checkinEnabled() != null) {
             meeting.setCheckinEnabled(request.checkinEnabled());
+        }
+        if (request.selfCheckinEnabled() != null) {
+            meeting.setSelfCheckinEnabled(request.selfCheckinEnabled());
         }
         if (request.publicQueryFields() != null && !request.publicQueryFields().isEmpty()) {
             meeting.setPublicQueryFields(request.publicQueryFields().stream()

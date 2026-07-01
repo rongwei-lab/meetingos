@@ -2,15 +2,15 @@
   <main class="public-page" :style="publicPageStyle(settings)">
     <section class="public-card">
       <img v-if="safeLogoUrl" class="public-logo" :src="safeLogoUrl" alt="会议 Logo" />
-      <p v-if="settings?.publisher" class="public-kicker">{{ settings.publisher }}</p>
-      <h1>{{ pageTitle(settings, "晚宴桌号查询") }}</h1>
+      <p v-if="publisher" class="public-kicker">{{ publisher }}</p>
+      <h1>{{ pageTitleFor(settings, "dinner", "晚宴桌号查询") }}</h1>
       <p v-if="subtitle" class="public-subtitle">{{ subtitle }}</p>
 
       <n-alert v-if="!settings" class="public-alert" :type="settingsError ? 'warning' : 'info'" :bordered="false">
         {{ settingsError || "查询设置加载中" }}
       </n-alert>
-      <n-alert v-else-if="settings.announcement" class="public-alert" type="info" :bordered="false">
-        {{ settings.announcement }}
+      <n-alert v-else-if="announcement" class="public-alert" type="info" :bordered="false">
+        {{ announcement }}
       </n-alert>
       <n-alert v-if="settings && !settings.dinnerQueryEnabled" class="public-alert" type="warning" :bordered="false">
         当前会议暂未开放晚宴查询
@@ -30,7 +30,7 @@
           </div>
         </n-form-item>
         <n-button type="primary" block :color="settings?.themeColor" :loading="loading" @click="query">
-          {{ settings?.buttonText || "立即查询" }}
+          {{ buttonText }}
         </n-button>
       </n-form>
 
@@ -39,7 +39,7 @@
         kind="dinner"
         :attendee-name="result.attendeeName"
         :rows="resultRows"
-        :notice="settings?.dinnerNotice"
+        :notice="dinnerNotice"
       />
       <n-alert v-else-if="messageText" class="public-alert" type="warning" :bordered="false">
         {{ messageText }}
@@ -59,7 +59,12 @@ import PublicResultTicket from "./PublicResultTicket.vue";
 import {
   buildDinnerRows,
   normalizePublicQueryError,
-  pageTitle,
+  pageAnnouncementFor,
+  pageButtonTextFor,
+  pageDescriptionFor,
+  pageNoticeFor,
+  pagePublisherFor,
+  pageTitleFor,
   publicPageStyle,
   queryWindowState
 } from "./queryDisplay";
@@ -93,7 +98,11 @@ const queryMeetingId = computed(() => {
 });
 const queryMeetingCode = computed(() => String(route.query.meetingCode || route.params.meetingCode || ""));
 const activeFields = computed(() => settings.value?.fields || []);
-const subtitle = computed(() => settings.value?.pageDescription || settings.value?.meetingName || "");
+const publisher = computed(() => pagePublisherFor(settings.value, "dinner"));
+const subtitle = computed(() => pageDescriptionFor(settings.value, "dinner"));
+const announcement = computed(() => pageAnnouncementFor(settings.value, "dinner"));
+const buttonText = computed(() => pageButtonTextFor(settings.value, "dinner"));
+const dinnerNotice = computed(() => pageNoticeFor(settings.value, "dinner"));
 const windowState = computed(() => queryWindowState(settings.value));
 const resultRows = computed(() => buildDinnerRows(settings.value, result.value));
 const safeLogoUrl = computed(() => sanitizeImageUrl(settings.value?.logoUrl));
@@ -142,7 +151,7 @@ async function query() {
     });
   } catch (error) {
     const rawMessage = error instanceof Error ? error.message : "晚宴查询失败";
-    messageText.value = normalizePublicQueryError(rawMessage, settings.value);
+    messageText.value = normalizePublicQueryError(rawMessage, settings.value, "dinner");
     if (settings.value?.captchaEnabled) {
       await loadCaptcha();
     }

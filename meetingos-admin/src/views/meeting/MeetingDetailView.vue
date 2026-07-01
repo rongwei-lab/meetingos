@@ -100,6 +100,12 @@
                         </n-tag>
                       </div>
                       <div class="status-row">
+                        <span>签到独立页</span>
+                        <n-tag size="small" :type="queryForm.selfCheckinEnabled ? 'success' : 'default'">
+                          {{ queryForm.selfCheckinEnabled ? "已开放" : "未开放" }}
+                        </n-tag>
+                      </div>
+                      <div class="status-row">
                         <span>公开查询</span>
                         <n-tag size="small" :type="queryForm.queryPaused ? 'warning' : 'success'">
                           {{ queryForm.queryPaused ? "已暂停" : "正常" }}
@@ -142,9 +148,16 @@
                       <div class="toggle-row">
                         <div>
                           <strong>查询后签到按钮</strong>
-                          <span>座位查询成功后显示“立即签到”，关闭后不展示并拦截自助签到</span>
+                          <span>查询结果成功后显示“立即签到”，关闭后不展示并拦截该按钮提交</span>
                         </div>
                         <n-switch v-model:value="queryForm.checkinEnabled" />
+                      </div>
+                      <div class="toggle-row">
+                        <div>
+                          <strong>签到独立页</strong>
+                          <span>允许访问 /public/checkin 自助签到页，关闭后隐藏入口并拦截独立页提交</span>
+                        </div>
+                        <n-switch v-model:value="queryForm.selfCheckinEnabled" />
                       </div>
                     </div>
                   </section>
@@ -213,81 +226,60 @@
               </n-tab-pane>
 
               <n-tab-pane name="content" tab="页面内容">
-                <div v-if="activeSettingsTab === 'content'" class="settings-pane">
+                <div v-if="activeSettingsTab === 'content'" class="settings-pane content-settings-pane">
                   <section class="settings-panel">
                     <div class="section-heading">
                       <strong>页面信息</strong>
-                      <span>控制参会人公开查询页展示的标题、说明和提示文案</span>
+                      <span>每个公开入口单独配置标题、说明、公告和提示文案</span>
                     </div>
+                    <n-tabs v-model:value="activeContentPageKey" type="segment" animated class="content-page-tabs">
+                      <n-tab-pane v-for="page in publicContentPages" :key="page.key" :name="page.key" :tab="page.label" />
+                    </n-tabs>
                     <n-form label-placement="top" :show-feedback="false" class="query-form">
-                      <n-form-item label="查询页标题">
-                        <n-input v-model:value="queryForm.pageTitle" clearable placeholder="例如：2026 年会座位住宿查询" />
+                      <n-form-item :label="`${activeContentPage.label}标题`">
+                        <n-input v-model:value="activePageContent.title" clearable :placeholder="activeContentPage.titlePlaceholder" />
                       </n-form-item>
-                      <n-form-item label="查询页说明">
+                      <n-form-item label="页面说明">
                         <n-input
-                          v-model:value="queryForm.pageDescription"
+                          v-model:value="activePageContent.description"
                           type="textarea"
                           clearable
                           :autosize="{ minRows: 2, maxRows: 4 }"
-                          placeholder="用于提示参会人填写规则、查询范围等"
+                          placeholder="用于提示参会人填写规则、查询范围等；清空后该页不显示说明"
                         />
                       </n-form-item>
                       <n-form-item label="公告">
                         <n-input
-                          v-model:value="queryForm.announcement"
+                          v-model:value="activePageContent.announcement"
                           type="textarea"
                           clearable
                           :autosize="{ minRows: 2, maxRows: 5 }"
-                          placeholder="例如：座位和房间信息如有调整，请以现场安排为准"
+                          placeholder="例如：座位和房间信息如有调整，请以现场安排为准；清空后该页不显示公告"
                         />
                       </n-form-item>
                       <div class="query-form-row">
                         <n-form-item label="发布人">
-                          <n-input v-model:value="queryForm.publisher" clearable placeholder="例如：会务组" />
+                          <n-input v-model:value="activePageContent.publisher" clearable placeholder="例如：会务组" />
                         </n-form-item>
-                        <n-form-item label="查询按钮文案">
-                          <n-input v-model:value="queryForm.buttonText" clearable placeholder="立即查询" />
+                        <n-form-item v-if="activeContentPage.hasButton" label="按钮文案">
+                          <n-input v-model:value="activePageContent.buttonText" clearable :placeholder="activeContentPage.buttonPlaceholder" />
                         </n-form-item>
                       </div>
-                      <n-form-item label="空结果提示">
-                        <n-input v-model:value="queryForm.emptyMessage" clearable placeholder="未查询到结果，请核对信息后重试" />
+                      <n-form-item v-if="activeContentPage.hasEmptyMessage" label="空结果提示">
+                        <n-input v-model:value="activePageContent.emptyMessage" clearable placeholder="未查询到结果，请核对信息后重试" />
                       </n-form-item>
-                      <div class="query-form-row">
-                        <n-form-item label="座位结果提示">
-                          <n-input
-                            v-model:value="queryForm.seatNotice"
-                            type="textarea"
-                            clearable
-                            :autosize="{ minRows: 2, maxRows: 4 }"
-                            placeholder="例如：请按会议通知时间到达会场，凭会议证件从指定入口进入，对号入座。"
-                          />
-                        </n-form-item>
-                        <n-form-item label="住宿结果提示">
-                          <n-input
-                            v-model:value="queryForm.roomNotice"
-                            type="textarea"
-                            clearable
-                            :autosize="{ minRows: 2, maxRows: 4 }"
-                            placeholder="例如：凭身份证办理入住，接待台位于酒店大堂。"
-                          />
-                        </n-form-item>
-                      </div>
-                      <n-form-item label="晚宴结果提示">
+                      <n-form-item v-if="activeContentPage.hasNotice" label="结果提示">
                         <n-input
-                          v-model:value="queryForm.dinnerNotice"
+                          v-model:value="activePageContent.notice"
                           type="textarea"
                           clearable
                           :autosize="{ minRows: 2, maxRows: 4 }"
-                          placeholder="例如：请按现场指引前往晚宴区域入座，如有调整请以会务组通知为准。"
+                          :placeholder="activeContentPage.noticePlaceholder"
                         />
                       </n-form-item>
                     </n-form>
                   </section>
-                </div>
-              </n-tab-pane>
 
-              <n-tab-pane name="result" tab="结果展示">
-                <div v-if="activeSettingsTab === 'result'" class="settings-pane result-settings-pane">
                   <section class="settings-panel result-appearance-panel">
                     <div class="section-heading">
                       <strong>外观</strong>
@@ -591,6 +583,8 @@ import { formatDateTimeLabel } from "@/utils/meetingDisplay";
 import { assertSafeImageUrl, isAllowedUploadImage } from "@/utils/safeUrl";
 import type {
   AdminQueryCandidate,
+  PublicPageContent,
+  PublicPageKey,
   PublicQueryField,
   PublicQueryHistory,
   PublicQueryMatchMode,
@@ -622,7 +616,7 @@ const testQueryType = ref<"seat" | "room">("seat");
 const queryResults = ref<AdminQueryCandidate[]>([]);
 const adminQueryTouched = ref(false);
 const activeQueryTab = ref<"settings" | "history">("settings");
-const activeSettingsTab = ref<"entry" | "rules" | "content" | "result" | "test">("entry");
+const activeSettingsTab = ref<"entry" | "rules" | "content" | "test">("entry");
 const historyView = ref<"logs" | "summary">("logs");
 const loadingQueryHistory = ref(false);
 const loadingQuerySummary = ref(false);
@@ -640,11 +634,119 @@ interface PublicQueryLink {
   qrCode: string;
 }
 
+interface PublicContentPage {
+  key: PublicPageKey;
+  label: string;
+  titlePlaceholder: string;
+  buttonPlaceholder: string;
+  noticePlaceholder: string;
+  hasButton: boolean;
+  hasEmptyMessage: boolean;
+  hasNotice: boolean;
+}
+
+const defaultPageContents: Record<PublicPageKey, PublicPageContent> = {
+  entry: { title: "", description: "", announcement: "", publisher: "" },
+  combined: { title: "", description: "", announcement: "", publisher: "", buttonText: "立即查询", emptyMessage: "未查询到结果，请核对信息后重试" },
+  seat: {
+    title: "",
+    description: "",
+    announcement: "",
+    publisher: "",
+    buttonText: "立即查询",
+    emptyMessage: "未查询到结果，请核对信息后重试",
+    notice: "请按会议通知时间到达会场，凭会议证件从指定入口进入，对号入座。"
+  },
+  room: {
+    title: "",
+    description: "",
+    announcement: "",
+    publisher: "",
+    buttonText: "立即查询",
+    emptyMessage: "未查询到结果，请核对信息后重试",
+    notice: "凭会议证件及身份证办理入住，接待台位于酒店大堂。"
+  },
+  dinner: {
+    title: "",
+    description: "",
+    announcement: "",
+    publisher: "",
+    buttonText: "立即查询",
+    emptyMessage: "未查询到结果，请核对信息后重试",
+    notice: "请按现场指引前往晚宴区域入座，如有调整请以会务组通知为准。"
+  },
+  checkin: { title: "", description: "", announcement: "", publisher: "", buttonText: "自助签到" }
+};
+
+const publicContentPages: PublicContentPage[] = [
+  {
+    key: "entry",
+    label: "入口页",
+    titlePlaceholder: "例如：参会人入口",
+    buttonPlaceholder: "",
+    noticePlaceholder: "",
+    hasButton: false,
+    hasEmptyMessage: false,
+    hasNotice: false
+  },
+  {
+    key: "combined",
+    label: "综合查询",
+    titlePlaceholder: "例如：会议综合查询",
+    buttonPlaceholder: "立即查询",
+    noticePlaceholder: "",
+    hasButton: true,
+    hasEmptyMessage: true,
+    hasNotice: false
+  },
+  {
+    key: "seat",
+    label: "座位查询",
+    titlePlaceholder: "例如：座位查询",
+    buttonPlaceholder: "立即查询",
+    noticePlaceholder: "例如：请按会议通知时间到达会场，凭会议证件从指定入口进入，对号入座。",
+    hasButton: true,
+    hasEmptyMessage: true,
+    hasNotice: true
+  },
+  {
+    key: "room",
+    label: "住宿查询",
+    titlePlaceholder: "例如：房间号查询",
+    buttonPlaceholder: "立即查询",
+    noticePlaceholder: "例如：凭身份证办理入住，接待台位于酒店大堂。",
+    hasButton: true,
+    hasEmptyMessage: true,
+    hasNotice: true
+  },
+  {
+    key: "dinner",
+    label: "晚宴查询",
+    titlePlaceholder: "例如：晚宴桌号查询",
+    buttonPlaceholder: "立即查询",
+    noticePlaceholder: "例如：请按现场指引前往晚宴区域入座，如有调整请以会务组通知为准。",
+    hasButton: true,
+    hasEmptyMessage: true,
+    hasNotice: true
+  },
+  {
+    key: "checkin",
+    label: "自助签到",
+    titlePlaceholder: "例如：会议自助签到",
+    buttonPlaceholder: "自助签到",
+    noticePlaceholder: "",
+    hasButton: true,
+    hasEmptyMessage: false,
+    hasNotice: false
+  }
+];
+
 const queryForm = reactive({
   seatQueryEnabled: false,
   roomQueryEnabled: false,
   dinnerQueryEnabled: false,
   checkinEnabled: true,
+  selfCheckinEnabled: true,
   queryPaused: false,
   fields: ["PHONE", "NAME"] as PublicQueryField[],
   matchMode: "FUZZY" as PublicQueryMatchMode,
@@ -659,6 +761,7 @@ const queryForm = reactive({
   seatNotice: "请按会议通知时间到达会场，凭会议证件从指定入口进入，对号入座。",
   roomNotice: "凭会议证件及身份证办理入住，接待台位于酒店大堂。",
   dinnerNotice: "请按现场指引前往晚宴区域入座，如有调整请以会务组通知为准。",
+  pageContents: clonePageContents(defaultPageContents),
   themeColor: "#2563eb",
   logoUrl: "",
   backgroundUrl: "",
@@ -711,6 +814,7 @@ const resultFieldOptions = ref([
   { field: "ROOM_NO" as PublicQueryResultField, label: "房间号" }
 ]);
 const activeLinkKey = ref<PublicQueryLinkKey>("combined");
+const activeContentPageKey = ref<PublicPageKey>("combined");
 const queryLinkQrcodes = ref<Record<string, string>>({});
 let qrRenderToken = 0;
 let qrIdleHandle: number | undefined;
@@ -730,6 +834,8 @@ const historyPagination = reactive({
 });
 const fieldSelectOptions = computed(() => fieldOptions.value.map((item) => ({ label: item.label, value: item.field })));
 const resultFieldSelectOptions = computed(() => resultFieldOptions.value.map((item) => ({ label: item.label, value: item.field })));
+const activeContentPage = computed(() => publicContentPages.find((item) => item.key === activeContentPageKey.value) || publicContentPages[0]);
+const activePageContent = computed(() => queryForm.pageContents[activeContentPageKey.value] || queryForm.pageContents.combined);
 const seatResultFields = new Set<PublicQueryResultField>([
   "ATTENDEE_NAME",
   "ATTENDEE_PHONE",
@@ -839,7 +945,7 @@ const publicQueryLinks = computed<PublicQueryLink[]>(() => {
       key: "checkin" as const,
       label: "签到入口",
       shortLabel: "签到",
-      description: "独立自助签到入口，受查询后签到开关控制，适合现场入口扫码使用。",
+      description: "独立自助签到入口，受签到独立页开关控制，适合现场入口扫码使用。",
       url: `${window.location.origin}/public/checkin?${query}`
     }
   ].map((item) => ({
@@ -968,6 +1074,7 @@ function loadQuerySettings(targetMeetingId = meetingId.value) {
     queryForm.roomQueryEnabled = settings.roomQueryEnabled;
     queryForm.dinnerQueryEnabled = settings.dinnerQueryEnabled;
     queryForm.checkinEnabled = settings.checkinEnabled;
+    queryForm.selfCheckinEnabled = settings.selfCheckinEnabled;
     queryForm.queryPaused = settings.queryPaused;
     queryForm.fields = [...settings.fields];
     queryForm.matchMode = settings.matchMode;
@@ -982,6 +1089,7 @@ function loadQuerySettings(targetMeetingId = meetingId.value) {
     queryForm.seatNotice = settings.seatNotice;
     queryForm.roomNotice = settings.roomNotice;
     queryForm.dinnerNotice = settings.dinnerNotice;
+    queryForm.pageContents = clonePageContents(settings.pageContents);
     queryForm.themeColor = settings.themeColor;
     queryForm.logoUrl = settings.logoUrl || "";
     queryForm.backgroundUrl = settings.backgroundUrl || "";
@@ -1097,26 +1205,30 @@ function saveQuerySettings() {
     return;
   }
   savingQuerySettings.value = true;
+  const pageContents = clonePageContents(queryForm.pageContents);
+  const combinedContent = pageContents.combined;
   void store
     .saveMeetingQuerySettings(meetingId.value, {
       seatQueryEnabled: queryForm.seatQueryEnabled,
       roomQueryEnabled: queryForm.roomQueryEnabled,
       dinnerQueryEnabled: queryForm.dinnerQueryEnabled,
       checkinEnabled: queryForm.checkinEnabled,
+      selfCheckinEnabled: queryForm.selfCheckinEnabled,
       queryPaused: queryForm.queryPaused,
       fields: queryForm.fields,
       matchMode: queryForm.matchMode,
-      pageTitle: queryForm.pageTitle,
-      pageDescription: queryForm.pageDescription,
-      announcement: queryForm.announcement,
-      publisher: queryForm.publisher,
+      pageTitle: combinedContent.title || queryForm.pageTitle,
+      pageDescription: combinedContent.description ?? queryForm.pageDescription,
+      announcement: combinedContent.announcement ?? queryForm.announcement,
+      publisher: combinedContent.publisher ?? queryForm.publisher,
       startTime: queryForm.startTime || undefined,
       endTime: queryForm.endTime || undefined,
-      buttonText: queryForm.buttonText,
-      emptyMessage: queryForm.emptyMessage,
-      seatNotice: queryForm.seatNotice,
-      roomNotice: queryForm.roomNotice,
-      dinnerNotice: queryForm.dinnerNotice,
+      buttonText: combinedContent.buttonText || queryForm.buttonText,
+      emptyMessage: combinedContent.emptyMessage || queryForm.emptyMessage,
+      seatNotice: pageContents.seat.notice ?? queryForm.seatNotice,
+      roomNotice: pageContents.room.notice ?? queryForm.roomNotice,
+      dinnerNotice: pageContents.dinner.notice ?? queryForm.dinnerNotice,
+      pageContents,
       themeColor: queryForm.themeColor,
       logoUrl: queryForm.logoUrl,
       backgroundUrl: queryForm.backgroundUrl,
@@ -1139,6 +1251,16 @@ function saveQuerySettings() {
     .finally(() => {
       savingQuerySettings.value = false;
     });
+}
+
+function clonePageContents(contents: Record<PublicPageKey, PublicPageContent>): Record<PublicPageKey, PublicPageContent> {
+  return (Object.keys(defaultPageContents) as PublicPageKey[]).reduce(
+    (result, key) => {
+      result[key] = { ...defaultPageContents[key], ...(contents[key] || {}) };
+      return result;
+    },
+    {} as Record<PublicPageKey, PublicPageContent>
+  );
 }
 
 function runAdminQuery(type: "seat" | "room") {
@@ -1423,7 +1545,7 @@ watch(activePublicQueryLinkUrl, (url) => {
   align-items: start;
 }
 
-.result-settings-pane {
+.content-settings-pane {
   grid-template-columns: 1fr;
   gap: 18px;
 }

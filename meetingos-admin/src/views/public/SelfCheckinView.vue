@@ -3,25 +3,25 @@
     <section class="public-card self-checkin-card">
       <template v-if="!result">
         <img v-if="safeLogoUrl" class="public-logo" :src="safeLogoUrl" alt="会议 Logo" />
-        <p v-if="settings?.publisher" class="public-kicker">{{ settings.publisher }}</p>
-        <h1>{{ pageTitle(settings, "会议自助签到") }}</h1>
+        <p v-if="publisher" class="public-kicker">{{ publisher }}</p>
+        <h1>{{ pageTitleFor(settings, "checkin", "会议自助签到") }}</h1>
         <p class="public-subtitle">{{ subtitle }}</p>
       </template>
 
       <n-alert v-if="!settings" class="public-alert" :type="errorText ? 'warning' : 'info'" :bordered="false">
         {{ errorText || "签到设置加载中" }}
       </n-alert>
-      <n-alert v-else-if="settings.announcement && !result" class="public-alert" type="info" :bordered="false">
-        {{ settings.announcement }}
+      <n-alert v-else-if="announcement && !result" class="public-alert" type="info" :bordered="false">
+        {{ announcement }}
       </n-alert>
       <n-alert v-if="settings && !windowState.available && !result" class="public-alert" type="warning" :bordered="false">
         {{ windowState.message }}
       </n-alert>
-      <n-alert v-if="settings && !settings.checkinEnabled && !result" class="public-alert" type="warning" :bordered="false">
-        签到尚未开放。
+      <n-alert v-if="settings && !settings.selfCheckinEnabled && !result" class="public-alert" type="warning" :bordered="false">
+        签到独立页尚未开放。
       </n-alert>
 
-      <n-form v-else-if="settings && settings.checkinEnabled && windowState.available && !result" label-placement="top" class="public-form">
+      <n-form v-else-if="settings && settings.selfCheckinEnabled && windowState.available && !result" label-placement="top" class="public-form">
         <n-form-item v-for="field in activeFields" :key="field" :label="fieldLabel(field)">
           <n-input v-model:value="values[field]" :placeholder="`请输入${fieldLabel(field)}`" />
         </n-form-item>
@@ -32,7 +32,7 @@
           </div>
         </n-form-item>
         <n-button type="primary" block :color="settings.themeColor" :loading="loading" @click="submitCheckin">
-          自助签到
+          {{ buttonText }}
         </n-button>
       </n-form>
 
@@ -74,7 +74,7 @@ import { useMeetingStore } from "@/stores/meeting";
 import { formatDateTimeSecondLabel } from "@/utils/meetingDisplay";
 import type { MeetingQuerySettings, PublicCheckinResult, PublicQueryField } from "@/utils/types";
 import { sanitizeImageUrl } from "@/utils/safeUrl";
-import { normalizePublicQueryError, pageTitle, publicPageStyle, queryWindowState } from "./queryDisplay";
+import { normalizePublicQueryError, pageAnnouncementFor, pageButtonTextFor, pageDescriptionFor, pagePublisherFor, pageTitleFor, publicPageStyle, queryWindowState } from "./queryDisplay";
 
 const route = useRoute();
 const store = useMeetingStore();
@@ -104,7 +104,10 @@ const queryMeetingId = computed(() => {
 });
 const queryMeetingCode = computed(() => String(route.query.meetingCode || route.params.meetingCode || ""));
 const activeFields = computed(() => settings.value?.fields || []);
-const subtitle = computed(() => settings.value?.pageDescription || settings.value?.meetingName || "请填写报名信息完成现场签到");
+const publisher = computed(() => pagePublisherFor(settings.value, "checkin"));
+const subtitle = computed(() => pageDescriptionFor(settings.value, "checkin", "请填写报名信息完成现场签到"));
+const announcement = computed(() => pageAnnouncementFor(settings.value, "checkin"));
+const buttonText = computed(() => pageButtonTextFor(settings.value, "checkin", "自助签到"));
 const windowState = computed(() => queryWindowState(settings.value));
 const safeLogoUrl = computed(() => sanitizeImageUrl(settings.value?.logoUrl));
 const resultTone = computed(() => {
@@ -168,7 +171,8 @@ async function submitCheckin() {
       meetingCode: queryMeetingCode.value || undefined,
       values,
       captchaId: captchaId.value,
-      captchaAnswer: captchaAnswer.value
+      captchaAnswer: captchaAnswer.value,
+      checkinSource: "SELF"
     });
     if (result.value.status === "SUCCESS") {
       message.success("签到成功");
@@ -184,7 +188,7 @@ async function submitCheckin() {
       result.value = failedResult;
       message.warning(failedResult.message || "暂不能签到");
     } else {
-      errorText.value = normalizePublicQueryError(rawMessage, settings.value);
+      errorText.value = normalizePublicQueryError(rawMessage, settings.value, "checkin");
       message.error(errorText.value);
       if (settings.value.captchaEnabled) {
         await loadCaptcha();
@@ -226,7 +230,7 @@ function toFailedCheckinResult(message: string): PublicCheckinResult | null {
     return { status: "NOT_APPROVED", message };
   }
   if (message.includes("未找到匹配") || message.includes("未找到参会人") || message.includes("未查询到")) {
-    return { status: "NOT_FOUND", message: normalizePublicQueryError(message, settings.value) };
+    return { status: "NOT_FOUND", message: normalizePublicQueryError(message, settings.value, "checkin") };
   }
   return null;
 }

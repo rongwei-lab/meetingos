@@ -91,7 +91,8 @@ async function submitCheckin() {
       meetingCode: props.meetingCode || undefined,
       values: { ...props.values },
       captchaId: captchaId.value,
-      captchaAnswer: captchaAnswer.value
+      captchaAnswer: captchaAnswer.value,
+      checkinSource: "RESULT"
     });
     if (result.value.status === "SUCCESS") {
       message.success("签到成功");

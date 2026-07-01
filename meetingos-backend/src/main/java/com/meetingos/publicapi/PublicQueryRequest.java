@@ -9,9 +9,18 @@ public record PublicQueryRequest(
         String meetingCode,
         @NotNull Map<PublicQueryField, String> values,
         String captchaId,
-        String captchaAnswer
+        String captchaAnswer,
+        String checkinSource
 ) {
     public PublicQueryRequest(Long meetingId, String meetingCode, Map<PublicQueryField, String> values) {
-        this(meetingId, meetingCode, values, null, null);
+        this(meetingId, meetingCode, values, null, null, null);
+    }
+
+    public PublicQueryRequest(Long meetingId,
+                              String meetingCode,
+                              Map<PublicQueryField, String> values,
+                              String captchaId,
+                              String captchaAnswer) {
+        this(meetingId, meetingCode, values, captchaId, captchaAnswer, null);
     }
 }

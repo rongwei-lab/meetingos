@@ -2,15 +2,15 @@
   <main class="public-page" :style="publicPageStyle(settings)">
     <section class="public-card public-card-wide">
       <img v-if="safeLogoUrl" class="public-logo" :src="safeLogoUrl" alt="会议 Logo" />
-      <p v-if="settings?.publisher" class="public-kicker">{{ settings.publisher }}</p>
-      <h1>{{ pageTitle(settings, "综合查询") }}</h1>
+      <p v-if="publisher" class="public-kicker">{{ publisher }}</p>
+      <h1>{{ pageTitleFor(settings, "combined", "综合查询") }}</h1>
       <p v-if="subtitle" class="public-subtitle">{{ subtitle }}</p>
 
       <n-alert v-if="!settings" class="public-alert" :type="settingsError ? 'warning' : 'info'" :bordered="false">
         {{ settingsError || "查询设置加载中" }}
       </n-alert>
-      <n-alert v-else-if="settings.announcement" class="public-alert" type="info" :bordered="false">
-        {{ settings.announcement }}
+      <n-alert v-else-if="announcement" class="public-alert" type="info" :bordered="false">
+        {{ announcement }}
       </n-alert>
       <n-alert v-if="settings && !anyPublicEntryEnabled" class="public-alert" type="warning" :bordered="false">
         当前会议暂未开放公开查询和自助签到
@@ -41,7 +41,7 @@
             kind="seat"
             :attendee-name="seatResult.attendeeName"
             :rows="seatRows"
-            :notice="settings?.seatNotice"
+            :notice="seatNotice"
           />
           <section v-else class="public-result">
             <n-alert v-if="seatResult" type="info" :bordered="false">当前未配置可展示的座位结果字段</n-alert>
@@ -55,7 +55,7 @@
             kind="room"
             :attendee-name="roomResult.attendeeName"
             :rows="roomRows"
-            :notice="settings?.roomNotice"
+            :notice="roomNotice"
           />
           <section v-else class="public-result">
             <n-alert v-if="roomResult" type="info" :bordered="false">当前未配置可展示的住宿结果字段</n-alert>
@@ -69,7 +69,7 @@
             kind="dinner"
             :attendee-name="dinnerResult.attendeeName"
             :rows="dinnerRows"
-            :notice="settings?.dinnerNotice"
+            :notice="dinnerNotice"
           />
           <section v-else class="public-result">
             <n-alert v-if="dinnerResult" type="info" :bordered="false">当前未配置可展示的晚宴结果字段</n-alert>
@@ -127,7 +127,12 @@ import {
   buildRoomRows,
   buildSeatRows,
   normalizePublicQueryError,
-  pageTitle,
+  pageAnnouncementFor,
+  pageButtonTextFor,
+  pageDescriptionFor,
+  pageNoticeFor,
+  pagePublisherFor,
+  pageTitleFor,
   publicPageStyle,
   queryWindowState
 } from "./queryDisplay";
@@ -168,9 +173,11 @@ const queryMeetingId = computed(() => {
 const queryMeetingCode = computed(() => String(route.query.meetingCode || route.params.meetingCode || ""));
 const activeFields = computed(() => settings.value?.fields || []);
 const queryResultEnabled = computed(() => Boolean(settings.value?.seatQueryEnabled || settings.value?.roomQueryEnabled || settings.value?.dinnerQueryEnabled));
-const anyPublicEntryEnabled = computed(() => Boolean(queryResultEnabled.value || settings.value?.checkinEnabled));
-const checkinOnlyEnabled = computed(() => Boolean(settings.value?.checkinEnabled && !queryResultEnabled.value));
-const subtitle = computed(() => settings.value?.pageDescription || settings.value?.meetingName || "查询会议安排，或完成自助签到");
+const anyPublicEntryEnabled = computed(() => Boolean(queryResultEnabled.value || settings.value?.selfCheckinEnabled));
+const checkinOnlyEnabled = computed(() => Boolean(settings.value?.selfCheckinEnabled && !queryResultEnabled.value));
+const publisher = computed(() => pagePublisherFor(settings.value, "combined"));
+const subtitle = computed(() => pageDescriptionFor(settings.value, "combined", "查询会议安排，或完成自助签到"));
+const announcement = computed(() => pageAnnouncementFor(settings.value, "combined"));
 const windowState = computed(() => queryWindowState(settings.value));
 const seatRows = computed(() => buildSeatRows(settings.value, seatResult.value));
 const roomRows = computed(() => buildRoomRows(settings.value, roomResult.value));
@@ -182,7 +189,10 @@ const hasQueryResult = computed(() => Boolean(
 ));
 const hasFinalResult = computed(() => Boolean(hasQueryResult.value || checkinResult.value));
 const safeLogoUrl = computed(() => sanitizeImageUrl(settings.value?.logoUrl));
-const primaryButtonText = computed(() => (checkinOnlyEnabled.value ? "自助签到" : settings.value?.buttonText || "立即查询"));
+const primaryButtonText = computed(() => (checkinOnlyEnabled.value ? "自助签到" : pageButtonTextFor(settings.value, "combined")));
+const seatNotice = computed(() => pageNoticeFor(settings.value, "seat"));
+const roomNotice = computed(() => pageNoticeFor(settings.value, "room"));
+const dinnerNotice = computed(() => pageNoticeFor(settings.value, "dinner"));
 const checkinResultTone = computed(() => {
   if (checkinResult.value?.status === "SUCCESS") return "success";
   if (checkinResult.value?.status === "DUPLICATE") return "warning";
@@ -266,7 +276,7 @@ async function query() {
 
   if (checkinOnlyEnabled.value) {
     try {
-      checkinResult.value = await store.publicSelfCheckin(payload);
+      checkinResult.value = await store.publicSelfCheckin({ ...payload, checkinSource: "SELF" });
       if (checkinResult.value.status === "SUCCESS") {
         message.success("签到成功");
       } else if (checkinResult.value.status === "DUPLICATE") {
@@ -281,7 +291,7 @@ async function query() {
         checkinResult.value = failedResult;
         message.warning(failedResult.message || "暂不能签到");
       } else {
-        message.error(normalizePublicQueryError(rawMessage, settings.value));
+        message.error(normalizePublicQueryError(rawMessage, settings.value, "combined"));
         if (settings.value.captchaEnabled) {
           await loadCaptcha();
         }
@@ -300,7 +310,7 @@ async function query() {
         })
         .catch((error) => {
           const rawMessage = error instanceof Error ? error.message : "座位查询失败";
-          seatMessage.value = normalizePublicQueryError(rawMessage, settings.value);
+          seatMessage.value = normalizePublicQueryError(rawMessage, settings.value, "seat");
         })
     );
   }
@@ -313,7 +323,7 @@ async function query() {
         })
         .catch((error) => {
           const rawMessage = error instanceof Error ? error.message : "住宿查询失败";
-          roomMessage.value = normalizePublicQueryError(rawMessage, settings.value);
+          roomMessage.value = normalizePublicQueryError(rawMessage, settings.value, "room");
         })
     );
   }
@@ -326,7 +336,7 @@ async function query() {
         })
         .catch((error) => {
           const rawMessage = error instanceof Error ? error.message : "晚宴查询失败";
-          dinnerMessage.value = normalizePublicQueryError(rawMessage, settings.value);
+          dinnerMessage.value = normalizePublicQueryError(rawMessage, settings.value, "dinner");
         })
     );
   }
@@ -375,7 +385,7 @@ function toFailedCheckinResult(message: string): PublicCheckinResult | null {
     return { status: "NOT_APPROVED", message };
   }
   if (message.includes("未找到匹配") || message.includes("未找到参会人") || message.includes("未查询到")) {
-    return { status: "NOT_FOUND", message: normalizePublicQueryError(message, settings.value) };
+    return { status: "NOT_FOUND", message: normalizePublicQueryError(message, settings.value, "combined") };
   }
   return null;
 }
