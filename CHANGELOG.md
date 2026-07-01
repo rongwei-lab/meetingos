@@ -4,6 +4,17 @@
 
 本项目遵循语义化版本号：`主版本.次版本.修订版本`。
 
+## [0.5.1] - 2026-07-01
+
+### Changed
+
+- 将 `self_checkin_enabled` 和 `public_query_page_content` 字段合并进基线迁移 `V1__init_schema.sql`，新库初始化时不再依赖拆分的 `V2`、`V3` 迁移文件。
+- 更新 `V1__init_schema.sql` 头部说明，明确拆分迁移历史库遇到 Flyway 缺失或 checksum 校验失败时应按规范评估 `repair` 或在开发/测试环境重建数据库。
+
+### Notes
+
+- `V2__add_self_checkin_enabled.sql` 和 `V3__add_public_query_page_content.sql` 已删除。已经执行过 `v0.5.0` 拆分迁移的数据库，升级前需要确认 Flyway 历史表处理策略。
+
 ## [0.5.0] - 2026-07-01
 
 ### Added

@@ -1,6 +1,7 @@
 -- MeetingOS 当前完整初始化结构。
 -- 注意：这是合并后的 Flyway 基线脚本，适用于新库或可重建的开发库。
--- 已经执行过拆分版 V1~V5 的数据库需要重建或修正 Flyway 历史，避免版本缺失和 checksum 不一致。
+-- 已经执行过拆分版 V1~V3 的数据库如遇本地迁移缺失或 checksum 校验失败，
+-- 需要按 Flyway 规范评估 repair，或在开发/测试环境重建数据库。
 
 create table app_users (
   id bigint primary key auto_increment,
@@ -47,6 +48,7 @@ create table meetings (
   room_query_enabled boolean not null default false,
   dinner_query_enabled boolean not null default false,
   checkin_enabled boolean not null default true,
+  self_checkin_enabled boolean not null default true,
   public_query_fields varchar(255) not null default 'PHONE,NAME',
   public_query_match_mode varchar(20) not null default 'FUZZY',
   public_query_paused boolean not null default false,
@@ -61,6 +63,7 @@ create table meetings (
   public_query_seat_notice text,
   public_query_room_notice text,
   public_query_dinner_notice text,
+  public_query_page_content json null,
   public_query_theme_color varchar(20) not null default '#2563eb',
   public_query_logo_url varchar(500),
   public_query_background_url varchar(500),
