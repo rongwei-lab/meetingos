@@ -41,6 +41,7 @@ const operationActionLabels: Record<string, string> = {
   TDUCK_BIND_FORM: "绑定 TDuck 表单",
   TDUCK_REBIND_FORM: "更换 TDuck 表单",
   TDUCK_SYNC_FIELDS: "同步字段",
+  TDUCK_REGISTRATION_TOGGLE: "启停报名入口",
   EXPORT_CREATE: "创建导出任务",
   MEETING_CREATE: "创建会议",
   MEETING_UPDATE: "更新会议",

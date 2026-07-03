@@ -1,5 +1,5 @@
 <template>
-  <n-config-provider :theme-overrides="themeOverrides">
+  <n-config-provider :locale="zhCN" :date-locale="dateZhCN" :theme-overrides="themeOverrides">
     <n-message-provider>
       <n-dialog-provider>
         <router-view />
@@ -10,7 +10,7 @@
 
 <script setup lang="ts">
 import { computed, onMounted } from "vue";
-import { NConfigProvider, NDialogProvider, NMessageProvider, type GlobalThemeOverrides } from "naive-ui";
+import { NConfigProvider, NDialogProvider, NMessageProvider, dateZhCN, zhCN, type GlobalThemeOverrides } from "naive-ui";
 import { useMeetingStore } from "@/stores/meeting";
 import { usePreferenceStore } from "@/stores/preferences";
 

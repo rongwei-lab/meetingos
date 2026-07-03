@@ -88,23 +88,6 @@ public class ExportTaskService {
         return toResponse(exportTaskRepository.save(task));
     }
 
-    @Transactional
-    public ExportTaskResponse approve(Long taskId, ExportApprovalRequest request) {
-        ExportTask task = exportTaskRepository.findById(taskId)
-                .orElseThrow(() -> BusinessException.notFound("导出任务不存在"));
-        if (!systemSettingsService.exportApprovalEnabled()) {
-            throw BusinessException.badRequest("导出审批未开启");
-        }
-        if (task.getStatus() != ExportTaskStatus.PENDING) {
-            throw BusinessException.badRequest("只能审批待处理的导出任务");
-        }
-        task.setStatus(request.approved() ? ExportTaskStatus.APPROVED : ExportTaskStatus.REJECTED);
-        task.setCompletedAt(LocalDateTime.now());
-        task.setMessage(firstNonBlank(request.message(),
-                request.approved() ? "导出申请已批准" : "导出申请已驳回"));
-        return toResponse(task);
-    }
-
     @Transactional(readOnly = true)
     public List<ExportTaskResponse> list(Long meetingId) {
         if (meetingId == null) {

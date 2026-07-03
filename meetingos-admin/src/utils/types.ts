@@ -7,6 +7,7 @@ export type RoomStatus = "AVAILABLE" | "ASSIGNED" | "DISABLED";
 export type PublicQueryField = "NAME" | "PHONE" | "PHONE_LAST4" | "ATTENDEE_CODE" | "ORGANIZATION" | "TITLE" | "EMAIL";
 export type PublicQueryMatchMode = "FUZZY" | "EXACT";
 export type PublicQueryType = "SEAT" | "ROOM" | "DINNER" | "CHECKIN";
+export type CombinedQueryType = Extract<PublicQueryType, "SEAT" | "ROOM" | "DINNER">;
 export type PublicQueryStatus = "SUCCESS" | "FAILED";
 export type PublicCheckinSource = "SELF" | "RESULT";
 export type PublicQueryResultField =
@@ -166,6 +167,7 @@ export interface MeetingQuerySettings {
   queryPaused: boolean;
   fields: PublicQueryField[];
   matchMode: PublicQueryMatchMode;
+  combinedQueryTypes: CombinedQueryType[];
   pageTitle: string;
   pageDescription?: string;
   announcement?: string;

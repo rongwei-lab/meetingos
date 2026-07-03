@@ -85,7 +85,7 @@
           <div class="panel-heading">
             <div>
               <h2>安全策略</h2>
-              <span>数据展示和导出审批</span>
+              <span>数据展示和上线安全提醒</span>
             </div>
           </div>
           <div class="policy-list">
@@ -95,13 +95,6 @@
                 <span>手机号、邮箱等字段在普通列表中按策略处理</span>
               </div>
               <n-switch v-model:value="settings.maskSensitive" />
-            </div>
-            <div class="policy-row">
-              <div>
-                <strong>导出审批</strong>
-                <span>数据导出前需要管理员确认</span>
-              </div>
-              <n-switch v-model:value="settings.exportApproval" />
             </div>
           </div>
           <n-alert type="error" :bordered="false" class="security-alert">
@@ -346,7 +339,6 @@ const settings = reactive({
   tduckFrontUrl: "https://meeting.example.com/tduck/",
   tduckApiUrl: "https://meeting.example.com/tduck-api/",
   maskSensitive: true,
-  exportApproval: true,
   brandName: "会议管理系统",
   browserTitle: "会议管理系统",
   metaDescription: "会议管理系统",
@@ -579,7 +571,6 @@ function loadSettings() {
       settings.tduckFrontUrl = loaded.tduckFrontUrl;
       settings.tduckApiUrl = loaded.tduckApiUrl;
       settings.maskSensitive = loaded.maskSensitive;
-      settings.exportApproval = loaded.exportApproval;
       settings.brandName = loaded.brandName || "会议管理系统";
       settings.browserTitle = loaded.browserTitle || settings.brandName;
       settings.metaDescription = loaded.metaDescription || "会议管理系统";
@@ -608,7 +599,6 @@ function saveSettings() {
     tduckFrontUrl: settings.tduckFrontUrl,
     tduckApiUrl: settings.tduckApiUrl,
     maskSensitive: settings.maskSensitive,
-    exportApproval: settings.exportApproval,
     brandName: settings.brandName.trim(),
     browserTitle: settings.browserTitle.trim(),
     metaDescription: settings.metaDescription.trim(),

@@ -87,6 +87,9 @@ public class TduckService {
         binding.setFormName(form.formName());
         // 报名入口统一由 MeetingOS 根据当前 TDuck 前端地址生成，避免历史手填 URL 指向错误表单或错误域名。
         binding.setRegistrationUrl(tduckClient.registrationUrlFor(form.formKey()));
+        if (existingBinding.isEmpty() || replacingDifferentForm) {
+            binding.setRegistrationEnabled(true);
+        }
         binding.setBindingStatus(request.bindingStatus() == null ? TduckBindingStatus.BOUND : request.bindingStatus());
         try {
             /*
@@ -104,6 +107,30 @@ public class TduckService {
         }
         TduckBindingResponse response = TduckBindingResponse.valid(bindingRepository.save(binding), currentRegistrationUrl(binding));
         return withRebindingLockStatus(response, meeting.getId());
+    }
+
+    @Transactional
+    public TduckBindingResponse updateRegistrationEnabled(Long meetingId, TduckRegistrationStatusRequest request) {
+        boolean enabled = Boolean.TRUE.equals(request.enabled());
+        meetingRepository.findById(meetingId)
+                .orElseThrow(() -> BusinessException.notFound("会议不存在"));
+        TduckFormBinding binding = bindingRepository.findByMeetingId(meetingId)
+                .orElseThrow(() -> BusinessException.notFound("会议未绑定 TDuck 表单"));
+        if (!StringUtils.hasText(binding.getFormKey())) {
+            throw BusinessException.badRequest("TDuck 表单绑定不完整，请管理员重新选择表单");
+        }
+        try {
+            /*
+             * 这个开关同时控制 MeetingOS /r/{meetingCode} 和 TDuck /tduck/s/{formKey}。
+             * 先调用 TDuck 发布/停止接口，成功后再落库，避免本地显示关闭但原始 TDuck 地址仍可提交。
+             */
+            tduckClient.setFormPublished(binding.getFormKey(), enabled);
+        } catch (TduckClientException ex) {
+            throw BusinessException.badRequest("同步 TDuck 报名入口失败：" + ex.getMessage());
+        }
+        binding.setRegistrationEnabled(enabled);
+        binding.setRegistrationUrl(currentRegistrationUrl(binding));
+        return withRebindingLockStatus(validateExistingBinding(bindingRepository.save(binding)), meetingId);
     }
 
     @Transactional(readOnly = true)
@@ -940,7 +967,10 @@ public class TduckService {
         if (!StringUtils.hasText(binding.getFormKey())) {
             return "TDuck 表单绑定不完整，请管理员重新选择表单";
         }
-        if (meeting.getStatus() != MeetingStatus.REGISTRATION_OPEN) {
+        if (!binding.isRegistrationEnabled()) {
+            return "报名入口已关闭";
+        }
+        if (!allowsPublicRegistrationEntry(meeting.getStatus())) {
             return "会议当前不在报名开放状态";
         }
         LocalDateTime now = LocalDateTime.now();
@@ -951,6 +981,14 @@ public class TduckService {
             return "报名已截止";
         }
         return null;
+    }
+
+    private boolean allowsPublicRegistrationEntry(MeetingStatus status) {
+        /*
+         * 会议进入“进行中”后，现场仍可能需要扫码补报名、查看报名回执或处理迟到人员。
+         * 因此报名入口不再只绑定“报名中”主状态；时间窗口和 TDuck 表单可用性仍会继续拦截。
+         */
+        return status == MeetingStatus.REGISTRATION_OPEN || status == MeetingStatus.IN_PROGRESS;
     }
 
     private TduckFormDetails validateFormForBinding(String formKey) {
@@ -979,11 +1017,18 @@ public class TduckService {
             if (details.isEmpty()) {
                 return TduckBindingResponse.of(binding, TduckBindingValidationStatus.INVALID, "TDuck 表单不存在", currentRegistrationUrl(binding));
             }
-            String remoteError = invalidFormReason(details.get());
+            TduckFormDetails formDetails = details.get();
+            String remoteError = invalidBoundFormReason(formDetails, binding.isRegistrationEnabled());
             if (remoteError != null) {
-                return TduckBindingResponse.of(binding, TduckBindingValidationStatus.INVALID, remoteError, currentRegistrationUrl(binding));
+                return TduckBindingResponse.of(binding, TduckBindingValidationStatus.INVALID, remoteError, currentRegistrationUrl(binding), formDetails.published());
             }
-            return TduckBindingResponse.valid(binding, currentRegistrationUrl(binding));
+            if (!binding.isRegistrationEnabled()) {
+                String message = formDetails.published()
+                        ? "报名入口已关闭，但 TDuck 表单仍处于发布状态，请重新关闭入口同步"
+                        : "报名入口已关闭，TDuck 表单已停止发布";
+                return TduckBindingResponse.of(binding, TduckBindingValidationStatus.VALID, message, currentRegistrationUrl(binding), formDetails.published());
+            }
+            return TduckBindingResponse.of(binding, TduckBindingValidationStatus.VALID, "TDuck 表单可访问且已发布", currentRegistrationUrl(binding), formDetails.published());
         } catch (TduckClientException ex) {
             return TduckBindingResponse.of(binding, TduckBindingValidationStatus.UNKNOWN, ex.getMessage(), currentRegistrationUrl(binding));
         }
@@ -1043,10 +1088,14 @@ public class TduckService {
     }
 
     private String invalidFormReason(TduckFormDetails details) {
+        return invalidBoundFormReason(details, true);
+    }
+
+    private String invalidBoundFormReason(TduckFormDetails details, boolean requirePublished) {
         if (details == null || !StringUtils.hasText(details.formKey())) {
             return "TDuck 表单不存在";
         }
-        if (!details.published()) {
+        if (requirePublished && !details.published()) {
             return "TDuck 表单未发布，暂不可填写";
         }
         if (details.itemCount() <= 0) {

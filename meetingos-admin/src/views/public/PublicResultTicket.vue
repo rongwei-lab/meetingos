@@ -8,8 +8,16 @@
 
     <div class="result-ticket-body">
       <div class="result-ticket-number">
-        <span>{{ primaryLabel }}</span>
-        <strong>{{ primaryValue }}</strong>
+        <template v-if="primaryRows.length === 1">
+          <span>{{ primaryRows[0].label }}</span>
+          <strong>{{ primaryRows[0].value }}</strong>
+        </template>
+        <div v-else class="result-ticket-number-grid">
+          <div v-for="row in primaryRows" :key="row.field" class="result-ticket-number-item">
+            <span>{{ row.label }}</span>
+            <strong>{{ row.value }}</strong>
+          </div>
+        </div>
       </div>
 
       <dl class="result-ticket-details">
@@ -39,13 +47,22 @@ const props = defineProps<{
   notice?: string;
 }>();
 
-const primaryField = computed(() => (props.kind === "seat" ? "SEAT_CODE" : props.kind === "room" ? "ROOM_NO" : "DINNER_TABLE_NO"));
-const primaryLabel = computed(() => (props.kind === "seat" ? "您的座位号" : props.kind === "room" ? "您的房间号" : "您的晚宴桌号"));
+const fallbackPrimaryField = computed(() => (props.kind === "seat" ? "SEAT_CODE" : props.kind === "room" ? "ROOM_NO" : "DINNER_TABLE_NO"));
+const fallbackPrimaryLabel = computed(() => (props.kind === "seat" ? "您的座位号" : props.kind === "room" ? "您的房间号" : "您的晚宴桌号"));
 
-const primaryValue = computed(() => {
-  const preferred = props.rows.find((row) => row.field === primaryField.value)?.value;
-  const highlighted = props.rows.find((row) => row.highlighted)?.value;
-  return preferred || highlighted || "-";
+const primaryRows = computed<QueryDisplayRow[]>(() => {
+  const highlightedRows = props.rows.filter((row) => row.highlighted);
+  if (highlightedRows.length) return highlightedRows;
+
+  const fallbackRow = props.rows.find((row) => row.field === fallbackPrimaryField.value);
+  if (fallbackRow) {
+    /*
+     * 兼容未配置重点字段的旧会议：顶部仍保留原来的“您的座位号/房间号/晚宴桌号”文案。
+     * 一旦后台配置了重点字段，就完全按配置字段展示，不再强行固定主字段。
+     */
+    return [{ ...fallbackRow, label: fallbackPrimaryLabel.value, highlighted: true }];
+  }
+  return [{ field: fallbackPrimaryField.value, label: fallbackPrimaryLabel.value, value: "-", highlighted: true }];
 });
 
 const noticeText = computed(() => {
@@ -62,7 +79,7 @@ const noticeText = computed(() => {
 });
 
 const detailRows = computed(() => {
-  const hiddenFields = new Set([primaryField.value, "CHECKIN_TIPS"]);
+  const hiddenFields = new Set([...primaryRows.value.map((row) => row.field), "CHECKIN_TIPS"]);
   return props.rows.filter((row) => !hiddenFields.has(row.field));
 });
 </script>
@@ -81,7 +98,7 @@ const detailRows = computed(() => {
   display: grid;
   justify-items: center;
   gap: 8px;
-  padding: 34px 28px 40px;
+  padding: 28px 28px 34px;
   color: #ffffff;
   text-align: center;
   background: linear-gradient(135deg, #5f63f1 0%, #4c39df 100%);
@@ -96,19 +113,19 @@ const detailRows = computed(() => {
 }
 
 .result-ticket-icon {
-  font-size: 76px;
+  font-size: 68px;
   line-height: 1;
 }
 
 .result-ticket-title {
-  margin-top: 10px;
-  font-size: 28px;
+  margin-top: 8px;
+  font-size: 26px;
   font-weight: 800;
   line-height: 1.15;
 }
 
 .result-ticket-greeting {
-  font-size: 19px;
+  font-size: 18px;
   font-weight: 700;
   line-height: 1.45;
 }
@@ -154,7 +171,7 @@ const detailRows = computed(() => {
 .result-ticket-number strong {
   max-width: 100%;
   color: #4535db;
-  font-size: clamp(48px, 13vw, 66px);
+  font-size: clamp(42px, 11.5vw, 58px);
   font-weight: 900;
   line-height: 1;
   overflow-wrap: anywhere;
@@ -166,6 +183,25 @@ const detailRows = computed(() => {
 
 .result-ticket-dinner .result-ticket-number strong {
   color: #086e72;
+}
+
+.result-ticket-number-grid {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: 22px;
+  width: 100%;
+}
+
+.result-ticket-number-item {
+  display: grid;
+  justify-items: center;
+  gap: 10px;
+  min-width: 0;
+}
+
+.result-ticket-number-grid strong {
+  font-size: clamp(30px, 8vw, 46px);
+  line-height: 1.08;
 }
 
 .result-ticket-details {
@@ -226,19 +262,19 @@ const detailRows = computed(() => {
 
 @media (max-width: 720px) {
   .result-ticket-hero {
-    padding: 30px 22px 36px;
+    padding: 24px 22px 30px;
   }
 
   .result-ticket-icon {
-    font-size: 70px;
+    font-size: 62px;
   }
 
   .result-ticket-title {
-    font-size: 27px;
+    font-size: 25px;
   }
 
   .result-ticket-greeting {
-    font-size: 18px;
+    font-size: 17px;
   }
 
   .result-ticket-body {
@@ -250,7 +286,7 @@ const detailRows = computed(() => {
   }
 
   .result-ticket-number strong {
-    font-size: clamp(44px, 14vw, 62px);
+    font-size: clamp(38px, 12.5vw, 54px);
   }
 
   .result-ticket-details dt,

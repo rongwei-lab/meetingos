@@ -30,6 +30,9 @@ public class TduckFormBinding extends BaseEntity {
     @Column(nullable = false, length = 500)
     private String registrationUrl;
 
+    @Column(nullable = false)
+    private boolean registrationEnabled = true;
+
     @Enumerated(EnumType.STRING)
     @Column(nullable = false, length = 32)
     private TduckBindingStatus bindingStatus = TduckBindingStatus.BOUND;
@@ -72,6 +75,14 @@ public class TduckFormBinding extends BaseEntity {
 
     public void setRegistrationUrl(String registrationUrl) {
         this.registrationUrl = registrationUrl;
+    }
+
+    public boolean isRegistrationEnabled() {
+        return registrationEnabled;
+    }
+
+    public void setRegistrationEnabled(boolean registrationEnabled) {
+        this.registrationEnabled = registrationEnabled;
     }
 
     public TduckBindingStatus getBindingStatus() {

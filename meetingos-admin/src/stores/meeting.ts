@@ -7,6 +7,7 @@ import type {
   AdminQueryCandidate,
   Attendee,
   CheckinRecord,
+  CombinedQueryType,
   DinnerAssignment,
   DinnerTable,
   DinnerQueryResult,
@@ -208,6 +209,7 @@ interface MeetingQuerySettingsDto {
   queryPaused?: boolean;
   fields: PublicQueryField[];
   matchMode: PublicQueryMatchMode;
+  combinedQueryTypes?: CombinedQueryType[];
   pageTitle?: string;
   pageDescription?: string;
   announcement?: string;
@@ -348,6 +350,8 @@ export interface TduckBindingDto {
   formKey: string;
   formName: string;
   registrationUrl: string;
+  registrationEnabled?: boolean;
+  tduckPublished?: boolean;
   bindingStatus?: "BOUND" | "UNBOUND" | string;
   webhookStatus?: "CONFIGURED" | "NOT_CONFIGURED" | string;
   validationStatus?: "VALID" | "INVALID" | "UNKNOWN";
@@ -531,7 +535,6 @@ export interface SystemSettingsDto {
   webhookTokenConfigured?: boolean;
   webhookTokenMasked?: string;
   maskSensitive: boolean;
-  exportApproval: boolean;
   brandName: string;
   browserTitle: string;
   metaDescription: string;
@@ -738,6 +741,7 @@ const defaultRoomVisibleResultFields: PublicQueryResultField[] = [
   "CHECKIN_TIPS"
 ];
 const defaultDinnerVisibleResultFields: PublicQueryResultField[] = ["ATTENDEE_NAME", "DINNER_TABLE_NO", "DINNER_VENUE", "DINNER_TIME", "DINNER_REMARK"];
+const defaultCombinedQueryTypes: CombinedQueryType[] = ["SEAT", "ROOM", "DINNER"];
 const publicPageKeys: PublicPageKey[] = ["entry", "combined", "seat", "room", "dinner", "checkin"];
 const defaultSeatNotice = "请按会议通知时间到达会场，凭会议证件从指定入口进入，对号入座。";
 const defaultRoomNotice = "凭会议证件及身份证办理入住，接待台位于酒店大堂。";
@@ -951,6 +955,7 @@ export const useMeetingStore = defineStore("meeting", {
         | "queryPaused"
         | "fields"
         | "matchMode"
+        | "combinedQueryTypes"
         | "pageTitle"
         | "pageDescription"
         | "announcement"
@@ -994,6 +999,7 @@ export const useMeetingStore = defineStore("meeting", {
               queryPaused: settings.queryPaused,
               fields: settings.fields,
               matchMode: settings.matchMode,
+              combinedQueryTypes: settings.combinedQueryTypes,
               pageTitle: settings.pageTitle,
               pageDescription: settings.pageDescription,
               announcement: settings.announcement,
@@ -1040,6 +1046,7 @@ export const useMeetingStore = defineStore("meeting", {
           queryPaused: settings.queryPaused,
           fields: [...settings.fields],
           matchMode: settings.matchMode,
+          combinedQueryTypes: [...settings.combinedQueryTypes],
           pageTitle: settings.pageTitle,
           pageDescription: settings.pageDescription,
           announcement: settings.announcement,
@@ -1729,6 +1736,19 @@ export const useMeetingStore = defineStore("meeting", {
         throw error;
       }
     },
+    async updateTduckRegistrationEnabled(meetingId: string, enabled: boolean) {
+      const targetMeetingId = requireMeetingId(meetingId);
+      const binding = unwrapApi(
+        await http.put<TduckBindingDto>(`/admin/tduck/bindings/${backendId(targetMeetingId)}/registration-enabled`, { enabled })
+      );
+      const meeting = this.meetings.find((item) => item.id === targetMeetingId);
+      if (meeting) {
+        meeting.tduckFormKey = binding.formKey || "";
+        meeting.tduckFormName = binding.formName || "";
+        meeting.registrationUrl = binding.registrationUrl || "";
+      }
+      return binding;
+    },
     async loadTduckBrowserSession(meetingId?: string) {
       const targetMeetingId = requireMeetingId(meetingId || this.currentMeetingId);
       return unwrapApi(
@@ -2106,15 +2126,6 @@ export const useMeetingStore = defineStore("meeting", {
         // 当前后端可能只实现创建/下载，列表接口不可用时由页面保留本地任务缓存。
         return null;
       }
-    },
-    async approveExportTask(taskId: string | number, approved: boolean, message?: string) {
-      const task = unwrapApi(
-        await http.post<ExportTaskWireDto>(`/admin/exports/${backendId(idOf(taskId))}/approval`, {
-          approved,
-          message
-        })
-      );
-      return mapExportTask(task);
     },
     async downloadExport(type: string, options: { format?: "csv" | "xlsx"; startDate?: string; endDate?: string } = {}) {
       const meetingId = requireMeetingId(this.currentMeetingId);
@@ -2912,6 +2923,13 @@ function normalizePageContents(
   );
 }
 
+function normalizeCombinedQueryTypes(types: CombinedQueryType[] | undefined): CombinedQueryType[] {
+  if (types === undefined) return [...defaultCombinedQueryTypes];
+  const allowed = new Set<CombinedQueryType>(defaultCombinedQueryTypes);
+  const normalized = types.filter((type): type is CombinedQueryType => allowed.has(type as CombinedQueryType));
+  return Array.from(new Set(normalized));
+}
+
 function mapQuerySettings(item: MeetingQuerySettingsDto): MeetingQuerySettings {
   const visibleResultFields = parseResultFields(item.visibleResultFields, defaultVisibleResultFields);
   const maskedResultFields = parseResultFields(item.maskedResultFields, []);
@@ -2967,6 +2985,7 @@ function mapQuerySettings(item: MeetingQuerySettingsDto): MeetingQuerySettings {
     queryPaused: Boolean(item.queryPaused),
     fields: parseQueryFields(item.fields),
     matchMode: item.matchMode || "FUZZY",
+    combinedQueryTypes: normalizeCombinedQueryTypes(item.combinedQueryTypes),
     pageTitle,
     pageDescription,
     announcement,
@@ -3027,6 +3046,7 @@ function meetingToQuerySettings(meeting?: Meeting | null): MeetingQuerySettings 
     queryPaused: false,
     fields: meeting?.publicQueryFields?.length ? meeting.publicQueryFields : ["PHONE", "NAME"],
     matchMode: meeting?.publicQueryMatchMode || "FUZZY",
+    combinedQueryTypes: [...defaultCombinedQueryTypes],
     pageTitle: `${meetingName}查询`,
     pageDescription: "",
     announcement: "",
@@ -3425,8 +3445,7 @@ function normalizeSystemSettings(value: SystemSettingsDto): SystemSettingsDto {
   return {
     ...value,
     ...branding,
-    maskSensitive: value.maskSensitive ?? true,
-    exportApproval: value.exportApproval ?? false
+    maskSensitive: value.maskSensitive ?? true
   };
 }
 

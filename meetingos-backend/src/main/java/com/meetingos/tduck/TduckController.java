@@ -47,6 +47,14 @@ public class TduckController {
         return ApiResponse.ok(tduckService.binding(meetingId));
     }
 
+    @PutMapping({"/api/tduck/bindings/{meetingId}/registration-enabled", "/api/admin/tduck/bindings/{meetingId}/registration-enabled"})
+    @PreAuthorize("@meetingAccess.canManage(#meetingId)")
+    @AuditLog(action = "TDUCK_REGISTRATION_TOGGLE", targetType = "TDUCK_FORM")
+    public ApiResponse<TduckBindingResponse> updateRegistrationEnabled(@PathVariable Long meetingId,
+                                                                        @Valid @RequestBody TduckRegistrationStatusRequest request) {
+        return ApiResponse.ok(tduckService.updateRegistrationEnabled(meetingId, request));
+    }
+
     @GetMapping({"/api/tduck/forms", "/api/admin/tduck/forms"})
     @PreAuthorize("hasAnyRole('SUPER_ADMIN', 'MEETING_ADMIN')")
     public ApiResponse<List<TduckFormOption>> forms(@RequestParam(required = false) String keyword,

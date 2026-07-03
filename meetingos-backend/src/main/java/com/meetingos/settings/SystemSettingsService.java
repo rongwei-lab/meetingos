@@ -16,7 +16,6 @@ public class SystemSettingsService {
     private static final String TDUCK_FRONT_URL = "tduckFrontUrl";
     private static final String TDUCK_API_URL = "tduckApiUrl";
     private static final String MASK_SENSITIVE = "maskSensitive";
-    private static final String EXPORT_APPROVAL = "exportApproval";
     private static final String BRAND_NAME = "brandName";
     private static final String BROWSER_TITLE = "browserTitle";
     private static final String META_DESCRIPTION = "metaDescription";
@@ -48,7 +47,6 @@ public class SystemSettingsService {
                 token != null && !token.isBlank(),
                 maskSecret(token),
                 Boolean.parseBoolean(get(MASK_SENSITIVE, "true")),
-                Boolean.parseBoolean(get(EXPORT_APPROVAL, "false")),
                 brandName(),
                 browserTitle(),
                 metaDescription(),
@@ -65,7 +63,6 @@ public class SystemSettingsService {
         // Webhook Token 属于部署密钥，只允许由 TDUCK_WEBHOOK_TOKEN 环境变量管理。
         // 这里故意忽略请求中的 webhookToken，避免后台页面或旧客户端把密钥写入数据库并覆盖 env。
         put(MASK_SENSITIVE, String.valueOf(request.maskSensitive()));
-        put(EXPORT_APPROVAL, String.valueOf(request.exportApproval()));
         put(BRAND_NAME, normalizeText(request.brandName(), DEFAULT_BRAND_NAME));
         put(BROWSER_TITLE, normalizeText(request.browserTitle(), DEFAULT_BRAND_NAME));
         put(META_DESCRIPTION, normalizeText(request.metaDescription(), DEFAULT_META_DESCRIPTION));
@@ -103,11 +100,6 @@ public class SystemSettingsService {
     @Transactional(readOnly = true)
     public boolean maskSensitiveEnabled() {
         return Boolean.parseBoolean(get(MASK_SENSITIVE, "true"));
-    }
-
-    @Transactional(readOnly = true)
-    public boolean exportApprovalEnabled() {
-        return Boolean.parseBoolean(get(EXPORT_APPROVAL, "false"));
     }
 
     private String brandName() {

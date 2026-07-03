@@ -83,10 +83,6 @@ export function publicPageStyle(settings: MeetingQuerySettings | null): CSSPrope
   return style;
 }
 
-export function resultLayoutClass(settings: MeetingQuerySettings | null) {
-  return `result-layout-${(settings?.resultLayout || "CARD").toLowerCase()}`;
-}
-
 export function queryWindowState(settings: MeetingQuerySettings | null): QueryWindowState {
   if (!settings) return { available: false, message: "查询设置加载中" };
   if (settings.queryPaused) return { available: false, message: "查询已暂停，请稍后再试" };

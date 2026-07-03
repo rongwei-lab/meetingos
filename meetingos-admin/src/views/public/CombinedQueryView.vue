@@ -35,7 +35,7 @@
       </n-form>
 
       <div v-if="hasQueried && queryResultEnabled" class="combined-results">
-        <template v-if="settings?.seatQueryEnabled">
+        <template v-if="combinedSeatEnabled">
           <public-result-ticket
             v-if="seatResult && seatRows.length"
             kind="seat"
@@ -49,7 +49,7 @@
           </section>
         </template>
 
-        <template v-if="settings?.roomQueryEnabled">
+        <template v-if="combinedRoomEnabled">
           <public-result-ticket
             v-if="roomResult && roomRows.length"
             kind="room"
@@ -63,7 +63,7 @@
           </section>
         </template>
 
-        <template v-if="settings?.dinnerQueryEnabled">
+        <template v-if="combinedDinnerEnabled">
           <public-result-ticket
             v-if="dinnerResult && dinnerRows.length"
             kind="dinner"
@@ -172,7 +172,11 @@ const queryMeetingId = computed(() => {
 });
 const queryMeetingCode = computed(() => String(route.query.meetingCode || route.params.meetingCode || ""));
 const activeFields = computed(() => settings.value?.fields || []);
-const queryResultEnabled = computed(() => Boolean(settings.value?.seatQueryEnabled || settings.value?.roomQueryEnabled || settings.value?.dinnerQueryEnabled));
+const combinedQueryTypeSet = computed(() => new Set(settings.value?.combinedQueryTypes || ["SEAT", "ROOM", "DINNER"]));
+const combinedSeatEnabled = computed(() => Boolean(settings.value?.seatQueryEnabled && combinedQueryTypeSet.value.has("SEAT")));
+const combinedRoomEnabled = computed(() => Boolean(settings.value?.roomQueryEnabled && combinedQueryTypeSet.value.has("ROOM")));
+const combinedDinnerEnabled = computed(() => Boolean(settings.value?.dinnerQueryEnabled && combinedQueryTypeSet.value.has("DINNER")));
+const queryResultEnabled = computed(() => Boolean(combinedSeatEnabled.value || combinedRoomEnabled.value || combinedDinnerEnabled.value));
 const anyPublicEntryEnabled = computed(() => Boolean(queryResultEnabled.value || settings.value?.selfCheckinEnabled));
 const checkinOnlyEnabled = computed(() => Boolean(settings.value?.selfCheckinEnabled && !queryResultEnabled.value));
 const publisher = computed(() => pagePublisherFor(settings.value, "combined"));
@@ -257,9 +261,9 @@ async function query() {
   roomResult.value = null;
   dinnerResult.value = null;
   checkinResult.value = null;
-  seatMessage.value = settings.value.seatQueryEnabled ? "座位查询中" : "座位查询尚未开放";
-  roomMessage.value = settings.value.roomQueryEnabled ? "住宿查询中" : "住宿查询尚未开放";
-  dinnerMessage.value = settings.value.dinnerQueryEnabled ? "晚宴查询中" : "晚宴查询尚未开放";
+  seatMessage.value = combinedSeatEnabled.value ? "座位查询中" : "综合查询未展示座位结果";
+  roomMessage.value = combinedRoomEnabled.value ? "住宿查询中" : "综合查询未展示住宿结果";
+  dinnerMessage.value = combinedDinnerEnabled.value ? "晚宴查询中" : "综合查询未展示晚宴结果";
 
   /*
    * 综合查询页允许座位和住宿各自成功或失败。比如会议只安排座位没有住宿时，
@@ -302,7 +306,7 @@ async function query() {
     return;
   }
 
-  if (settings.value.seatQueryEnabled) {
+  if (combinedSeatEnabled.value) {
     tasks.push(
       store.publicSeatQuery(payload)
         .then((result) => {
@@ -315,7 +319,7 @@ async function query() {
     );
   }
 
-  if (settings.value.roomQueryEnabled) {
+  if (combinedRoomEnabled.value) {
     tasks.push(
       store.publicRoomQuery(payload)
         .then((result) => {
@@ -328,7 +332,7 @@ async function query() {
     );
   }
 
-  if (settings.value.dinnerQueryEnabled) {
+  if (combinedDinnerEnabled.value) {
     tasks.push(
       store.publicDinnerQuery(payload)
         .then((result) => {
@@ -343,9 +347,9 @@ async function query() {
 
   await Promise.allSettled(tasks);
   const enabledResults = [
-    settings.value.seatQueryEnabled ? seatResult.value : true,
-    settings.value.roomQueryEnabled ? roomResult.value : true,
-    settings.value.dinnerQueryEnabled ? dinnerResult.value : true
+    combinedSeatEnabled.value ? seatResult.value : true,
+    combinedRoomEnabled.value ? roomResult.value : true,
+    combinedDinnerEnabled.value ? dinnerResult.value : true
   ];
   if (settings.value.captchaEnabled && enabledResults.some((result) => !result)) {
     await loadCaptcha();

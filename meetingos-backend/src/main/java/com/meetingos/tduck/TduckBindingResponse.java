@@ -4,6 +4,8 @@ public record TduckBindingResponse(
         String formKey,
         String formName,
         String registrationUrl,
+        boolean registrationEnabled,
+        boolean tduckPublished,
         TduckBindingStatus bindingStatus,
         WebhookStatus webhookStatus,
         TduckBindingValidationStatus validationStatus,
@@ -29,10 +31,20 @@ public record TduckBindingResponse(
                                           TduckBindingValidationStatus validationStatus,
                                           String validationMessage,
                                           String registrationUrl) {
+        return of(binding, validationStatus, validationMessage, registrationUrl, validationStatus == TduckBindingValidationStatus.VALID);
+    }
+
+    public static TduckBindingResponse of(TduckFormBinding binding,
+                                          TduckBindingValidationStatus validationStatus,
+                                          String validationMessage,
+                                          String registrationUrl,
+                                          boolean tduckPublished) {
         return new TduckBindingResponse(
                 binding.getFormKey(),
                 binding.getFormName(),
                 registrationUrl,
+                binding.isRegistrationEnabled(),
+                tduckPublished,
                 binding.getBindingStatus(),
                 binding.getWebhookStatus(),
                 validationStatus,
@@ -47,6 +59,8 @@ public record TduckBindingResponse(
                 formKey,
                 formName,
                 registrationUrl,
+                registrationEnabled,
+                tduckPublished,
                 bindingStatus,
                 webhookStatus,
                 validationStatus,

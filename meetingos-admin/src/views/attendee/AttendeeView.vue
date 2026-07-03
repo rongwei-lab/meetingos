@@ -151,7 +151,7 @@
       :title="detailAttendee ? `${detailAttendee.name} 的报名详情` : '报名详情'"
       class="attendee-detail-modal"
       style="width: min(960px, calc(100vw - 48px))"
-      :mask-closable="!savingSeatAssignment && !savingRoomAssignment"
+      :mask-closable="!savingSeatAssignment && !savingRoomAssignment && !savingDinnerAssignment"
     >
       <div class="detail-modal-body">
         <n-divider title-placement="left">报名字段</n-divider>
@@ -194,9 +194,9 @@
                 v-model:value="detailSeatId"
                 filterable
                 clearable
-                placeholder="选择座位号"
+                placeholder="搜索/选择座位号"
                 :options="detailSeatOptions"
-                :loading="savingSeatAssignment"
+                :loading="detailAssignmentLoading || savingSeatAssignment"
                 :disabled="detailAttendee.auditStatus !== 'APPROVED'"
                 @update:value="handleDetailSeatChange"
               />
@@ -209,11 +209,26 @@
                 v-model:value="detailRoomId"
                 filterable
                 clearable
-                placeholder="选择房间号"
+                placeholder="搜索/选择房间号"
                 :options="detailRoomOptions"
-                :loading="savingRoomAssignment"
+                :loading="detailAssignmentLoading || savingRoomAssignment"
                 :disabled="detailAttendee.auditStatus !== 'APPROVED'"
                 @update:value="handleDetailRoomChange"
+              />
+            </div>
+          </div>
+          <div class="detail-field-row">
+            <div class="detail-field-label">晚宴桌号</div>
+            <div class="detail-field-value">
+              <n-select
+                v-model:value="detailDinnerTableNo"
+                filterable
+                clearable
+                placeholder="搜索/选择晚宴桌号"
+                :options="detailDinnerTableOptions"
+                :loading="detailAssignmentLoading || savingDinnerAssignment"
+                :disabled="detailAttendee.auditStatus !== 'APPROVED'"
+                @update:value="handleDetailDinnerChange"
               />
             </div>
           </div>
@@ -246,7 +261,7 @@
 </template>
 
 <script setup lang="ts">
-import type { UploadCustomRequestOptions } from "naive-ui";
+import type { SelectOption, UploadCustomRequestOptions } from "naive-ui";
 import { NButton, NDataTable, NDynamicTags, NForm, NFormItem, NModal, NSpace, NTag, NUpload, useDialog, useMessage } from "naive-ui";
 import { computed, h, onMounted, ref, watch } from "vue";
 import { useRoute } from "vue-router";
@@ -258,7 +273,7 @@ import type { ImportResultDto, TduckFieldMappingDto } from "@/stores/meeting";
 import { useMeetingStore } from "@/stores/meeting";
 import { attendeeFieldLabel, normalizedAttendeeFieldText } from "@/utils/attendeeFields";
 import { attendeeTypeLabel, formatDateLikeValue, formatDateTimeLabel, seatTypeLabel } from "@/utils/meetingDisplay";
-import type { Attendee, AuditStatus } from "@/utils/types";
+import type { Attendee, AuditStatus, DinnerTable } from "@/utils/types";
 
 const store = useMeetingStore();
 const route = useRoute();
@@ -283,8 +298,11 @@ const detailVisible = ref(false);
 const detailAttendeeId = ref<string | null>(null);
 const detailSeatId = ref<string | null>(null);
 const detailRoomId = ref<string | null>(null);
+const detailDinnerTableNo = ref<string | null>(null);
+const detailAssignmentLoading = ref(false);
 const savingSeatAssignment = ref(false);
 const savingRoomAssignment = ref(false);
+const savingDinnerAssignment = ref(false);
 const auditingById = ref<Record<string, AuditStatus>>({});
 const batchAuditingStatus = ref<AuditStatus | null>(null);
 const attendeePageLoading = ref(false);
@@ -494,6 +512,34 @@ const detailRoomOptions = computed(() => {
     });
 });
 
+const detailDinnerTableOptions = computed<SelectOption[]>(() => {
+  const attendee = detailAttendee.value;
+  const currentTableNo = attendee ? currentDinnerTableNo(attendee) : detailDinnerTableNo.value;
+  const tableByNo = new Map(store.currentDinnerTables.map((table) => [table.tableNo, table]));
+  const tableNos = new Set<string>();
+
+  /*
+   * 桌号以下拉形式绑定，主要来自“晚宴管理”的桌号配置。
+   * 同时把已有分配中的桌号纳入选项，兼容早期导入数据或后端自动补桌尚未刷新到前端的场景。
+   */
+  store.currentDinnerTables.forEach((table) => tableNos.add(table.tableNo));
+  store.currentDinnerAssignments.forEach((assignment) => tableNos.add(assignment.tableNo));
+  if (currentTableNo) tableNos.add(currentTableNo);
+
+  return [...tableNos]
+    .filter(Boolean)
+    .filter((tableNo) => {
+      const table = tableByNo.get(tableNo);
+      if (tableNo === currentTableNo) return true;
+      return table ? table.remainingCount > 0 : true;
+    })
+    .sort((a, b) => a.localeCompare(b, "zh-Hans-CN", { numeric: true }))
+    .map((tableNo) => ({
+      label: dinnerTableLabelText(tableNo, tableByNo.get(tableNo)),
+      value: tableNo
+    }));
+});
+
 onMounted(() => {
   void loadAttendeePageData();
 });
@@ -645,11 +691,39 @@ function openDetail(row: Attendee) {
   detailAttendeeId.value = row.id;
   syncDetailAssignmentFields(row);
   detailVisible.value = true;
+  void loadDetailAssignmentResources();
 }
 
 function syncDetailAssignmentFields(attendee: Attendee | null) {
   detailSeatId.value = attendee ? store.currentSeats.find((seat) => seat.attendeeId === attendee.id)?.id || null : null;
   detailRoomId.value = attendee?.roomId || (attendee?.roomNo ? store.currentRooms.find((room) => room.roomNo === attendee.roomNo)?.id || null : null);
+  detailDinnerTableNo.value = attendee ? currentDinnerTableNo(attendee) : null;
+}
+
+async function loadDetailAssignmentResources() {
+  const meetingId = routeMeetingId.value || store.currentMeetingId;
+  if (!meetingId) return;
+
+  detailAssignmentLoading.value = true;
+  try {
+    /*
+     * 参会人列表页本身不主动加载座位/房间/晚宴大数据。
+     * 打开详情时再并发拉这些资源，既能让下拉可搜索，也避免拖慢列表首屏。
+     */
+    const [seatResult, roomResult, dinnerTableResult, dinnerResult] = await Promise.allSettled([
+      store.loadSeats(meetingId),
+      store.loadRooms(meetingId),
+      store.loadDinnerTables(meetingId),
+      store.loadDinnerAssignments(meetingId)
+    ]);
+    if (seatResult.status === "rejected") message.warning(errorMessageOf(seatResult.reason, "座位号加载失败"));
+    if (roomResult.status === "rejected") message.warning(errorMessageOf(roomResult.reason, "房间号加载失败"));
+    if (dinnerTableResult.status === "rejected") message.warning(errorMessageOf(dinnerTableResult.reason, "晚宴桌号加载失败"));
+    if (dinnerResult.status === "rejected") message.warning(errorMessageOf(dinnerResult.reason, "晚宴分配加载失败"));
+    syncDetailAssignmentFields(detailAttendee.value);
+  } finally {
+    detailAssignmentLoading.value = false;
+  }
 }
 
 async function handleDetailSeatChange(value: string | null) {
@@ -700,12 +774,40 @@ async function handleDetailRoomChange(value: string | null) {
   }
 }
 
+async function handleDetailDinnerChange(value: string | null) {
+  const attendee = detailAttendee.value;
+  if (!attendee) return;
+  if (value === currentDinnerTableNo(attendee)) return;
+
+  savingDinnerAssignment.value = true;
+  try {
+    if (value) {
+      await store.assignDinner({ attendeeId: attendee.id, tableNo: value });
+      message.success("晚宴桌号已更新");
+    } else {
+      await store.clearDinnerAssignment(attendee.id);
+      message.success("晚宴桌号已清空");
+    }
+    invalidateRemoteAttendeeResults();
+    syncDetailAssignmentFields(detailAttendee.value);
+  } catch (error) {
+    message.error(error instanceof Error ? error.message : "晚宴桌号更新失败");
+    syncDetailAssignmentFields(detailAttendee.value);
+  } finally {
+    savingDinnerAssignment.value = false;
+  }
+}
+
 function currentSeatId(attendee: Attendee) {
   return store.currentSeats.find((seat) => seat.attendeeId === attendee.id)?.id || null;
 }
 
 function currentRoomId(attendee: Attendee) {
   return attendee.roomId || (attendee.roomNo ? store.currentRooms.find((room) => room.roomNo === attendee.roomNo)?.id || null : null);
+}
+
+function currentDinnerTableNo(attendee: Attendee) {
+  return store.currentDinnerAssignments.find((assignment) => assignment.attendeeId === attendee.id)?.tableNo || null;
 }
 
 function seatLabelText(seat: { areaName: string; rowNo: number; seatNo: number; seatType?: string }) {
@@ -718,6 +820,24 @@ function roomOccupancy(room: { id: string; roomNo: string; capacity?: number }, 
     occupied,
     capacity: Math.max(1, room.capacity || 1)
   };
+}
+
+function dinnerTableLabelText(tableNo: string, table?: DinnerTable) {
+  const occupancy = dinnerTableOccupancy(tableNo, table);
+  const remark = table?.remark?.trim() ? ` · ${table.remark.trim()}` : "";
+  return `${tableNo} · ${occupancy.occupied}/${occupancy.capacity}人${remark}`;
+}
+
+function dinnerTableOccupancy(tableNo: string, table?: DinnerTable) {
+  const occupied = table?.occupiedCount ?? store.currentDinnerAssignments.filter((assignment) => assignment.tableNo === tableNo).length;
+  return {
+    occupied,
+    capacity: Math.max(1, table?.capacity || occupied || 10)
+  };
+}
+
+function errorMessageOf(error: unknown, fallback: string) {
+  return error instanceof Error ? error.message : fallback;
 }
 
 function roomAvailableForDetail(room: { id: string; roomNo: string; capacity?: number; status?: string }, currentAttendeeId?: string) {

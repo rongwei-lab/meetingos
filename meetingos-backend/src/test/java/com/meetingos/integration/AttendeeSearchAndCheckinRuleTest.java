@@ -22,6 +22,7 @@ import com.meetingos.tduck.SyncStatus;
 import com.meetingos.tduck.TduckManualSyncRequest;
 import com.meetingos.tduck.TduckClient;
 import com.meetingos.tduck.TduckFormDetails;
+import com.meetingos.tduck.TduckFormBindingRepository;
 import com.meetingos.tduck.TduckService;
 import com.meetingos.meeting.MeetingRepository;
 import com.meetingos.meeting.MeetingStatus;
@@ -78,6 +79,9 @@ class AttendeeSearchAndCheckinRuleTest {
 
     @Autowired
     private TduckService tduckService;
+
+    @Autowired
+    private TduckFormBindingRepository tduckFormBindingRepository;
 
     @Autowired
     private MeetingRepository meetingRepository;
@@ -289,6 +293,21 @@ class AttendeeSearchAndCheckinRuleTest {
         assertThat(openInfo.registrationUrl()).isNotBlank();
 
         var meeting = meetingRepository.findByCode("NDEF2026").orElseThrow();
+        meeting.setStatus(MeetingStatus.IN_PROGRESS);
+
+        var inProgressInfo = tduckService.registrationInfo("NDEF2026");
+        assertThat(inProgressInfo.open()).isTrue();
+        assertThat(inProgressInfo.registrationUrl()).isNotBlank();
+
+        var binding = tduckFormBindingRepository.findByMeetingId(meeting.getId()).orElseThrow();
+        binding.setRegistrationEnabled(false);
+
+        var disabledInfo = tduckService.registrationInfo("NDEF2026");
+        assertThat(disabledInfo.open()).isFalse();
+        assertThat(disabledInfo.registrationUrl()).isNull();
+        assertThat(disabledInfo.message()).contains("报名入口已关闭");
+
+        binding.setRegistrationEnabled(true);
         meeting.setStatus(MeetingStatus.ARCHIVED);
 
         var closedInfo = tduckService.registrationInfo("NDEF2026");

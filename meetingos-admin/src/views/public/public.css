@@ -266,36 +266,6 @@
   line-height: 24px;
 }
 
-.result-layout-list .result-row-list {
-  gap: 0;
-  border: 1px solid #e2e8f0;
-  border-radius: 8px;
-  overflow: hidden;
-}
-
-.result-layout-list .result-row {
-  border-radius: 0;
-  background: #ffffff;
-}
-
-.result-layout-list .result-row + .result-row {
-  border-top: 1px solid #e2e8f0;
-}
-
-.result-layout-compact {
-  padding: 14px;
-}
-
-.result-layout-compact .result-row-list {
-  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
-}
-
-.result-layout-compact .result-row {
-  grid-template-columns: 1fr;
-  gap: 4px;
-  min-height: 0;
-}
-
 .result-ticket {
   width: min(400px, 100%);
   margin: 20px auto 0;
@@ -359,6 +329,44 @@
     padding: 0;
   }
 
+  :global(body.public-result-mode .public-page) {
+    padding-top: 0;
+    padding-right: 0;
+    padding-left: 0;
+  }
+
+  :global(body.public-result-mode .public-card) {
+    width: 100%;
+    max-width: none;
+    padding-right: 0;
+    padding-left: 0;
+    border-radius: 0;
+    background: #ffffff;
+    box-shadow: none;
+  }
+
+  :global(body.public-result-mode .public-card > h1),
+  :global(body.public-result-mode .public-card > .public-logo),
+  :global(body.public-result-mode .public-card > .public-kicker),
+  :global(body.public-result-mode .public-card > .public-subtitle),
+  :global(body.public-result-mode .public-card > .public-alert),
+  :global(body.public-result-mode .public-card > .public-form),
+  :global(body.public-result-mode .public-card > .self-checkin-result),
+  :global(body.public-result-mode .public-card > .public-result) {
+    margin-right: 16px;
+    margin-left: 16px;
+  }
+
+  :global(body.public-result-mode .public-card-result-only) {
+    width: 100%;
+    max-width: none;
+  }
+
+  :global(body.public-result-mode .public-card-result-only > .result-ticket) {
+    border-radius: 0;
+    box-shadow: none;
+  }
+
   .public-card-seat-map {
     width: 100%;
     max-width: 400px;
@@ -366,6 +374,16 @@
 
   .combined-results {
     grid-template-columns: 1fr;
+  }
+
+  :global(body.public-result-mode .combined-results) {
+    gap: 0;
+    margin-top: 18px;
+  }
+
+  :global(body.public-result-mode .combined-results .result-ticket) {
+    border-radius: 0;
+    box-shadow: none;
   }
 
   .result-row {

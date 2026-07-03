@@ -66,6 +66,22 @@
             暂无法校验当前 TDuck 绑定：{{ bindingValidationMessage || "请确认 TDuck 管理员账号和服务状态" }}
           </n-alert>
 
+          <div v-if="currentBoundFormKey" class="entry-toggle-panel">
+            <div>
+              <span>报名入口</span>
+              <strong>{{ registrationEntryDescription }}</strong>
+            </div>
+            <div class="entry-toggle-action">
+              <n-tag round size="small" :type="registrationEntryStatusType">{{ registrationEntryStatusLabel }}</n-tag>
+              <n-switch
+                :value="registrationEnabled"
+                :loading="togglingRegistration"
+                :disabled="!canToggleRegistration"
+                @update:value="toggleRegistrationEntry"
+              />
+            </div>
+          </div>
+
           <div v-if="activeForm" class="form-summary">
             <div>
               <span>表单名称</span>
@@ -212,6 +228,7 @@ const pullingSync = ref(false);
 const pullingAllSync = ref(false);
 const openingTduck = ref(false);
 const openingTduckEditor = ref(false);
+const togglingRegistration = ref(false);
 const pullSyncDataId = ref("");
 const bindingValidationStatus = ref<BindingValidationStatus>("");
 const bindingValidationMessage = ref("");
@@ -229,9 +246,9 @@ const activeForm = computed<TduckFormOptionDto | null>(() => {
     formKey: meeting.tduckFormKey,
     formName: meeting.tduckFormName || "已绑定 TDuck 表单",
     status: bindingValidationStatus.value === "VALID" ? "2" : undefined,
-    published: bindingValidationStatus.value !== "INVALID",
+    published: currentBinding.value?.tduckPublished ?? bindingValidationStatus.value !== "INVALID",
     itemCount: 0,
-    registrationUrl: meeting.registrationUrl || ""
+    registrationUrl: currentBinding.value?.registrationUrl || meeting.registrationUrl || ""
   };
 });
 
@@ -252,7 +269,11 @@ const tduckEditorUrl = computed(() =>
 const canEditBinding = computed(() => !currentBoundFormKey.value || bindingValidationStatus.value === "INVALID");
 const isBindingLocked = computed(() => Boolean(currentBoundFormKey.value && !canEditBinding.value));
 const canSaveBinding = computed(() => Boolean(currentMeeting.value && selectedFormKey.value && !savingBinding.value && canEditBinding.value));
-const canOpenRegistrationEntry = computed(() => Boolean(currentMeeting.value && bindingValidationStatus.value !== "INVALID"));
+const registrationEnabled = computed(() => currentBinding.value?.registrationEnabled ?? Boolean(currentBoundFormKey.value));
+const canToggleRegistration = computed(() =>
+  Boolean(currentMeeting.value && currentBoundFormKey.value && bindingValidationStatus.value !== "INVALID" && !togglingRegistration.value)
+);
+const canOpenRegistrationEntry = computed(() => Boolean(currentMeeting.value && registrationEnabled.value && bindingValidationStatus.value !== "INVALID"));
 const bindingActionLabel = computed(() => {
   if (bindingValidationStatus.value === "INVALID") return "重新绑定并生成二维码";
   return isBindingLocked.value ? "已绑定" : "保存绑定并生成二维码";
@@ -276,13 +297,35 @@ const bindingStatusLabel = computed(() => {
   if (!currentMeeting.value) return "未选择会议";
   if (bindingValidationStatus.value === "INVALID") return "绑定失效";
   if (bindingValidationStatus.value === "UNKNOWN") return currentBoundFormKey.value ? "待校验" : "未绑定";
+  if (currentBoundFormKey.value && !registrationEnabled.value) return "报名关闭";
   return currentBoundFormKey.value ? "已绑定" : "未绑定";
 });
 
 const bindingStatusType = computed<"success" | "warning" | "error" | "default">(() => {
   if (bindingValidationStatus.value === "INVALID") return "error";
   if (bindingValidationStatus.value === "UNKNOWN" || !currentBoundFormKey.value) return "warning";
+  if (!registrationEnabled.value) return "warning";
   return "success";
+});
+
+const registrationEntryStatusLabel = computed(() => {
+  if (!currentBoundFormKey.value) return "未绑定";
+  if (registrationEnabled.value && activeForm.value?.published) return "已开启";
+  if (!registrationEnabled.value && !activeForm.value?.published) return "已关闭";
+  return registrationEnabled.value ? "待同步开启" : "待同步关闭";
+});
+
+const registrationEntryStatusType = computed<"success" | "warning" | "error" | "default">(() => {
+  if (!currentBoundFormKey.value) return "default";
+  if (registrationEnabled.value && activeForm.value?.published) return "success";
+  if (!registrationEnabled.value && !activeForm.value?.published) return "warning";
+  return "error";
+});
+
+const registrationEntryDescription = computed(() => {
+  if (!currentBoundFormKey.value) return "绑定表单后可控制报名入口";
+  if (registrationEnabled.value) return "中转页和 TDuck 原始报名页同步开启";
+  return "中转页和 TDuck 原始报名页同步关闭";
 });
 
 const fieldMappingStats = computed(() => {
@@ -432,6 +475,32 @@ async function persistBinding() {
     return false;
   } finally {
     savingBinding.value = false;
+  }
+}
+
+async function toggleRegistrationEntry(enabled: boolean) {
+  if (!store.currentMeetingId) {
+    message.warning("请先选择会议");
+    return;
+  }
+  if (!currentBoundFormKey.value) {
+    message.warning("请先绑定 TDuck 表单");
+    return;
+  }
+  togglingRegistration.value = true;
+  try {
+    const binding = await store.updateTduckRegistrationEnabled(store.currentMeetingId, enabled);
+    currentBinding.value = binding || null;
+    bindingValidationStatus.value = binding?.validationStatus || "VALID";
+    bindingValidationMessage.value = binding?.validationMessage || "";
+    selectedFormKey.value = binding?.formKey || selectedFormKey.value;
+    upsertCurrentBindingOption();
+    await drawQr();
+    message.success(enabled ? "报名入口已开启，两个报名地址已同步开放" : "报名入口已关闭，两个报名地址已同步停止");
+  } catch (error) {
+    message.error(extractErrorMessage(error, enabled ? "开启报名入口失败" : "关闭报名入口失败"));
+  } finally {
+    togglingRegistration.value = false;
   }
 }
 
@@ -750,7 +819,7 @@ function upsertCurrentBindingOption() {
     formKey,
     formName: binding?.formName || meeting?.tduckFormName || "已绑定 TDuck 表单",
     status: bindingValidationStatus.value === "VALID" ? "2" : undefined,
-    published: bindingValidationStatus.value !== "INVALID",
+    published: binding?.tduckPublished ?? bindingValidationStatus.value !== "INVALID",
     itemCount: 0,
     registrationUrl: binding?.registrationUrl || meeting?.registrationUrl || ""
   };
@@ -884,6 +953,38 @@ function emptyMappingRow(label: string): FieldMappingRow {
 
 .binding-alert {
   margin: 0;
+}
+
+.entry-toggle-panel {
+  border: 1px solid var(--border-color);
+  border-radius: 8px;
+  padding: 12px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  background: var(--surface-bg);
+}
+
+.entry-toggle-panel span {
+  display: block;
+  margin-bottom: 4px;
+  color: var(--text-secondary);
+  font-size: 12px;
+  line-height: 18px;
+}
+
+.entry-toggle-panel strong {
+  color: var(--text-primary);
+  font-size: 14px;
+  line-height: 20px;
+}
+
+.entry-toggle-action {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex: none;
 }
 
 .form-summary {
@@ -1067,6 +1168,11 @@ function emptyMappingRow(label: string): FieldMappingRow {
 
   .form-summary {
     grid-template-columns: 1fr;
+  }
+
+  .entry-toggle-panel {
+    align-items: flex-start;
+    flex-direction: column;
   }
 
   .card-title-row {

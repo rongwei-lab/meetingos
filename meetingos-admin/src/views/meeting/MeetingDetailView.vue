@@ -182,6 +182,43 @@
                           <n-radio-button value="EXACT">精确匹配</n-radio-button>
                         </n-radio-group>
                       </n-form-item>
+                      <n-form-item label="综合查询展示内容">
+                        <div class="combined-type-switches">
+                          <div class="toggle-row compact-toggle-row">
+                            <div>
+                              <strong>座位结果</strong>
+                              <span>综合查询后展示座位信息</span>
+                            </div>
+                            <n-switch
+                              :value="combinedQueryTypeEnabled('SEAT')"
+                              :disabled="!queryForm.seatQueryEnabled"
+                              @update:value="setCombinedSeatQueryType"
+                            />
+                          </div>
+                          <div class="toggle-row compact-toggle-row">
+                            <div>
+                              <strong>住宿结果</strong>
+                              <span>综合查询后展示住宿信息</span>
+                            </div>
+                            <n-switch
+                              :value="combinedQueryTypeEnabled('ROOM')"
+                              :disabled="!queryForm.roomQueryEnabled"
+                              @update:value="setCombinedRoomQueryType"
+                            />
+                          </div>
+                          <div class="toggle-row compact-toggle-row">
+                            <div>
+                              <strong>晚宴结果</strong>
+                              <span>综合查询后展示晚宴桌号</span>
+                            </div>
+                            <n-switch
+                              :value="combinedQueryTypeEnabled('DINNER')"
+                              :disabled="!queryForm.dinnerQueryEnabled"
+                              @update:value="setCombinedDinnerQueryType"
+                            />
+                          </div>
+                        </div>
+                      </n-form-item>
                     </n-form>
                   </section>
 
@@ -293,13 +330,6 @@
                             <n-input v-model:value="queryForm.themeColor" placeholder="#2563eb" />
                           </div>
                         </n-form-item>
-                        <n-form-item label="结果布局">
-                          <n-radio-group v-model:value="queryForm.resultLayout">
-                            <n-radio-button value="CARD">卡片</n-radio-button>
-                            <n-radio-button value="LIST">列表</n-radio-button>
-                            <n-radio-button value="COMPACT">紧凑</n-radio-button>
-                          </n-radio-group>
-                        </n-form-item>
                       </div>
                       <div class="query-form-row asset-fields-row">
                         <n-form-item label="Logo URL">
@@ -356,6 +386,28 @@
                               placeholder="选择座位结果中展示的字段"
                             />
                           </n-form-item>
+                          <n-form-item label="展示顺序">
+                            <div class="field-order-list">
+                              <div v-for="(field, index) in queryForm.seatVisibleResultFields" :key="field" class="field-order-row">
+                                <span class="field-order-index">{{ index + 1 }}</span>
+                                <strong>{{ resultFieldLabel(field) }}</strong>
+                                <n-button-group size="tiny" class="field-order-actions">
+                                  <n-button secondary circle :disabled="index === 0" title="上移" @click="moveSeatVisibleResultField(index, -1)">
+                                    <template #icon><n-icon :component="ArrowUpOutline" /></template>
+                                  </n-button>
+                                  <n-button
+                                    secondary
+                                    circle
+                                    :disabled="index === queryForm.seatVisibleResultFields.length - 1"
+                                    title="下移"
+                                    @click="moveSeatVisibleResultField(index, 1)"
+                                  >
+                                    <template #icon><n-icon :component="ArrowDownOutline" /></template>
+                                  </n-button>
+                                </n-button-group>
+                              </div>
+                            </div>
+                          </n-form-item>
                           <n-form-item label="脱敏字段">
                             <n-select
                               v-model:value="queryForm.seatMaskedResultFields"
@@ -389,6 +441,28 @@
                               placeholder="选择住宿结果中展示的字段"
                             />
                           </n-form-item>
+                          <n-form-item label="展示顺序">
+                            <div class="field-order-list">
+                              <div v-for="(field, index) in queryForm.roomVisibleResultFields" :key="field" class="field-order-row">
+                                <span class="field-order-index">{{ index + 1 }}</span>
+                                <strong>{{ resultFieldLabel(field) }}</strong>
+                                <n-button-group size="tiny" class="field-order-actions">
+                                  <n-button secondary circle :disabled="index === 0" title="上移" @click="moveRoomVisibleResultField(index, -1)">
+                                    <template #icon><n-icon :component="ArrowUpOutline" /></template>
+                                  </n-button>
+                                  <n-button
+                                    secondary
+                                    circle
+                                    :disabled="index === queryForm.roomVisibleResultFields.length - 1"
+                                    title="下移"
+                                    @click="moveRoomVisibleResultField(index, 1)"
+                                  >
+                                    <template #icon><n-icon :component="ArrowDownOutline" /></template>
+                                  </n-button>
+                                </n-button-group>
+                              </div>
+                            </div>
+                          </n-form-item>
                           <n-form-item label="脱敏字段">
                             <n-select
                               v-model:value="queryForm.roomMaskedResultFields"
@@ -421,6 +495,28 @@
                               :options="dinnerResultFieldSelectOptions"
                               placeholder="选择晚宴结果中展示的字段"
                             />
+                          </n-form-item>
+                          <n-form-item label="展示顺序">
+                            <div class="field-order-list">
+                              <div v-for="(field, index) in queryForm.dinnerVisibleResultFields" :key="field" class="field-order-row">
+                                <span class="field-order-index">{{ index + 1 }}</span>
+                                <strong>{{ resultFieldLabel(field) }}</strong>
+                                <n-button-group size="tiny" class="field-order-actions">
+                                  <n-button secondary circle :disabled="index === 0" title="上移" @click="moveDinnerVisibleResultField(index, -1)">
+                                    <template #icon><n-icon :component="ArrowUpOutline" /></template>
+                                  </n-button>
+                                  <n-button
+                                    secondary
+                                    circle
+                                    :disabled="index === queryForm.dinnerVisibleResultFields.length - 1"
+                                    title="下移"
+                                    @click="moveDinnerVisibleResultField(index, 1)"
+                                  >
+                                    <template #icon><n-icon :component="ArrowDownOutline" /></template>
+                                  </n-button>
+                                </n-button-group>
+                              </div>
+                            </div>
                           </n-form-item>
                           <n-form-item label="脱敏字段">
                             <n-select
@@ -575,7 +671,7 @@ import {
   type DataTableColumns,
   type UploadCustomRequestOptions
 } from "naive-ui";
-import { CloudUploadOutline, CopyOutline, OpenOutline } from "@vicons/ionicons5";
+import { ArrowDownOutline, ArrowUpOutline, CloudUploadOutline, CopyOutline, OpenOutline } from "@vicons/ionicons5";
 import PageHeader from "@/components/PageHeader.vue";
 import StatusTag from "@/components/StatusTag.vue";
 import { useMeetingStore } from "@/stores/meeting";
@@ -583,6 +679,7 @@ import { formatDateTimeLabel } from "@/utils/meetingDisplay";
 import { assertSafeImageUrl, isAllowedUploadImage } from "@/utils/safeUrl";
 import type {
   AdminQueryCandidate,
+  CombinedQueryType,
   PublicPageContent,
   PublicPageKey,
   PublicQueryField,
@@ -750,6 +847,7 @@ const queryForm = reactive({
   queryPaused: false,
   fields: ["PHONE", "NAME"] as PublicQueryField[],
   matchMode: "FUZZY" as PublicQueryMatchMode,
+  combinedQueryTypes: ["SEAT", "ROOM", "DINNER"] as Array<"SEAT" | "ROOM" | "DINNER">,
   pageTitle: "",
   pageDescription: "",
   announcement: "",
@@ -765,7 +863,6 @@ const queryForm = reactive({
   themeColor: "#2563eb",
   logoUrl: "",
   backgroundUrl: "",
-  resultLayout: "CARD" as "CARD" | "LIST" | "COMPACT",
   visibleResultFields: [
     "ATTENDEE_NAME",
     "SEAT_AREA",
@@ -1078,6 +1175,7 @@ function loadQuerySettings(targetMeetingId = meetingId.value) {
     queryForm.queryPaused = settings.queryPaused;
     queryForm.fields = [...settings.fields];
     queryForm.matchMode = settings.matchMode;
+    queryForm.combinedQueryTypes = [...settings.combinedQueryTypes];
     queryForm.pageTitle = settings.pageTitle;
     queryForm.pageDescription = settings.pageDescription || "";
     queryForm.announcement = settings.announcement || "";
@@ -1093,7 +1191,6 @@ function loadQuerySettings(targetMeetingId = meetingId.value) {
     queryForm.themeColor = settings.themeColor;
     queryForm.logoUrl = settings.logoUrl || "";
     queryForm.backgroundUrl = settings.backgroundUrl || "";
-    queryForm.resultLayout = settings.resultLayout;
     queryForm.visibleResultFields = [...settings.visibleResultFields];
     queryForm.maskedResultFields = [...settings.maskedResultFields];
     queryForm.highlightResultFields = [...settings.highlightResultFields];
@@ -1217,6 +1314,7 @@ function saveQuerySettings() {
       queryPaused: queryForm.queryPaused,
       fields: queryForm.fields,
       matchMode: queryForm.matchMode,
+      combinedQueryTypes: queryForm.combinedQueryTypes,
       pageTitle: combinedContent.title || queryForm.pageTitle,
       pageDescription: combinedContent.description ?? queryForm.pageDescription,
       announcement: combinedContent.announcement ?? queryForm.announcement,
@@ -1232,7 +1330,7 @@ function saveQuerySettings() {
       themeColor: queryForm.themeColor,
       logoUrl: queryForm.logoUrl,
       backgroundUrl: queryForm.backgroundUrl,
-      resultLayout: queryForm.resultLayout,
+      resultLayout: "CARD",
       visibleResultFields: queryForm.visibleResultFields,
       maskedResultFields: queryForm.maskedResultFields,
       highlightResultFields: queryForm.highlightResultFields,
@@ -1343,9 +1441,63 @@ function fieldLabel(field: PublicQueryField) {
   return fieldOptions.value.find((item) => item.field === field)?.label || field;
 }
 
+function resultFieldLabel(field: PublicQueryResultField) {
+  return resultFieldOptions.value.find((item) => item.field === field)?.label || field;
+}
+
 function setResultFieldsIfChanged(target: PublicQueryResultField[], next: PublicQueryResultField[]) {
   if (target.length === next.length && target.every((field, index) => field === next[index])) return target;
   return next;
+}
+
+function moveResultField(fields: PublicQueryResultField[], index: number, offset: -1 | 1) {
+  const targetIndex = index + offset;
+  if (targetIndex < 0 || targetIndex >= fields.length) return fields;
+  const next = [...fields];
+  const [field] = next.splice(index, 1);
+  next.splice(targetIndex, 0, field);
+  return next;
+}
+
+function moveSeatVisibleResultField(index: number, offset: -1 | 1) {
+  queryForm.seatVisibleResultFields = moveResultField(queryForm.seatVisibleResultFields, index, offset);
+}
+
+function moveRoomVisibleResultField(index: number, offset: -1 | 1) {
+  queryForm.roomVisibleResultFields = moveResultField(queryForm.roomVisibleResultFields, index, offset);
+}
+
+function moveDinnerVisibleResultField(index: number, offset: -1 | 1) {
+  queryForm.dinnerVisibleResultFields = moveResultField(queryForm.dinnerVisibleResultFields, index, offset);
+}
+
+function combinedQueryTypeEnabled(type: CombinedQueryType) {
+  return queryForm.combinedQueryTypes.includes(type);
+}
+
+function setCombinedQueryType(type: CombinedQueryType, enabled: boolean) {
+  const current = new Set(queryForm.combinedQueryTypes);
+  if (enabled) {
+    current.add(type);
+  } else {
+    current.delete(type);
+  }
+  /*
+   * 按固定顺序回写，避免用户反复切换时数组顺序变化，导致保存 payload 和脏检查不稳定。
+   */
+  queryForm.combinedQueryTypes = (["SEAT", "ROOM", "DINNER"] as CombinedQueryType[]).filter((item) => current.has(item));
+}
+
+function setCombinedSeatQueryType(enabled: boolean) {
+  setCombinedQueryType("SEAT", enabled);
+}
+
+function setCombinedRoomQueryType(enabled: boolean) {
+  setCombinedQueryType("ROOM", enabled);
+}
+
+function setCombinedDinnerQueryType(enabled: boolean) {
+  setCombinedQueryType("DINNER", enabled);
 }
 
 function syncResultFieldSelections() {
@@ -1618,6 +1770,49 @@ watch(activePublicQueryLinkUrl, (url) => {
   row-gap: 4px;
 }
 
+.field-order-list {
+  display: grid;
+  gap: 8px;
+  width: 100%;
+}
+
+.field-order-row {
+  display: grid;
+  grid-template-columns: 28px minmax(0, 1fr) auto;
+  gap: 8px;
+  align-items: center;
+  min-height: 36px;
+  padding: 7px 8px;
+  border: 1px solid var(--border-color);
+  border-radius: 8px;
+  background: #f8fafc;
+}
+
+.field-order-index {
+  display: grid;
+  width: 24px;
+  height: 24px;
+  place-items: center;
+  border-radius: 999px;
+  background: #e8eef7;
+  color: var(--text-secondary);
+  font-size: 12px;
+  font-weight: 800;
+}
+
+.field-order-row strong {
+  min-width: 0;
+  color: var(--text-primary);
+  font-size: 13px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.field-order-actions {
+  flex: 0 0 auto;
+}
+
 .section-heading {
   display: grid;
   gap: 3px;
@@ -1748,6 +1943,17 @@ watch(activePublicQueryLinkUrl, (url) => {
 
 .compact-toggle-list .toggle-row {
   min-height: 58px;
+}
+
+.combined-type-switches {
+  display: grid;
+  gap: 10px;
+  width: 100%;
+}
+
+.compact-toggle-row {
+  min-height: 54px;
+  padding: 12px 14px;
 }
 
 .entry-switch {

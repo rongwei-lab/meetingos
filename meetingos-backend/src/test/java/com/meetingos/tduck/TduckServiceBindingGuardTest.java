@@ -236,6 +236,38 @@ class TduckServiceBindingGuardTest {
     }
 
     @Test
+    void disabledRegistrationDoesNotMarkStoppedTduckFormAsInvalidBinding() {
+        TduckFormBinding binding = existingBinding("old-form");
+        binding.setRegistrationEnabled(false);
+        when(bindingRepository.findByMeetingId(1L)).thenReturn(Optional.of(binding));
+        when(tduckClient.formDetails("old-form"))
+                .thenReturn(Optional.of(new TduckFormDetails("old-form", "旧表单", "3", false, 3)));
+
+        TduckBindingResponse response = tduckService.binding(1L);
+
+        assertThat(response.validationStatus()).isEqualTo(TduckBindingValidationStatus.VALID);
+        assertThat(response.registrationEnabled()).isFalse();
+        assertThat(response.tduckPublished()).isFalse();
+        assertThat(response.validationMessage()).contains("报名入口已关闭");
+        assertThat(response.rebindingLocked()).isTrue();
+    }
+
+    @Test
+    void updateRegistrationEnabledSyncsTduckPublishStateBeforePersisting() {
+        TduckFormBinding binding = existingBinding("old-form");
+        when(bindingRepository.findByMeetingId(1L)).thenReturn(Optional.of(binding));
+        when(tduckClient.formDetails("old-form"))
+                .thenReturn(Optional.of(new TduckFormDetails("old-form", "旧表单", "3", false, 3)));
+
+        TduckBindingResponse response = tduckService.updateRegistrationEnabled(1L, new TduckRegistrationStatusRequest(false));
+
+        assertThat(binding.isRegistrationEnabled()).isFalse();
+        assertThat(response.registrationEnabled()).isFalse();
+        verify(tduckClient).setFormPublished("old-form", false);
+        verify(bindingRepository).save(binding);
+    }
+
+    @Test
     void registrationInfoClosesWhenBoundFormNoLongerExists() {
         when(meetingRepository.findByCode("NDEF2026")).thenReturn(Optional.of(meeting));
         TduckFormBinding binding = existingBinding("missing-form");

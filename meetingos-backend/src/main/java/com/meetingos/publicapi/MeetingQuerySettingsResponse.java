@@ -18,6 +18,7 @@ public record MeetingQuerySettingsResponse(
         boolean queryPaused,
         List<PublicQueryField> fields,
         PublicQueryMatchMode matchMode,
+        List<PublicQueryType> combinedQueryTypes,
         String pageTitle,
         String pageDescription,
         String announcement,

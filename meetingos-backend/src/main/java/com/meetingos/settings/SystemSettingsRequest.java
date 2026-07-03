@@ -9,7 +9,6 @@ public record SystemSettingsRequest(
         @NotBlank @Size(max = 300) String tduckApiUrl,
         @Size(max = 300) String webhookToken,
         boolean maskSensitive,
-        boolean exportApproval,
         @Size(max = 80) String brandName,
         @Size(max = 120) String browserTitle,
         @Size(max = 240) String metaDescription,

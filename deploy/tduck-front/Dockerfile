@@ -15,7 +15,7 @@ RUN sed -i "s/publicPath: '\\/'/publicPath: '\\/tduck\\/'/" vue.config.js \
     && sed -i "/tduck-form-generator\\$/d" vue.config.js \
     && sed -i "s/mode: 'history',/mode: 'history',\\n  base: process.env.BASE_URL,/" src/router/index.js \
     && printf '%s\n' \
-      'VUE_APP_TITLE = Tduck填鸭表单' \
+      'VUE_APP_TITLE =' \
       'VUE_APP_API_ROOT = /tduck-api' \
       'VUE_APP_DEBUG_TOOL =' \
       'VUE_APP_MAP_KEY = f2200337d0d08538e78729572749882d' \

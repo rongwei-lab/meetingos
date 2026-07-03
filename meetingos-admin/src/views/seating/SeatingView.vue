@@ -266,7 +266,7 @@
                 v-model:value="selectedAttendeeId"
                 filterable
                 clearable
-                placeholder="搜索姓名 / 单位 / 类型"
+                placeholder="搜索姓名 / 手机号 / 单位"
                 :options="assignableAttendeeOptions"
               />
             </n-form-item>
@@ -593,7 +593,7 @@ const assignableAttendees = computed(() =>
 
 const assignableAttendeeOptions = computed(() =>
   assignableAttendees.value.map((attendee) => ({
-    label: `${attendee.name} · ${attendee.company || "未填写单位"} · ${attendeeTypeLabel(attendee.attendeeType)}`,
+    label: `${attendee.name} · ${attendee.phone || "未填写号码"} · ${attendee.company || "未填写单位"}`,
     value: attendee.id
   }))
 );

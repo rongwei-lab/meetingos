@@ -86,6 +86,8 @@ public class PublicQueryService {
     private static final String DEFAULT_SEAT_NOTICE = "请按会议通知时间到达会场，凭会议证件从指定入口进入，对号入座。";
     private static final String DEFAULT_ROOM_NOTICE = "凭会议证件及身份证办理入住，接待台位于酒店大堂。";
     private static final String DEFAULT_DINNER_NOTICE = "请按现场指引前往晚宴区域入座，如有调整请以会务组通知为准。";
+    private static final List<PublicQueryType> DEFAULT_COMBINED_QUERY_TYPES = List.of(PublicQueryType.SEAT, PublicQueryType.ROOM, PublicQueryType.DINNER);
+    private static final String EMPTY_COMBINED_QUERY_TYPES = "NONE";
     private static final List<String> PUBLIC_PAGE_CONTENT_KEYS = List.of("entry", "combined", "seat", "room", "dinner", "checkin");
     private static final int ADMIN_QUERY_LIMIT = 20;
 
@@ -164,6 +166,7 @@ public class PublicQueryService {
         meeting.setPublicQueryPaused(request.queryPaused());
         meeting.setPublicQueryFields(serializeFields(fields));
         meeting.setPublicQueryMatchMode((request.matchMode() == null ? PublicQueryMatchMode.FUZZY : request.matchMode()).name());
+        meeting.setPublicCombinedQueryTypes(serializeQueryTypes(normalizeCombinedQueryTypes(request.combinedQueryTypes())));
         meeting.setPublicQueryTitle(limit(blankToNull(request.pageTitle()), 160));
         meeting.setPublicQueryDescription(limit(blankToNull(request.pageDescription()), 500));
         meeting.setPublicQueryAnnouncement(blankToNull(request.announcement()));
@@ -674,6 +677,7 @@ public class PublicQueryService {
                 meeting.isPublicQueryPaused(),
                 parseFields(meeting),
                 parseMatchMode(meeting),
+                parseCombinedQueryTypes(meeting),
                 firstNonBlank(meeting.getPublicQueryTitle(), meeting.getName() + "查询"),
                 meeting.getPublicQueryDescription(),
                 meeting.getPublicQueryAnnouncement(),
@@ -847,6 +851,50 @@ public class PublicQueryService {
 
     private String serializeFields(List<PublicQueryField> fields) {
         return fields.stream().map(Enum::name).collect(Collectors.joining(","));
+    }
+
+    private List<PublicQueryType> parseCombinedQueryTypes(Meeting meeting) {
+        String raw = meeting.getPublicCombinedQueryTypes();
+        if (raw == null || raw.isBlank()) {
+            return DEFAULT_COMBINED_QUERY_TYPES;
+        }
+        if (EMPTY_COMBINED_QUERY_TYPES.equals(raw.trim())) {
+            return List.of();
+        }
+        Set<PublicQueryType> types = new LinkedHashSet<>();
+        for (String token : raw.split(",")) {
+            try {
+                PublicQueryType type = PublicQueryType.valueOf(token.trim());
+                if (type == PublicQueryType.SEAT || type == PublicQueryType.ROOM || type == PublicQueryType.DINNER) {
+                    types.add(type);
+                }
+            } catch (IllegalArgumentException ignored) {
+                // 综合查询只支持座位、住宿、晚宴三类；历史脏值忽略后回退默认全选。
+            }
+        }
+        return types.isEmpty() ? DEFAULT_COMBINED_QUERY_TYPES : List.copyOf(types);
+    }
+
+    private List<PublicQueryType> normalizeCombinedQueryTypes(List<PublicQueryType> types) {
+        if (types == null) {
+            return DEFAULT_COMBINED_QUERY_TYPES;
+        }
+        /*
+         * null 表示旧请求没有携带该字段，需要沿用历史“综合页全展示”的默认行为；
+         * 空数组表示管理员明确取消综合页所有结果类型，不能再回退成全选。
+         */
+        return types.stream()
+                .filter(Objects::nonNull)
+                .filter(type -> type == PublicQueryType.SEAT || type == PublicQueryType.ROOM || type == PublicQueryType.DINNER)
+                .distinct()
+                .toList();
+    }
+
+    private String serializeQueryTypes(List<PublicQueryType> types) {
+        if (types.isEmpty()) {
+            return EMPTY_COMBINED_QUERY_TYPES;
+        }
+        return types.stream().map(Enum::name).collect(Collectors.joining(","));
     }
 
     private List<PublicQueryResultField> parseResultFields(String raw, List<PublicQueryResultField> fallback) {

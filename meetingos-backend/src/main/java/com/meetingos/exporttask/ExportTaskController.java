@@ -3,14 +3,11 @@ package com.meetingos.exporttask;
 import com.meetingos.common.ApiResponse;
 import com.meetingos.common.SpreadsheetFiles;
 import com.meetingos.operationlog.AuditLog;
-import jakarta.validation.Valid;
 import org.springframework.http.ResponseEntity;
 import org.springframework.security.access.prepost.PreAuthorize;
 import org.springframework.format.annotation.DateTimeFormat;
 import org.springframework.web.bind.annotation.GetMapping;
-import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
-import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
@@ -39,14 +36,6 @@ public class ExportTaskController {
     @PreAuthorize("@meetingAccess.canManage(#meetingId)")
     public ApiResponse<List<ExportTaskResponse>> list(@RequestParam Long meetingId) {
         return ApiResponse.ok(exportTaskService.list(meetingId));
-    }
-
-    @PostMapping("/{taskId}/approval")
-    @PreAuthorize("@systemAdminAccess.isAdminAccount()")
-    @AuditLog(action = "EXPORT_APPROVE", targetType = "EXPORT_TASK")
-    public ApiResponse<ExportTaskResponse> approve(@PathVariable Long taskId,
-                                                   @Valid @RequestBody ExportApprovalRequest request) {
-        return ApiResponse.ok(exportTaskService.approve(taskId, request));
     }
 
     @GetMapping("/download")

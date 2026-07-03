@@ -1,8 +1,7 @@
 <template>
   <main class="public-page">
     <section class="public-card">
-      <h1>{{ registrationTitle }}</h1>
-      <p>正在通过系统中转到 TDuck 报名表。若报名已关闭，将在这里展示会议方配置的提示。</p>
+      <h1 class="registration-title">{{ registrationTitle }}</h1>
       <n-alert :type="alertType" :bordered="false">
         {{ displayMessage }}
       </n-alert>
@@ -37,7 +36,7 @@ const registration = ref<RegistrationInfo | null>(null);
 const errorMessage = ref("");
 const meetingCode = computed(() => String(route.params.meetingCode || ""));
 const alertType = computed(() => (registration.value?.open ? "success" : errorMessage.value ? "error" : "warning"));
-const registrationTitle = computed(() => registration.value?.formName || registration.value?.meetingName || "会议报名");
+const registrationTitle = computed(() => formatRegistrationTitle(registration.value?.formName || registration.value?.meetingName || "会议报名"));
 const displayMessage = computed(() => {
   if (loading.value) return "正在读取报名配置...";
   if (errorMessage.value) return errorMessage.value;
@@ -77,6 +76,22 @@ async function loadRegistration() {
     loading.value = false;
   }
 }
+
+function formatRegistrationTitle(title: string) {
+  const trimmed = title.trim();
+  if (!trimmed) return "会议报名";
+  /*
+   * TDuck 标题里常把“报名回执”作为独立行展示。当前 TDuck API 可能只返回空格，
+   * 这里仅在展示层把这个固定尾缀独立成行；如果后续 API 返回真实换行，CSS 会原样保留。
+   */
+  return trimmed.replace(/\s+报名回执$/, "\n报名回执");
+}
 </script>
 
 <style scoped src="./public.css"></style>
+<style scoped>
+.registration-title {
+  text-align: center;
+  white-space: pre-line;
+}
+</style>

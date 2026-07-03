@@ -7,7 +7,6 @@ public record SystemSettingsResponse(
         boolean webhookTokenConfigured,
         String webhookTokenMasked,
         boolean maskSensitive,
-        boolean exportApproval,
         String brandName,
         String browserTitle,
         String metaDescription,

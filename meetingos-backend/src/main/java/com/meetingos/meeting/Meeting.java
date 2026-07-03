@@ -93,6 +93,9 @@ public class Meeting extends BaseEntity {
     @Column(nullable = false, length = 20)
     private String publicQueryMatchMode = "FUZZY";
 
+    @Column(nullable = false, length = 80)
+    private String publicCombinedQueryTypes = "SEAT,ROOM,DINNER";
+
     @Column(nullable = false)
     private boolean publicQueryPaused;
 
@@ -393,6 +396,14 @@ public class Meeting extends BaseEntity {
 
     public void setPublicQueryMatchMode(String publicQueryMatchMode) {
         this.publicQueryMatchMode = publicQueryMatchMode;
+    }
+
+    public String getPublicCombinedQueryTypes() {
+        return publicCombinedQueryTypes;
+    }
+
+    public void setPublicCombinedQueryTypes(String publicCombinedQueryTypes) {
+        this.publicCombinedQueryTypes = publicCombinedQueryTypes;
     }
 
     public boolean isPublicQueryPaused() {

@@ -155,6 +155,23 @@ public class TduckClient {
         });
     }
 
+    public void setFormPublished(String formKey, boolean published) {
+        if (!StringUtils.hasText(formKey)) {
+            throw new TduckClientException("TDuck formKey 为空，无法同步发布状态");
+        }
+        Map<String, Object> body = new LinkedHashMap<>();
+        body.put("formKey", formKey.trim());
+        /*
+         * TDuck 原生“发布/停止收集”控制的是 /tduck/s/{formKey} 原始填写页。
+         * MeetingOS 报名开关必须调用这里，避免用户绕过 /r/{meetingCode} 中转页继续提交。
+         */
+        String path = published ? "/user/form/publish" : "/user/form/stop";
+        withTokenRetry(token -> {
+            requestPost(apiUrl(path), body, token);
+            return null;
+        });
+    }
+
     public TduckFormDataDetails formDataDetails(String dataId) {
         if (!StringUtils.hasText(dataId)) {
             throw new TduckClientException("TDuck 数据 ID 不能为空");
