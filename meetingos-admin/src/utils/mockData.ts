@@ -4,6 +4,7 @@ export const mockMeetings: Meeting[] = [
   {
     id: "m-001",
     code: "NDEF2026",
+    publicQueryToken: "pq_mock_ndef2026",
     name: "2026年全国数字经济发展论坛",
     organizer: "数字经济产业联盟",
     venue: "北京国家会议中心",
@@ -33,6 +34,7 @@ export const mockMeetings: Meeting[] = [
   {
     id: "m-002",
     code: "AI2026",
+    publicQueryToken: "pq_mock_ai2026",
     name: "第八届人工智能产业峰会",
     organizer: "AI 产业研究院",
     venue: "上海世博展览馆",
@@ -60,6 +62,7 @@ export const mockMeetings: Meeting[] = [
   {
     id: "m-003",
     code: "Q2ALL",
+    publicQueryToken: "pq_mock_q2all",
     name: "2026年Q2季度全员大会",
     organizer: "集团总部",
     venue: "集团总部16楼会议室",

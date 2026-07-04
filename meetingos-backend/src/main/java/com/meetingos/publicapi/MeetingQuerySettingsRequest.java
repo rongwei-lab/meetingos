@@ -44,7 +44,8 @@ public record MeetingQuerySettingsRequest(
         List<PublicQueryResultField> roomHighlightResultFields,
         List<PublicQueryResultField> dinnerVisibleResultFields,
         List<PublicQueryResultField> dinnerMaskedResultFields,
-        List<PublicQueryResultField> dinnerHighlightResultFields
+        List<PublicQueryResultField> dinnerHighlightResultFields,
+        Boolean allowMultipleResults
 ) {
     public MeetingQuerySettingsRequest {
         /*
@@ -59,6 +60,9 @@ public record MeetingQuerySettingsRequest(
         }
         if (dinnerQueryEnabled == null) {
             dinnerQueryEnabled = false;
+        }
+        if (allowMultipleResults == null) {
+            allowMultipleResults = false;
         }
     }
 
@@ -122,7 +126,8 @@ public record MeetingQuerySettingsRequest(
                 null,
                 null,
                 null,
-                null
+                null,
+                false
         );
     }
 

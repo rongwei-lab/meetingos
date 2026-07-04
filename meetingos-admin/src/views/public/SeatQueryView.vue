@@ -1,7 +1,14 @@
 <template>
   <main class="public-page" :style="publicPageStyle(settings)">
-    <section class="public-card" :class="{ 'public-card-result-only': result && resultRows.length, 'public-card-seat-map': result?.seatMap }">
-      <template v-if="!result || !resultRows.length">
+    <section
+      class="public-card"
+      :class="{
+        'public-card-result-only': hasSingleVisibleResult,
+        'public-card-seat-map': hasSingleSeatMap,
+        'public-card-wide': hasMultipleVisibleResults
+      }"
+    >
+      <template v-if="!hasRawResults">
         <img v-if="safeLogoUrl" class="public-logo" :src="safeLogoUrl" alt="会议 Logo" />
         <p v-if="publisher" class="public-kicker">{{ publisher }}</p>
         <h1>{{ pageTitleFor(settings, "seat", "座位查询") }}</h1>
@@ -21,7 +28,7 @@
         {{ windowState.message }}
       </n-alert>
 
-      <n-form v-else-if="settings && !result" label-placement="top" class="public-form">
+      <n-form v-else-if="settings && !hasRawResults" label-placement="top" class="public-form">
         <n-form-item v-for="field in activeFields" :key="field" :label="fieldLabel(field)">
           <n-input v-model:value="values[field]" :placeholder="`请输入${fieldLabel(field)}`" />
         </n-form-item>
@@ -40,22 +47,25 @@
         {{ errorText }}
       </n-alert>
 
-      <public-result-ticket
-        v-if="result && resultRows.length"
-        kind="seat"
-        :attendee-name="result.attendeeName"
-        :rows="resultRows"
-        :notice="seatNotice"
-      />
+      <div v-if="resultItems.length" class="public-multi-results">
+        <section v-for="item in resultItems" :key="item.result.attendeeId" class="public-multi-result-item">
+          <public-result-ticket
+            kind="seat"
+            :attendee-name="item.result.attendeeName"
+            :rows="item.rows"
+            :notice="seatNotice"
+          />
+          <public-seat-map v-if="item.result.seatMap" :map="item.result.seatMap" />
+        </section>
+      </div>
       <public-result-checkin-action
-        v-if="result && resultRows.length && settings?.checkinEnabled"
+        v-if="resultItems.length === 1 && pageResultCheckinEnabled(settings, 'seat')"
         :settings="settings"
-        :meeting-id="queryMeetingId"
-        :meeting-code="queryMeetingCode || null"
+        :public-query-token="publicQueryToken || settings?.publicQueryToken"
         :values="values"
+        page-key="seat"
       />
-      <public-seat-map v-if="result && resultRows.length" :map="result.seatMap" />
-      <section v-else-if="result" class="public-result">
+      <section v-if="hasRawResults && !resultItems.length" class="public-result">
         <n-alert type="info" :bordered="false">当前未配置可展示的座位结果字段</n-alert>
       </section>
     </section>
@@ -80,8 +90,10 @@ import {
   pageDescriptionFor,
   pageNoticeFor,
   pagePublisherFor,
+  pageResultCheckinEnabled,
   pageTitleFor,
   publicPageStyle,
+  publicQueryResults,
   queryWindowState
 } from "./queryDisplay";
 
@@ -90,7 +102,7 @@ const store = useMeetingStore();
 const message = useMessage();
 const loading = ref(false);
 const settings = ref<MeetingQuerySettings | null>(null);
-const result = ref<SeatQueryResult | null>(null);
+const results = ref<SeatQueryResult[]>([]);
 const errorText = ref("");
 const captchaId = ref<string | null>(null);
 const captchaQuestion = ref("");
@@ -105,12 +117,7 @@ const values = reactive<Record<PublicQueryField, string>>({
   TITLE: "",
   EMAIL: ""
 });
-const queryMeetingId = computed(() => {
-  const raw = route.query.meetingId ?? route.query.mid;
-  const parsed = Number(Array.isArray(raw) ? raw[0] : raw);
-  return Number.isFinite(parsed) ? parsed : null;
-});
-const queryMeetingCode = computed(() => String(route.query.meetingCode || route.params.meetingCode || ""));
+const publicQueryToken = computed(() => String(route.query.token || ""));
 const activeFields = computed(() => settings.value?.fields || []);
 const publisher = computed(() => pagePublisherFor(settings.value, "seat"));
 const subtitle = computed(() => pageDescriptionFor(settings.value, "seat"));
@@ -118,8 +125,14 @@ const announcement = computed(() => pageAnnouncementFor(settings.value, "seat"))
 const buttonText = computed(() => pageButtonTextFor(settings.value, "seat"));
 const seatNotice = computed(() => pageNoticeFor(settings.value, "seat"));
 const windowState = computed(() => queryWindowState(settings.value));
-const resultRows = computed(() => buildSeatRows(settings.value, result.value));
-const hasTicketResult = computed(() => Boolean(result.value && resultRows.value.length));
+const resultItems = computed(() => results.value
+  .map((result) => ({ result, rows: buildSeatRows(settings.value, result) }))
+  .filter((item) => item.rows.length));
+const hasRawResults = computed(() => results.value.length > 0);
+const hasTicketResult = computed(() => Boolean(resultItems.value.length));
+const hasSingleVisibleResult = computed(() => resultItems.value.length === 1);
+const hasMultipleVisibleResults = computed(() => resultItems.value.length > 1);
+const hasSingleSeatMap = computed(() => hasSingleVisibleResult.value && Boolean(resultItems.value[0]?.result.seatMap));
 const safeLogoUrl = computed(() => sanitizeImageUrl(settings.value?.logoUrl));
 
 onMounted(loadSettings);
@@ -136,8 +149,7 @@ onBeforeUnmount(() => {
 async function loadSettings() {
   try {
     settings.value = await store.loadPublicQuerySettings({
-      meetingId: queryMeetingId.value,
-      meetingCode: queryMeetingCode.value || undefined
+      publicQueryToken: publicQueryToken.value || undefined
     });
     if (settings.value.captchaEnabled) {
       await loadCaptcha();
@@ -161,16 +173,15 @@ async function query() {
     return;
   }
   loading.value = true;
-  result.value = null;
+  results.value = [];
   errorText.value = "";
   try {
-    result.value = await store.publicSeatQuery({
-      meetingId: queryMeetingId.value,
-      meetingCode: queryMeetingCode.value || undefined,
+    results.value = publicQueryResults(await store.publicSeatQuery({
+      publicQueryToken: publicQueryToken.value || settings.value.publicQueryToken,
       values,
       captchaId: captchaId.value,
       captchaAnswer: captchaAnswer.value
-    });
+    }));
   } catch (error) {
     const rawMessage = error instanceof Error ? error.message : "座位查询失败";
     errorText.value = normalizePublicQueryError(rawMessage, settings.value, "seat");

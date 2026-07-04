@@ -21,6 +21,7 @@ import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.util.StringUtils;
 
+import java.security.SecureRandom;
 import java.time.LocalDate;
 import java.time.format.DateTimeFormatter;
 import java.util.Set;
@@ -32,6 +33,9 @@ public class MeetingService {
 
     private static final String MEETING_CODE_PREFIX = "MEET";
     private static final DateTimeFormatter MEETING_CODE_DATE_FORMAT = DateTimeFormatter.BASIC_ISO_DATE;
+    private static final String PUBLIC_QUERY_TOKEN_PREFIX = "pq_";
+    private static final char[] PUBLIC_QUERY_TOKEN_ALPHABET = "0123456789abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ".toCharArray();
+    private static final SecureRandom SECURE_RANDOM = new SecureRandom();
 
     private final MeetingRepository meetingRepository;
     private final AttendeeRepository attendeeRepository;
@@ -58,6 +62,7 @@ public class MeetingService {
     public Meeting create(MeetingRequest request) {
         Meeting meeting = new Meeting();
         meeting.setCode(generateMeetingCode());
+        meeting.setPublicQueryToken(generatePublicQueryToken());
         applyRequest(meeting, request);
         meeting.setCreatedBy(SecurityUtils.currentUsernameOrSystem());
         Meeting saved = meetingRepository.save(meeting);
@@ -123,6 +128,7 @@ public class MeetingService {
         return new MeetingSummary(
                 meeting.getId(),
                 meeting.getCode(),
+                meeting.getPublicQueryToken(),
                 meeting.getName(),
                 meeting.getStartTime(),
                 meeting.getEndTime(),
@@ -149,6 +155,9 @@ public class MeetingService {
     private void applyRequest(Meeting meeting, MeetingRequest request) {
         if (!StringUtils.hasText(meeting.getCode())) {
             meeting.setCode(generateMeetingCode());
+        }
+        if (!StringUtils.hasText(meeting.getPublicQueryToken())) {
+            meeting.setPublicQueryToken(generatePublicQueryToken());
         }
         meeting.setName(request.name());
         meeting.setOrganizer(request.organizer());
@@ -218,6 +227,20 @@ public class MeetingService {
             }
         }
         throw BusinessException.conflict("会议编号生成失败，请稍后重试");
+    }
+
+    private String generatePublicQueryToken() {
+        for (int attempts = 0; attempts < 10; attempts++) {
+            StringBuilder builder = new StringBuilder(PUBLIC_QUERY_TOKEN_PREFIX);
+            for (int i = 0; i < 32; i++) {
+                builder.append(PUBLIC_QUERY_TOKEN_ALPHABET[SECURE_RANDOM.nextInt(PUBLIC_QUERY_TOKEN_ALPHABET.length)]);
+            }
+            String token = builder.toString();
+            if (!meetingRepository.existsByPublicQueryToken(token)) {
+                return token;
+            }
+        }
+        throw BusinessException.conflict("公开查询 Token 生成失败，请稍后重试");
     }
 
     private Page<Meeting> searchVisibleMeetings(String keyword, MeetingStatus status, PageRequest pageRequest) {

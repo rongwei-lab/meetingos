@@ -100,6 +100,7 @@ import java.util.Set;
 class MeetingOsServiceIntegrationTest {
 
     private static final String STRONG_TEST_PASSWORD = "MeetingOS@2026";
+    private static final String TEST_PUBLIC_QUERY_TOKEN = "pq_test_ndef2026";
     private static final ObjectMapper OBJECT_MAPPER = new ObjectMapper();
 
     @Autowired
@@ -775,8 +776,7 @@ class MeetingOsServiceIntegrationTest {
     @Test
     void publicQuerySettingsGateSeatAndRoomQuery() {
         PublicQueryRequest request = new PublicQueryRequest(
-                1L,
-                null,
+                TEST_PUBLIC_QUERY_TOKEN,
                 Map.of(PublicQueryField.PHONE, "13800000001", PublicQueryField.NAME, "陈嘉宁")
         );
 
@@ -799,8 +799,7 @@ class MeetingOsServiceIntegrationTest {
         roomService.assign(new AssignRoomRequest(1L, "1801", "前台领取房卡"));
 
         PublicQueryRequest request = new PublicQueryRequest(
-                null,
-                "NDEF2026",
+                TEST_PUBLIC_QUERY_TOKEN,
                 Map.of(PublicQueryField.PHONE, "0001", PublicQueryField.NAME, "嘉宁")
         );
 
@@ -818,8 +817,7 @@ class MeetingOsServiceIntegrationTest {
         ));
 
         Throwable thrown = org.assertj.core.api.Assertions.catchThrowable(() -> publicQueryService.publicSeatQuery(new PublicQueryRequest(
-                1L,
-                null,
+                TEST_PUBLIC_QUERY_TOKEN,
                 Map.of(PublicQueryField.ORGANIZATION, "测试单位")
         )));
         assertThat(thrown).isInstanceOf(BusinessException.class)
@@ -836,22 +834,19 @@ class MeetingOsServiceIntegrationTest {
         ));
 
         assertThatThrownBy(() -> publicQueryService.publicSeatQuery(new PublicQueryRequest(
-                1L,
-                null,
+                TEST_PUBLIC_QUERY_TOKEN,
                 Map.of(PublicQueryField.PHONE, "13800000003", PublicQueryField.NAME, "李若彤")
         ))).isInstanceOf(BusinessException.class)
                 .hasMessageContaining("报名尚未审核通过");
 
         assertThatThrownBy(() -> publicQueryService.publicSeatQuery(new PublicQueryRequest(
-                1L,
-                null,
+                TEST_PUBLIC_QUERY_TOKEN,
                 Map.of(PublicQueryField.PHONE, "13800000002", PublicQueryField.NAME, "王子墨")
         ))).isInstanceOf(BusinessException.class)
                 .hasMessageContaining("尚未排座");
 
         assertThatThrownBy(() -> publicQueryService.publicRoomQuery(new PublicQueryRequest(
-                1L,
-                null,
+                TEST_PUBLIC_QUERY_TOKEN,
                 Map.of(PublicQueryField.PHONE, "13800000002", PublicQueryField.NAME, "王子墨")
         ))).isInstanceOf(BusinessException.class)
                 .hasMessageContaining("尚未安排房间");
@@ -884,7 +879,7 @@ class MeetingOsServiceIntegrationTest {
                 List.of(PublicQueryResultField.SEAT_CODE, PublicQueryResultField.ROOM_NO)
         ));
 
-        var settings = publicQueryService.settings(1L, null);
+        var settings = publicQueryService.adminSettings(1L);
         assertThat(settings.pageTitle()).isEqualTo("论坛座位住宿查询");
         assertThat(settings.buttonText()).isEqualTo("查询我的安排");
         assertThat(settings.seatNotice()).isEqualTo("请于 09:00 前到达会场，凭会议证件从主入口进入，对号入座。");
@@ -913,8 +908,7 @@ class MeetingOsServiceIntegrationTest {
         );
 
         PublicQueryRequest request = new PublicQueryRequest(
-                1L,
-                null,
+                TEST_PUBLIC_QUERY_TOKEN,
                 Map.of(PublicQueryField.PHONE, "13800000001", PublicQueryField.NAME, "陈嘉宁")
         );
         assertThatThrownBy(() -> publicQueryService.publicSeatQuery(request))
@@ -936,6 +930,19 @@ class MeetingOsServiceIntegrationTest {
                         .content("""
                                 {
                                   "meetingCode": "NDEF2026",
+                                  "values": {
+                                    "PHONE": "0001",
+                                    "NAME": "嘉宁"
+                                  }
+                                }
+                                """))
+                .andExpect(status().isBadRequest());
+
+        mockMvc.perform(post("/api/public/seat-query")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("""
+                                {
+                                  "publicQueryToken": "pq_test_ndef2026",
                                   "values": {
                                     "PHONE": "0001",
                                     "NAME": "嘉宁"
@@ -979,7 +986,7 @@ class MeetingOsServiceIntegrationTest {
                         .contentType(MediaType.APPLICATION_JSON)
                         .content("""
                                 {
-                                  "meetingCode": "NDEF2026",
+                                  "publicQueryToken": "pq_test_ndef2026",
                                   "values": {
                                     "PHONE": "13800000001",
                                     "NAME": "未开放历史"
@@ -1002,7 +1009,7 @@ class MeetingOsServiceIntegrationTest {
                         .contentType(MediaType.APPLICATION_JSON)
                         .content("""
                                 {
-                                  "meetingCode": "NDEF2026",
+                                  "publicQueryToken": "pq_test_ndef2026",
                                   "values": {
                                     "PHONE": "0001",
                                     "NAME": "嘉宁"
@@ -1017,7 +1024,7 @@ class MeetingOsServiceIntegrationTest {
                         .contentType(MediaType.APPLICATION_JSON)
                         .content("""
                                 {
-                                  "meetingCode": "NDEF2026",
+                                  "publicQueryToken": "pq_test_ndef2026",
                                   "values": {
                                     "PHONE": "0001",
                                     "NAME": "嘉宁"
@@ -1032,7 +1039,7 @@ class MeetingOsServiceIntegrationTest {
                         .contentType(MediaType.APPLICATION_JSON)
                         .content("""
                                 {
-                                  "meetingCode": "NDEF2026",
+                                  "publicQueryToken": "pq_test_ndef2026",
                                   "values": {
                                     "PHONE": "19900009999",
                                     "NAME": "历史无匹配"

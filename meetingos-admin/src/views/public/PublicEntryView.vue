@@ -80,12 +80,7 @@ const router = useRouter();
 const message = useMessage();
 const store = useMeetingStore();
 const settings = ref<MeetingQuerySettings | null>(null);
-const meetingCode = computed(() => String(route.params.meetingCode || route.query.meetingCode || ""));
-const meetingId = computed(() => {
-  const raw = route.query.meetingId ?? route.query.mid;
-  const parsed = Number(Array.isArray(raw) ? raw[0] : raw);
-  return Number.isFinite(parsed) ? parsed : null;
-});
+const publicQueryToken = computed(() => String(route.query.token || ""));
 const windowState = computed(() => queryWindowState(settings.value));
 const queryDisabled = computed(() => Boolean(settings.value && !windowState.value.available));
 const anyPublicEntryEnabled = computed(() => Boolean(
@@ -102,8 +97,7 @@ const safeLogoUrl = computed(() => sanitizeImageUrl(settings.value?.logoUrl));
 onMounted(async () => {
   try {
     settings.value = await store.loadPublicQuerySettings({
-      meetingId: meetingId.value,
-      meetingCode: meetingCode.value || undefined
+      publicQueryToken: publicQueryToken.value || undefined
     });
   } catch (error) {
     message.error(error instanceof Error ? error.message : "查询设置加载失败");
@@ -115,7 +109,7 @@ function goPublic(target: "query" | "seat-query" | "room-query" | "dinner-query"
     path: `/public/${target}`,
     query: {
       ...route.query,
-      meetingCode: meetingCode.value || settings.value?.meetingCode || undefined
+      token: publicQueryToken.value || settings.value?.publicQueryToken || undefined
     }
   });
 }

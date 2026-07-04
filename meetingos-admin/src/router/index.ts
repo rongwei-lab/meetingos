@@ -17,7 +17,7 @@ const router = createRouter({
       path: "/public",
       component: () => import("@/layouts/PublicLayout.vue"),
       children: [
-        { path: "entry/:meetingCode?", name: "public-entry", component: () => import("@/views/public/PublicEntryView.vue") },
+        { path: "entry", name: "public-entry", component: () => import("@/views/public/PublicEntryView.vue") },
         { path: "query", name: "combined-query", component: () => import("@/views/public/CombinedQueryView.vue") },
         { path: "seat-query", name: "seat-query", component: () => import("@/views/public/SeatQueryView.vue") },
         { path: "room-query", name: "room-query", component: () => import("@/views/public/RoomQueryView.vue") },

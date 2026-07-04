@@ -13,6 +13,7 @@ public record PublicQueryPageContent(
         String publisher,
         String buttonText,
         String emptyMessage,
-        String notice
+        String notice,
+        Boolean checkinEnabled
 ) {
 }

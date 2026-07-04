@@ -6,11 +6,8 @@ import com.meetingos.checkin.CheckinRequest;
 import com.meetingos.checkin.CheckinResponse;
 import com.meetingos.checkin.CheckinService;
 import com.meetingos.checkin.CheckinType;
-import com.meetingos.dinner.DinnerQueryResult;
 import com.meetingos.settings.BrandingResponse;
 import com.meetingos.settings.SystemSettingsService;
-import com.meetingos.seating.SeatQueryResult;
-import com.meetingos.room.RoomQueryResult;
 import com.meetingos.tduck.TduckService;
 import jakarta.validation.Valid;
 import jakarta.servlet.http.HttpServletRequest;
@@ -25,7 +22,6 @@ import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
 
 import java.io.IOException;
-import java.util.EnumMap;
 import java.util.Map;
 
 @RestController
@@ -54,9 +50,12 @@ public class PublicController {
     }
 
     @GetMapping("/query-settings")
-    public ApiResponse<MeetingQuerySettingsResponse> querySettings(@RequestParam(required = false) Long meetingId,
-                                                                   @RequestParam(required = false) String meetingCode) {
-        return ApiResponse.ok(publicQueryService.settings(meetingId, meetingCode));
+    public ApiResponse<MeetingQuerySettingsResponse> querySettings(@RequestParam(value = "token", required = false) String publicQueryToken) {
+        /*
+         * token 缺失时也交给业务层统一返回“公开查询链接无效”，避免旧 meetingCode 链接
+         * 触发 Spring 参数绑定异常并在公网表现为 500。
+         */
+        return ApiResponse.ok(publicQueryService.publicSettings(publicQueryToken));
     }
 
     @GetMapping("/branding")
@@ -70,73 +69,28 @@ public class PublicController {
         return ApiResponse.ok(publicCaptchaService.create());
     }
 
-    @GetMapping("/seat-query")
-    public ApiResponse<SeatQueryResult> seatQuery(@RequestParam Long meetingId,
-                                                  @RequestParam(required = false) String phone,
-                                                  @RequestParam(required = false) String name,
-                                                  @RequestParam(required = false) String phoneLast4,
-                                                  @RequestParam(required = false) String attendeeCode,
-                                                  @RequestParam(required = false) String captchaId,
-                                                  @RequestParam(required = false) String captchaAnswer,
-                                                  HttpServletRequest request) {
-        publicRateLimitService.check(request);
-        PublicQueryRequest queryRequest = new PublicQueryRequest(
-                meetingId,
-                null,
-                legacyValues(phone, name, phoneLast4, attendeeCode, null, null, null),
-                captchaId,
-                captchaAnswer
-        );
-        verifyCaptcha(queryRequest);
-        return ApiResponse.ok(publicQueryService.publicSeatQuery(queryRequest, clientIp(request), request.getHeader(HttpHeaders.USER_AGENT)));
-    }
-
     @PostMapping("/seat-query")
-    public ApiResponse<SeatQueryResult> seatQuery(@Valid @RequestBody PublicQueryRequest queryRequest,
-                                                  HttpServletRequest request) {
+    public ApiResponse<Object> seatQuery(@Valid @RequestBody PublicQueryRequest queryRequest,
+                                         HttpServletRequest request) {
         publicRateLimitService.check(request);
         verifyCaptcha(queryRequest);
-        return ApiResponse.ok(publicQueryService.publicSeatQuery(queryRequest, clientIp(request), request.getHeader(HttpHeaders.USER_AGENT)));
-    }
-
-    @GetMapping("/room-query")
-    public ApiResponse<RoomQueryResult> roomQuery(@RequestParam Long meetingId,
-                                                  @RequestParam(required = false) String phone,
-                                                  @RequestParam(required = false) String name,
-                                                  @RequestParam(required = false) String phoneLast4,
-                                                  @RequestParam(required = false) String attendeeCode,
-                                                  @RequestParam(required = false) String organization,
-                                                  @RequestParam(required = false) String title,
-                                                  @RequestParam(required = false) String email,
-                                                  @RequestParam(required = false) String captchaId,
-                                                  @RequestParam(required = false) String captchaAnswer,
-                                                  HttpServletRequest request) {
-        publicRateLimitService.check(request);
-        PublicQueryRequest queryRequest = new PublicQueryRequest(
-                meetingId,
-                null,
-                legacyValues(phone, name, phoneLast4, attendeeCode, organization, title, email),
-                captchaId,
-                captchaAnswer
-        );
-        verifyCaptcha(queryRequest);
-        return ApiResponse.ok(publicQueryService.publicRoomQuery(queryRequest, clientIp(request), request.getHeader(HttpHeaders.USER_AGENT)));
+        return ApiResponse.ok(publicQueryService.publicSeatQueryResponse(queryRequest, clientIp(request), request.getHeader(HttpHeaders.USER_AGENT)));
     }
 
     @PostMapping("/room-query")
-    public ApiResponse<RoomQueryResult> roomQuery(@Valid @RequestBody PublicQueryRequest queryRequest,
-                                                  HttpServletRequest request) {
+    public ApiResponse<Object> roomQuery(@Valid @RequestBody PublicQueryRequest queryRequest,
+                                         HttpServletRequest request) {
         publicRateLimitService.check(request);
         verifyCaptcha(queryRequest);
-        return ApiResponse.ok(publicQueryService.publicRoomQuery(queryRequest, clientIp(request), request.getHeader(HttpHeaders.USER_AGENT)));
+        return ApiResponse.ok(publicQueryService.publicRoomQueryResponse(queryRequest, clientIp(request), request.getHeader(HttpHeaders.USER_AGENT)));
     }
 
     @PostMapping("/dinner-query")
-    public ApiResponse<DinnerQueryResult> dinnerQuery(@Valid @RequestBody PublicQueryRequest queryRequest,
-                                                      HttpServletRequest request) {
+    public ApiResponse<Object> dinnerQuery(@Valid @RequestBody PublicQueryRequest queryRequest,
+                                           HttpServletRequest request) {
         publicRateLimitService.check(request);
         verifyCaptcha(queryRequest);
-        return ApiResponse.ok(publicQueryService.publicDinnerQuery(queryRequest, clientIp(request), request.getHeader(HttpHeaders.USER_AGENT)));
+        return ApiResponse.ok(publicQueryService.publicDinnerQueryResponse(queryRequest, clientIp(request), request.getHeader(HttpHeaders.USER_AGENT)));
     }
 
     @GetMapping("/checkin-code")
@@ -196,24 +150,6 @@ public class PublicController {
 
     private String clientIp(HttpServletRequest request) {
         return publicRateLimitService.resolveClientIp(request);
-    }
-
-    private Map<PublicQueryField, String> legacyValues(String phone,
-                                                       String name,
-                                                       String phoneLast4,
-                                                       String attendeeCode,
-                                                       String organization,
-                                                       String title,
-                                                       String email) {
-        Map<PublicQueryField, String> values = new EnumMap<>(PublicQueryField.class);
-        values.put(PublicQueryField.PHONE, phone);
-        values.put(PublicQueryField.NAME, name);
-        values.put(PublicQueryField.PHONE_LAST4, phoneLast4);
-        values.put(PublicQueryField.ATTENDEE_CODE, attendeeCode);
-        values.put(PublicQueryField.ORGANIZATION, organization);
-        values.put(PublicQueryField.TITLE, title);
-        values.put(PublicQueryField.EMAIL, email);
-        return values;
     }
 
     private void verifyCaptcha(PublicQueryRequest queryRequest) {

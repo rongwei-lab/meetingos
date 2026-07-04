@@ -19,6 +19,9 @@ public class Meeting extends BaseEntity {
     @Column(nullable = false, unique = true, length = 64)
     private String code;
 
+    @Column(nullable = false, unique = true, length = 80)
+    private String publicQueryToken;
+
     @Column(nullable = false, length = 160)
     private String name;
 
@@ -92,6 +95,9 @@ public class Meeting extends BaseEntity {
 
     @Column(nullable = false, length = 20)
     private String publicQueryMatchMode = "FUZZY";
+
+    @Column(nullable = false)
+    private boolean publicQueryAllowMultipleResults;
 
     @Column(nullable = false, length = 80)
     private String publicCombinedQueryTypes = "SEAT,ROOM,DINNER";
@@ -188,6 +194,14 @@ public class Meeting extends BaseEntity {
 
     public void setCode(String code) {
         this.code = code;
+    }
+
+    public String getPublicQueryToken() {
+        return publicQueryToken;
+    }
+
+    public void setPublicQueryToken(String publicQueryToken) {
+        this.publicQueryToken = publicQueryToken;
     }
 
     public String getName() {
@@ -396,6 +410,14 @@ public class Meeting extends BaseEntity {
 
     public void setPublicQueryMatchMode(String publicQueryMatchMode) {
         this.publicQueryMatchMode = publicQueryMatchMode;
+    }
+
+    public boolean isPublicQueryAllowMultipleResults() {
+        return publicQueryAllowMultipleResults;
+    }
+
+    public void setPublicQueryAllowMultipleResults(boolean publicQueryAllowMultipleResults) {
+        this.publicQueryAllowMultipleResults = publicQueryAllowMultipleResults;
     }
 
     public String getPublicCombinedQueryTypes() {

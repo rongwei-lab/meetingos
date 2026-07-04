@@ -12,17 +12,38 @@
       </div>
 
       <nav class="nav-list">
-        <button
-          v-for="item in visibleNavItems"
-          :key="item.key"
-          class="nav-item"
-          :class="{ active: isNavActive(item) }"
-          @click="navigateNav(item)"
-        >
-          <n-icon class="nav-icon" :component="item.icon" />
-          <span v-if="!collapsed">{{ item.label }}</span>
-          <n-badge v-if="item.badge && !collapsed" :value="item.badge" type="error" />
-        </button>
+        <template v-for="item in visibleNavItems" :key="item.key">
+          <button
+            class="nav-item"
+            :class="{ active: isNavActive(item), 'has-children': hasVisibleNavChildren(item) }"
+            :aria-expanded="hasVisibleNavChildren(item) ? isNavExpanded(item) : undefined"
+            @click="handleNavItemClick(item)"
+          >
+            <n-icon class="nav-icon" :component="item.icon" />
+            <span v-if="!collapsed" class="nav-label">{{ item.label }}</span>
+            <n-badge v-if="item.badge && !collapsed" :value="item.badge" type="error" />
+            <n-icon
+              v-if="!collapsed && hasVisibleNavChildren(item)"
+              class="nav-expand-icon"
+              :class="{ expanded: isNavExpanded(item) }"
+              :component="ChevronForwardOutline"
+            />
+          </button>
+          <transition name="nav-child-collapse">
+            <div v-if="!collapsed && isNavExpanded(item)" class="nav-child-list">
+              <button
+                v-for="child in visibleNavChildren(item)"
+                :key="child.key"
+                class="nav-child-item"
+                :class="{ active: isNavChildActive(child) }"
+                @click="navigateNav(child)"
+              >
+                <n-icon v-if="child.icon" class="nav-child-icon" :component="child.icon" />
+                <span>{{ child.label }}</span>
+              </button>
+            </div>
+          </transition>
+        </template>
       </nav>
 
       <div class="sidebar-footer">
@@ -151,17 +172,38 @@
         </template>
 
         <nav class="mobile-nav-list" aria-label="手机端后台导航">
-          <button
-            v-for="item in visibleNavItems"
-            :key="item.key"
-            class="mobile-nav-item"
-            :class="{ active: isNavActive(item) }"
-            @click="navigateNav(item)"
-          >
-            <n-icon class="nav-icon" :component="item.icon" />
-            <span>{{ item.label }}</span>
-            <n-badge v-if="item.badge" :value="item.badge" type="error" />
-          </button>
+          <template v-for="item in visibleNavItems" :key="item.key">
+            <button
+              class="mobile-nav-item"
+              :class="{ active: isNavActive(item), 'has-children': hasVisibleNavChildren(item) }"
+              :aria-expanded="hasVisibleNavChildren(item) ? isNavExpanded(item) : undefined"
+              @click="handleNavItemClick(item)"
+            >
+              <n-icon class="nav-icon" :component="item.icon" />
+              <span>{{ item.label }}</span>
+              <n-badge v-if="item.badge" :value="item.badge" type="error" />
+              <n-icon
+                v-if="hasVisibleNavChildren(item)"
+                class="mobile-nav-expand-icon"
+                :class="{ expanded: isNavExpanded(item) }"
+                :component="ChevronForwardOutline"
+              />
+            </button>
+            <transition name="nav-child-collapse">
+              <div v-if="isNavExpanded(item)" class="mobile-nav-child-list">
+                <button
+                  v-for="child in visibleNavChildren(item)"
+                  :key="child.key"
+                  class="mobile-nav-child-item"
+                  :class="{ active: isNavChildActive(child) }"
+                  @click="navigateNav(child)"
+                >
+                  <n-icon v-if="child.icon" class="nav-child-icon" :component="child.icon" />
+                  <span>{{ child.label }}</span>
+                </button>
+              </div>
+            </transition>
+          </template>
         </nav>
 
         <template #footer>
@@ -216,6 +258,7 @@ const auth = useAuthStore();
 const meetingStore = useMeetingStore();
 const collapsed = ref(false);
 const mobileNavVisible = ref(false);
+const expandedNavKeys = ref(new Set<string>());
 const searchFocused = ref(false);
 const searchKeyword = ref("");
 const pageBodyRef = ref<HTMLElement>();
@@ -224,14 +267,22 @@ let queuedNavigation: (() => void) | undefined;
 let navUnlockTimer: number | undefined;
 const NAV_UNLOCK_DELAY_MS = 500;
 
-interface NavItem {
+interface NavLocationItem {
   key: string;
   label: string;
-  icon: Component;
   routeName: RouteRecordName;
   scope: "global" | "meeting";
+  icon?: Component;
+  query?: Record<string, string>;
   badge?: number;
   systemAdminOnly?: boolean;
+}
+
+interface NavChildItem extends NavLocationItem {}
+
+interface NavItem extends NavLocationItem {
+  icon: Component;
+  children?: NavChildItem[];
 }
 
 const navItems: NavItem[] = [
@@ -241,7 +292,20 @@ const navItems: NavItem[] = [
   { key: "seating", label: "座位管理", routeName: "meeting-seating", scope: "meeting", icon: BusinessOutline },
   { key: "rooms", label: "住宿管理", routeName: "meeting-rooms", scope: "meeting", icon: BedOutline },
   { key: "dinner", label: "晚宴管理", routeName: "meeting-dinner", scope: "meeting", icon: RestaurantOutline },
-  { key: "detail", label: "查询设置", routeName: "meeting-detail", scope: "meeting", icon: SettingsOutline },
+  {
+    key: "detail",
+    label: "查询设置",
+    routeName: "meeting-detail",
+    scope: "meeting",
+    icon: SettingsOutline,
+    query: { section: "entry" },
+    children: [
+      { key: "detail-entry", label: "入口总览", routeName: "meeting-detail", scope: "meeting", icon: HomeOutline, query: { section: "entry" } },
+      { key: "detail-content", label: "公开页设置", routeName: "meeting-detail", scope: "meeting", icon: ReaderOutline, query: { section: "content" } },
+      { key: "detail-test", label: "后台测试", routeName: "meeting-detail", scope: "meeting", icon: SearchOutline, query: { section: "test" } },
+      { key: "detail-history", label: "查询结果", routeName: "meeting-detail", scope: "meeting", icon: ListOutline, query: { section: "history" } }
+    ]
+  },
   { key: "statistics", label: "数据统计", routeName: "meeting-statistics", scope: "meeting", icon: BarChartOutline },
   { key: "exports", label: "数据导出", routeName: "meeting-exports", scope: "meeting", icon: DownloadOutline },
   { key: "logs", label: "操作日志", routeName: "meeting-logs", scope: "meeting", icon: ListOutline, systemAdminOnly: true }
@@ -275,9 +339,17 @@ const visibleNavItems = computed(() =>
   })
 );
 
+const searchableNavItems = computed(() =>
+  visibleNavItems.value.flatMap((item) => [
+    { item, label: item.label },
+    ...visibleNavChildren(item).map((child) => ({ item: child, label: `${item.label} / ${child.label}` }))
+  ])
+);
+
 watch(
   () => route.fullPath,
   () => {
+    syncActiveNavExpansion();
     mobileNavVisible.value = false;
     scheduleUnlockNavigation();
     // 主体区域是独立滚动容器，路由切换后主动回到顶部，
@@ -294,14 +366,15 @@ const searchResults = computed<SearchResult[]>(() => {
   const normalizedKeyword = normalizeSearchText(keyword);
 
   // 顶部全局搜索只基于当前前端已有数据生成入口，避免为了搜索框额外触发跨模块后端请求。
-  const menuResults = visibleNavItems.value
-    .filter((item) => matchesKeyword(normalizedKeyword, item.label, navPath(item)))
+  const menuResults = searchableNavItems.value
+    .filter(({ item, label }) => matchesKeyword(normalizedKeyword, label, navPath(item), ...Object.values(navQuery(item))))
     .slice(0, 4)
-    .map((item) => ({
+    .map(({ item, label }) => ({
       key: `menu:${item.key}`,
-      label: item.label,
+      label,
       type: "功能",
-      path: navPath(item)
+      path: navPath(item),
+      query: navQuery(item)
     }));
 
   const attendeeResults = meetingStore.currentAttendees
@@ -371,13 +444,89 @@ function meetingPath(suffix: string, meetingId = meetingStore.currentMeetingId) 
   return meetingId ? `/meetings/${meetingId}/${suffix}` : "/meetings";
 }
 
-function navPath(item: NavItem, meetingId = meetingStore.currentMeetingId) {
+function navPath(item: NavLocationItem, meetingId = meetingStore.currentMeetingId) {
   if (item.scope === "global") return "/meetings";
-  return meetingPath(item.key, meetingId);
+  return meetingPath(item.routeName === "meeting-detail" ? "detail" : item.key, meetingId);
+}
+
+function navQuery(item: NavLocationItem) {
+  return item.query || {};
+}
+
+function visibleNavChildren(item: NavItem) {
+  return (item.children || []).filter((child) => {
+    if (!child.systemAdminOnly) return true;
+    return auth.canAccessSystemSettings;
+  });
+}
+
+function hasVisibleNavChildren(item: NavItem) {
+  return visibleNavChildren(item).length > 0;
+}
+
+function setNavExpanded(key: string, expanded: boolean) {
+  const next = new Set(expandedNavKeys.value);
+  if (expanded) next.add(key);
+  else next.delete(key);
+  expandedNavKeys.value = next;
+}
+
+function toggleNavExpansion(item: NavItem) {
+  setNavExpanded(item.key, !isNavExpanded(item));
+}
+
+function findParentNavItem(child: NavLocationItem) {
+  return visibleNavItems.value.find((item) => visibleNavChildren(item).some((candidate) => candidate.key === child.key));
+}
+
+function syncActiveNavExpansion() {
+  const activeParent = visibleNavItems.value.find((item) => hasVisibleNavChildren(item) && item.routeName === route.name);
+  if (activeParent) setNavExpanded(activeParent.key, true);
+}
+
+function normalizedRouteQueryValue(key: string) {
+  const value = route.query[key];
+  if (Array.isArray(value)) return String(value[0] || "");
+  if (value !== undefined && value !== null) return String(value);
+  // 查询设置详情页旧地址没有 section，按入口总览处理，保证旧链接和二级菜单高亮一致。
+  if (route.name === "meeting-detail" && key === "section") return "entry";
+  return "";
+}
+
+function navQueryMatches(item: NavLocationItem) {
+  return Object.entries(navQuery(item)).every(([key, value]) => normalizedRouteQueryValue(key) === value);
+}
+
+function navLocationKey(item: NavLocationItem, meetingId = meetingStore.currentMeetingId) {
+  return buildLocationKey(navPath(item, meetingId), navQuery(item));
+}
+
+function buildLocationKey(path: string, query: Record<string, string> = {}) {
+  const entries = Object.entries(query)
+    .filter(([, value]) => value !== "")
+    .sort(([left], [right]) => left.localeCompare(right));
+  if (!entries.length) return path;
+  return `${path}?${new URLSearchParams(entries).toString()}`;
+}
+
+function currentLocationKey() {
+  const query: Record<string, string> = route.name === "meeting-detail" ? { section: normalizedRouteQueryValue("section") || "entry" } : {};
+  return buildLocationKey(route.path, query);
 }
 
 function isNavActive(item: NavItem) {
-  return item.routeName === route.name;
+  if (visibleNavChildren(item).length) {
+    return item.routeName === route.name || visibleNavChildren(item).some((child) => isNavChildActive(child));
+  }
+  return item.routeName === route.name && navQueryMatches(item);
+}
+
+function isNavExpanded(item: NavItem) {
+  return hasVisibleNavChildren(item) && expandedNavKeys.value.has(item.key);
+}
+
+function isNavChildActive(item: NavChildItem) {
+  return item.routeName === route.name && navQueryMatches(item);
 }
 
 function scheduleUnlockNavigation() {
@@ -397,53 +546,65 @@ function scheduleUnlockNavigation() {
   }, NAV_UNLOCK_DELAY_MS);
 }
 
-function clearPendingNavigation(targetPath: string) {
-  if (pendingNavTarget.value === targetPath) pendingNavTarget.value = "";
+function clearPendingNavigation(targetKey: string) {
+  if (pendingNavTarget.value === targetKey) pendingNavTarget.value = "";
 }
 
-function pushNavTarget(targetPath: string, push: () => ReturnType<typeof router.push>) {
-  if (targetPath === route.path) {
+function pushNavTarget(targetKey: string, push: () => ReturnType<typeof router.push>) {
+  if (targetKey === currentLocationKey()) {
     mobileNavVisible.value = false;
     return;
   }
 
   if (pendingNavTarget.value) {
-    queuedNavigation = () => pushNavTarget(targetPath, push);
+    queuedNavigation = () => pushNavTarget(targetKey, push);
     mobileNavVisible.value = false;
     return;
   }
 
-  pendingNavTarget.value = targetPath;
+  pendingNavTarget.value = targetKey;
   void push()
     .then((failure) => {
-      if (failure) clearPendingNavigation(targetPath);
+      if (failure) clearPendingNavigation(targetKey);
     })
     .catch(() => {
-      clearPendingNavigation(targetPath);
+      clearPendingNavigation(targetKey);
     });
 }
 
-function navigateNav(item: NavItem) {
+function handleNavItemClick(item: NavItem) {
+  if (hasVisibleNavChildren(item)) {
+    toggleNavExpansion(item);
+    if (!isNavActive(item)) navigateNav(item);
+    return;
+  }
+  navigateNav(item);
+}
+
+function navigateNav(item: NavLocationItem) {
   if (item.systemAdminOnly && !auth.canAccessSystemSettings) {
     mobileNavVisible.value = false;
     return;
   }
 
-  const targetPath = navPath(item);
-  if (targetPath === route.path) {
+  const parent = findParentNavItem(item);
+  if (parent) setNavExpanded(parent.key, true);
+
+  const targetKey = navLocationKey(item);
+  if (targetKey === currentLocationKey()) {
     mobileNavVisible.value = false;
     return;
   }
 
   if (item.scope === "global") {
-    pushNavTarget(targetPath, () => router.push({ name: item.routeName }));
+    pushNavTarget(targetKey, () => router.push({ name: item.routeName, query: navQuery(item) }));
     return;
   }
   if (!meetingStore.currentMeetingId) {
-    pushNavTarget(targetPath, () => router.push({ name: "meetings" }));
+    pushNavTarget(targetKey, () => router.push({ name: "meetings" }));
     return;
   }
-  pushNavTarget(targetPath, () => router.push({ name: item.routeName, params: { meetingId: meetingStore.currentMeetingId } }));
+  pushNavTarget(targetKey, () => router.push({ name: item.routeName, params: { meetingId: meetingStore.currentMeetingId }, query: navQuery(item) }));
 }
 
 function goHome() {
@@ -482,6 +643,7 @@ async function logout() {
 }
 
 onMounted(() => {
+  syncActiveNavExpansion();
   void meetingStore.bootstrap();
 });
 </script>
@@ -578,6 +740,10 @@ onMounted(() => {
   cursor: pointer;
   font-size: 14px;
   text-align: left;
+  transition:
+    background-color 160ms ease,
+    color 160ms ease,
+    transform 160ms ease;
 }
 
 .nav-item:hover {
@@ -589,6 +755,105 @@ onMounted(() => {
   background: var(--sidebar-active-bg);
   color: var(--sidebar-active-text);
   font-weight: 650;
+}
+
+.nav-item.has-children {
+  padding-right: 10px;
+}
+
+.nav-label {
+  min-width: 0;
+  flex: 1 1 auto;
+}
+
+.nav-expand-icon,
+.mobile-nav-expand-icon {
+  flex: 0 0 auto;
+  color: currentColor;
+  font-size: 15px;
+  opacity: 0.72;
+  transition:
+    transform 180ms ease,
+    opacity 160ms ease;
+}
+
+.nav-expand-icon.expanded,
+.mobile-nav-expand-icon.expanded {
+  opacity: 1;
+  transform: rotate(90deg);
+}
+
+.nav-child-list {
+  display: grid;
+  gap: 2px;
+  margin: 2px 0 8px 32px;
+  padding-left: 0;
+}
+
+.nav-child-item {
+  width: 100%;
+  min-height: 32px;
+  border: 0;
+  border-radius: 6px;
+  padding: 0 10px;
+  display: grid;
+  grid-template-columns: 18px minmax(0, 1fr);
+  align-items: center;
+  gap: 8px;
+  color: var(--sidebar-muted);
+  background: transparent;
+  cursor: pointer;
+  font-size: 13px;
+  line-height: 1.2;
+  text-align: left;
+  transition:
+    background-color 160ms ease,
+    color 160ms ease,
+    transform 160ms ease;
+}
+
+.nav-child-item:hover {
+  color: var(--text-primary);
+  background: var(--surface-muted);
+  transform: translateX(2px);
+}
+
+.nav-child-item.active {
+  color: var(--sidebar-active-text);
+  background: var(--sidebar-active-bg);
+  font-weight: 650;
+}
+
+.nav-child-icon {
+  width: 16px;
+  height: 16px;
+  font-size: 16px;
+  color: currentColor;
+  opacity: 0.82;
+}
+
+.nav-child-collapse-enter-active,
+.nav-child-collapse-leave-active {
+  max-height: 220px;
+  overflow: hidden;
+  transition:
+    max-height 220ms ease,
+    opacity 180ms ease,
+    transform 180ms ease;
+}
+
+.nav-child-collapse-enter-from,
+.nav-child-collapse-leave-to {
+  max-height: 0;
+  opacity: 0;
+  transform: translateY(-6px);
+}
+
+.nav-child-collapse-enter-to,
+.nav-child-collapse-leave-from {
+  max-height: 220px;
+  opacity: 1;
+  transform: translateY(0);
 }
 
 .nav-icon {
@@ -761,11 +1026,51 @@ onMounted(() => {
   cursor: pointer;
   font-size: 15px;
   text-align: left;
+  transition:
+    background-color 160ms ease,
+    color 160ms ease;
 }
 
 .mobile-nav-item.active {
   background: var(--sidebar-active-bg);
   color: var(--sidebar-active-text);
+  font-weight: 700;
+}
+
+.mobile-nav-child-list {
+  display: grid;
+  gap: 4px;
+  margin: -2px 0 6px 28px;
+  padding-left: 0;
+}
+
+.mobile-nav-child-item {
+  min-height: 36px;
+  border: 0;
+  border-radius: 8px;
+  padding: 0 12px;
+  display: grid;
+  grid-template-columns: 18px minmax(0, 1fr);
+  align-items: center;
+  gap: 8px;
+  color: var(--text-secondary);
+  background: transparent;
+  cursor: pointer;
+  font-size: 14px;
+  text-align: left;
+  transition:
+    background-color 160ms ease,
+    color 160ms ease,
+    transform 160ms ease;
+}
+
+.mobile-nav-child-item:hover {
+  transform: translateX(2px);
+}
+
+.mobile-nav-child-item.active {
+  color: var(--sidebar-active-text);
+  background: var(--sidebar-active-bg);
   font-weight: 700;
 }
 
@@ -777,6 +1082,19 @@ onMounted(() => {
 .mobile-nav-footer {
   display: grid;
   gap: 10px;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .nav-item,
+  .collapse-button,
+  .nav-expand-icon,
+  .mobile-nav-expand-icon,
+  .nav-child-item,
+  .mobile-nav-child-item,
+  .nav-child-collapse-enter-active,
+  .nav-child-collapse-leave-active {
+    transition: none;
+  }
 }
 
 @media (max-width: 800px) {

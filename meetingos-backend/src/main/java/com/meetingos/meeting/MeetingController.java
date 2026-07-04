@@ -73,7 +73,7 @@ public class MeetingController {
     @GetMapping("/{id}/query-settings")
     @PreAuthorize("@meetingAccess.canView(#id)")
     public ApiResponse<MeetingQuerySettingsResponse> querySettings(@PathVariable Long id) {
-        return ApiResponse.ok(publicQueryService.settings(id, null));
+        return ApiResponse.ok(publicQueryService.adminSettings(id));
     }
 
     @PutMapping("/{id}/query-settings")

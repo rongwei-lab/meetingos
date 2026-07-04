@@ -13,7 +13,7 @@
             <span>配置公开查询入口，并查看参会人查询记录</span>
           </div>
           <n-button
-            v-if="activeQueryTab === 'settings'"
+            v-if="currentSection !== 'history'"
             type="primary"
             :loading="savingQuerySettings"
             @click="saveQuerySettings"
@@ -23,151 +23,228 @@
         </div>
       </template>
 
-      <n-tabs v-model:value="activeQueryTab" type="segment" class="query-tabs">
-        <n-tab-pane name="settings" tab="查询设置">
-          <div class="query-settings-workspace">
-            <n-tabs v-model:value="activeSettingsTab" type="line" animated class="settings-sub-tabs">
-              <n-tab-pane name="entry" tab="发布入口">
-                <div class="settings-pane settings-pane-grid entry-settings-grid">
-                  <section class="settings-panel entry-panel">
-                    <div class="entry-panel-heading">
-                      <div>
-                        <h3>发布入口</h3>
-                        <span>选择一个入口后复制链接或扫码访问</span>
+      <div class="query-settings-workspace">
+                <template v-if="currentSection === 'entry'">
+                  <div class="settings-pane settings-pane-grid entry-settings-grid">
+                    <section class="settings-panel entry-panel">
+                      <div class="entry-panel-heading">
+                        <div>
+                          <h3>发布入口</h3>
+                          <span>选择一个入口后复制链接或扫码访问</span>
+                        </div>
+                        <n-radio-group v-model:value="activeLinkKey" size="small" class="entry-switch">
+                          <n-radio-button v-for="item in publicQueryLinks" :key="item.key" :value="item.key">
+                            {{ item.shortLabel }}
+                          </n-radio-button>
+                        </n-radio-group>
                       </div>
-                      <n-radio-group v-model:value="activeLinkKey" size="small" class="entry-switch">
-                        <n-radio-button v-for="item in publicQueryLinks" :key="item.key" :value="item.key">
-                          {{ item.shortLabel }}
-                        </n-radio-button>
-                      </n-radio-group>
-                    </div>
 
-                    <div v-if="activePublicQueryLink" class="entry-preview">
-                      <div class="entry-copy">
-                        <strong>{{ activePublicQueryLink.label }}</strong>
-                        <p v-if="activePublicQueryLink.description">{{ activePublicQueryLink.description }}</p>
-                        <n-input :value="activePublicQueryLink.url" readonly size="small" />
-                        <n-button-group size="small">
-                          <n-button secondary @click="copyPublicQueryUrl(activePublicQueryLink.url, activePublicQueryLink.label)">
-                            <template #icon><n-icon :component="CopyOutline" /></template>
-                            复制
-                          </n-button>
-                          <n-button secondary @click="openPublicQueryUrl(activePublicQueryLink.url)">
-                            <template #icon><n-icon :component="OpenOutline" /></template>
-                            打开
-                          </n-button>
-                        </n-button-group>
+                      <div v-if="activePublicQueryLink" class="entry-preview">
+                        <div class="entry-copy">
+                          <strong>{{ activePublicQueryLink.label }}</strong>
+                          <p v-if="activePublicQueryLink.description">{{ activePublicQueryLink.description }}</p>
+                          <n-input :value="activePublicQueryLink.url" readonly size="small" />
+                          <n-button-group size="small">
+                            <n-button secondary @click="copyPublicQueryUrl(activePublicQueryLink.url, activePublicQueryLink.label)">
+                              <template #icon><n-icon :component="CopyOutline" /></template>
+                              复制
+                            </n-button>
+                            <n-button secondary @click="openPublicQueryUrl(activePublicQueryLink.url)">
+                              <template #icon><n-icon :component="OpenOutline" /></template>
+                              打开
+                            </n-button>
+                          </n-button-group>
+                        </div>
+                        <div class="qr-box">
+                          <img
+                            v-if="activePublicQueryLink.qrCode"
+                            :src="activePublicQueryLink.qrCode"
+                            :alt="`${activePublicQueryLink.label}二维码`"
+                          />
+                          <span v-else>生成中</span>
+                        </div>
                       </div>
-                      <div class="qr-box">
-                        <img
-                          v-if="activePublicQueryLink.qrCode"
-                          :src="activePublicQueryLink.qrCode"
-                          :alt="`${activePublicQueryLink.label}二维码`"
-                        />
-                        <span v-else>生成中</span>
-                      </div>
-                    </div>
-                  </section>
+                    </section>
 
-                  <section class="settings-panel">
+                    <section class="settings-panel entry-status-panel">
+                      <div class="section-heading">
+                        <strong>入口状态</strong>
+                        <span>发布前先确认开关和暂停状态</span>
+                      </div>
+                      <div class="status-list">
+                        <div class="status-row">
+                          <span>座位查询</span>
+                          <n-tag size="small" :type="queryForm.seatQueryEnabled ? 'success' : 'default'">
+                            {{ queryForm.seatQueryEnabled ? "已开放" : "未开放" }}
+                          </n-tag>
+                        </div>
+                        <div class="status-row">
+                          <span>住宿查询</span>
+                          <n-tag size="small" :type="queryForm.roomQueryEnabled ? 'success' : 'default'">
+                            {{ queryForm.roomQueryEnabled ? "已开放" : "未开放" }}
+                          </n-tag>
+                        </div>
+                        <div class="status-row">
+                          <span>晚宴查询</span>
+                          <n-tag size="small" :type="queryForm.dinnerQueryEnabled ? 'success' : 'default'">
+                            {{ queryForm.dinnerQueryEnabled ? "已开放" : "未开放" }}
+                          </n-tag>
+                        </div>
+                        <div class="status-row">
+                          <span>查询后签到</span>
+                          <n-tag size="small" :type="resultCheckinStatus.type">
+                            {{ resultCheckinStatus.label }}
+                          </n-tag>
+                        </div>
+                        <div class="status-row">
+                          <span>签到独立页</span>
+                          <n-tag size="small" :type="queryForm.selfCheckinEnabled ? 'success' : 'default'">
+                            {{ queryForm.selfCheckinEnabled ? "已开放" : "未开放" }}
+                          </n-tag>
+                        </div>
+                        <div class="status-row">
+                          <span>公开查询</span>
+                          <n-tag size="small" :type="queryForm.queryPaused ? 'warning' : 'success'">
+                            {{ queryForm.queryPaused ? "已暂停" : "正常" }}
+                          </n-tag>
+                        </div>
+                      </div>
+                    </section>
+
+                    <section class="settings-panel entry-switch-panel">
+                      <div class="section-heading">
+                        <strong>入口开关</strong>
+                        <span>分别控制公开入口和查询后签到能力是否可用</span>
+                      </div>
+                      <div class="toggle-list entry-toggle-grid">
+                        <div class="toggle-row">
+                          <div>
+                            <strong>座位查询</strong>
+                            <span>查询座位号</span>
+                          </div>
+                          <n-switch v-model:value="queryForm.seatQueryEnabled" />
+                        </div>
+                        <div class="toggle-row">
+                          <div>
+                            <strong>住宿查询</strong>
+                            <span>查询房间号</span>
+                          </div>
+                          <n-switch v-model:value="queryForm.roomQueryEnabled" />
+                        </div>
+                        <div class="toggle-row">
+                          <div>
+                            <strong>晚宴查询</strong>
+                            <span>查询晚宴桌号</span>
+                          </div>
+                          <n-switch v-model:value="queryForm.dinnerQueryEnabled" />
+                        </div>
+                        <div class="toggle-row">
+                          <div>
+                            <strong>签到独立页</strong>
+                            <span>允许访问 /public/checkin 自助签到页，关闭后隐藏入口并拦截独立页提交</span>
+                          </div>
+                          <n-switch v-model:value="queryForm.selfCheckinEnabled" />
+                        </div>
+                      </div>
+                    </section>
+
+                    <section class="settings-panel access-control-panel">
+                      <div class="section-heading">
+                        <strong>访问控制</strong>
+                        <span>临时暂停或设置公开查询的有效期</span>
+                      </div>
+                      <n-form label-placement="top" :show-feedback="false" class="query-form">
+                        <div class="query-form-row">
+                          <n-form-item label="开始时间">
+                            <n-date-picker
+                              v-model:formatted-value="queryForm.startTime"
+                              clearable
+                              type="datetime"
+                              value-format="yyyy-MM-dd'T'HH:mm:ss"
+                              placeholder="不限开始时间"
+                            />
+                          </n-form-item>
+                          <n-form-item label="结束时间">
+                            <n-date-picker
+                              v-model:formatted-value="queryForm.endTime"
+                              clearable
+                              type="datetime"
+                              value-format="yyyy-MM-dd'T'HH:mm:ss"
+                              placeholder="不限结束时间"
+                            />
+                          </n-form-item>
+                        </div>
+                        <div class="toggle-list compact-toggle-list">
+                          <div class="toggle-row">
+                            <div>
+                              <strong>暂停公开查询</strong>
+                              <span>开启后公开页仍可访问，但提交查询会被拦截</span>
+                            </div>
+                            <n-switch v-model:value="queryForm.queryPaused" />
+                          </div>
+                        </div>
+                      </n-form>
+                    </section>
+
+                    <section class="settings-panel result-appearance-panel">
+                      <div class="section-heading">
+                        <strong>外观</strong>
+                        <span>配置公开查询页的基础视觉</span>
+                      </div>
+                      <n-form label-placement="top" :show-feedback="false" class="query-form result-appearance-form">
+                        <div class="query-form-row">
+                          <n-form-item label="主题色">
+                            <div class="theme-color-field">
+                              <n-color-picker v-model:value="queryForm.themeColor" :show-alpha="false" />
+                              <n-input v-model:value="queryForm.themeColor" placeholder="#2563eb" />
+                            </div>
+                          </n-form-item>
+                        </div>
+                        <div class="query-form-row asset-fields-row">
+                          <n-form-item label="Logo URL">
+                            <div class="asset-url-field">
+                              <n-input v-model:value="queryForm.logoUrl" clearable placeholder="https://..." />
+                              <n-upload
+                                :show-file-list="false"
+                                accept=".png,.jpg,.jpeg,.webp,.gif"
+                                :custom-request="uploadLogoAsset"
+                              >
+                                <n-button secondary :loading="uploadingAsset === 'logo'">
+                                  <template #icon><n-icon :component="CloudUploadOutline" /></template>
+                                  上传
+                                </n-button>
+                              </n-upload>
+                            </div>
+                          </n-form-item>
+                          <n-form-item label="背景图 URL">
+                            <div class="asset-url-field">
+                              <n-input v-model:value="queryForm.backgroundUrl" clearable placeholder="https://..." />
+                              <n-upload
+                                :show-file-list="false"
+                                accept=".png,.jpg,.jpeg,.webp,.gif"
+                                :custom-request="uploadBackgroundAsset"
+                              >
+                                <n-button secondary :loading="uploadingAsset === 'background'">
+                                  <template #icon><n-icon :component="CloudUploadOutline" /></template>
+                                  上传
+                                </n-button>
+                              </n-upload>
+                            </div>
+                          </n-form-item>
+                        </div>
+                      </n-form>
+                    </section>
+                  </div>
+                </template>
+
+              <template v-else-if="currentSection === 'content'">
+                <div class="settings-pane content-settings-pane">
+                  <section class="settings-panel query-rules-panel">
                     <div class="section-heading">
-                      <strong>入口状态</strong>
-                      <span>发布前先确认开关和暂停状态</span>
+                      <strong>查询功能</strong>
+                      <span>控制公开页需要填写哪些信息，以及多人命中时是否允许展示多条</span>
                     </div>
-                    <div class="status-list">
-                      <div class="status-row">
-                        <span>座位查询</span>
-                        <n-tag size="small" :type="queryForm.seatQueryEnabled ? 'success' : 'default'">
-                          {{ queryForm.seatQueryEnabled ? "已开放" : "未开放" }}
-                        </n-tag>
-                      </div>
-                      <div class="status-row">
-                        <span>住宿查询</span>
-                        <n-tag size="small" :type="queryForm.roomQueryEnabled ? 'success' : 'default'">
-                          {{ queryForm.roomQueryEnabled ? "已开放" : "未开放" }}
-                        </n-tag>
-                      </div>
-                      <div class="status-row">
-                        <span>晚宴查询</span>
-                        <n-tag size="small" :type="queryForm.dinnerQueryEnabled ? 'success' : 'default'">
-                          {{ queryForm.dinnerQueryEnabled ? "已开放" : "未开放" }}
-                        </n-tag>
-                      </div>
-                      <div class="status-row">
-                        <span>查询后签到</span>
-                        <n-tag size="small" :type="queryForm.checkinEnabled ? 'success' : 'default'">
-                          {{ queryForm.checkinEnabled ? "已开放" : "未开放" }}
-                        </n-tag>
-                      </div>
-                      <div class="status-row">
-                        <span>签到独立页</span>
-                        <n-tag size="small" :type="queryForm.selfCheckinEnabled ? 'success' : 'default'">
-                          {{ queryForm.selfCheckinEnabled ? "已开放" : "未开放" }}
-                        </n-tag>
-                      </div>
-                      <div class="status-row">
-                        <span>公开查询</span>
-                        <n-tag size="small" :type="queryForm.queryPaused ? 'warning' : 'success'">
-                          {{ queryForm.queryPaused ? "已暂停" : "正常" }}
-                        </n-tag>
-                      </div>
-                    </div>
-                  </section>
-                </div>
-              </n-tab-pane>
-
-              <n-tab-pane name="rules" tab="查询规则">
-                <div v-if="activeSettingsTab === 'rules'" class="settings-pane settings-pane-grid">
-                  <section class="settings-panel">
-                    <div class="section-heading">
-                      <strong>开放范围</strong>
-                      <span>分别控制公开入口和查询后签到按钮是否可用</span>
-                    </div>
-                    <div class="toggle-list">
-                      <div class="toggle-row">
-                        <div>
-                          <strong>座位查询</strong>
-                          <span>查询座位号</span>
-                        </div>
-                        <n-switch v-model:value="queryForm.seatQueryEnabled" />
-                      </div>
-                      <div class="toggle-row">
-                        <div>
-                          <strong>住宿查询</strong>
-                          <span>查询房间号</span>
-                        </div>
-                        <n-switch v-model:value="queryForm.roomQueryEnabled" />
-                      </div>
-                      <div class="toggle-row">
-                        <div>
-                          <strong>晚宴查询</strong>
-                          <span>查询晚宴桌号</span>
-                        </div>
-                        <n-switch v-model:value="queryForm.dinnerQueryEnabled" />
-                      </div>
-                      <div class="toggle-row">
-                        <div>
-                          <strong>查询后签到按钮</strong>
-                          <span>查询结果成功后显示“立即签到”，关闭后不展示并拦截该按钮提交</span>
-                        </div>
-                        <n-switch v-model:value="queryForm.checkinEnabled" />
-                      </div>
-                      <div class="toggle-row">
-                        <div>
-                          <strong>签到独立页</strong>
-                          <span>允许访问 /public/checkin 自助签到页，关闭后隐藏入口并拦截独立页提交</span>
-                        </div>
-                        <n-switch v-model:value="queryForm.selfCheckinEnabled" />
-                      </div>
-                    </div>
-                  </section>
-
-                  <section class="settings-panel">
-                    <div class="section-heading">
-                      <strong>身份校验</strong>
-                      <span>选中的字段在公开查询页均为必填，字段之间使用 AND 匹配</span>
-                    </div>
-                    <n-form label-placement="top" :show-feedback="false" class="query-form">
+                    <n-form label-placement="top" :show-feedback="false" class="query-form query-rules-form">
                       <n-form-item label="查询字段">
                         <n-select
                           v-model:value="queryForm.fields"
@@ -182,7 +259,67 @@
                           <n-radio-button value="EXACT">精确匹配</n-radio-button>
                         </n-radio-group>
                       </n-form-item>
-                      <n-form-item label="综合查询展示内容">
+                      <div class="toggle-row compact-toggle-row">
+                        <div>
+                          <strong>允许显示多条结果</strong>
+                          <span>同一查询条件命中多位参会人时，公开页最多展示 20 条审核通过的结果</span>
+                        </div>
+                        <n-switch v-model:value="queryForm.allowMultipleResults" />
+                      </div>
+                    </n-form>
+                  </section>
+
+                  <section class="settings-panel page-content-panel">
+                    <div class="section-heading">
+                      <strong>页面信息</strong>
+                      <span>每个公开入口单独配置标题、说明、公告和提示文案</span>
+                    </div>
+                    <n-tabs v-model:value="activeContentPageKey" type="segment" animated class="content-page-tabs">
+                      <n-tab-pane v-for="page in publicContentPages" :key="page.key" :name="page.key" :tab="page.label" />
+                    </n-tabs>
+                    <n-form label-placement="top" :show-feedback="false" class="query-form page-content-form">
+                      <n-form-item :label="`${activeContentPage.label}标题`" class="content-title-field">
+                        <n-input v-model:value="activePageContent.title" clearable :placeholder="activeContentPage.titlePlaceholder" />
+                      </n-form-item>
+                      <n-form-item label="页面说明" class="content-description-field">
+                        <n-input
+                          v-model:value="activePageContent.description"
+                          type="textarea"
+                          clearable
+                          :autosize="{ minRows: 2, maxRows: 4 }"
+                          placeholder="用于提示参会人填写规则、查询范围等；清空后该页不显示说明"
+                        />
+                      </n-form-item>
+                      <n-form-item label="公告" class="content-announcement-field">
+                        <n-input
+                          v-model:value="activePageContent.announcement"
+                          type="textarea"
+                          clearable
+                          :autosize="{ minRows: 2, maxRows: 5 }"
+                          placeholder="例如：座位和房间信息如有调整，请以现场安排为准；清空后该页不显示公告"
+                        />
+                      </n-form-item>
+                      <div class="query-form-row content-two-column-row">
+                        <n-form-item label="发布人">
+                          <n-input v-model:value="activePageContent.publisher" clearable placeholder="例如：会务组" />
+                        </n-form-item>
+                        <n-form-item v-if="activeContentPage.hasButton" label="按钮文案">
+                          <n-input v-model:value="activePageContent.buttonText" clearable :placeholder="activeContentPage.buttonPlaceholder" />
+                        </n-form-item>
+                      </div>
+                      <n-form-item v-if="activeContentPage.hasEmptyMessage" label="空结果提示" class="content-full-field">
+                        <n-input v-model:value="activePageContent.emptyMessage" clearable placeholder="未查询到结果，请核对信息后重试" />
+                      </n-form-item>
+                      <n-form-item v-if="activeContentPage.hasResultCheckin" label="查询后签到按钮" class="content-full-field">
+                        <div class="toggle-row compact-toggle-row page-checkin-toggle">
+                          <div>
+                            <strong>显示“立即签到”</strong>
+                            <span>当前页查询成功后显示签到按钮，关闭后该页不展示并由后端拦截提交</span>
+                          </div>
+                          <n-switch v-model:value="activePageContent.checkinEnabled" />
+                        </div>
+                      </n-form-item>
+                      <n-form-item v-if="activeContentPageKey === 'combined'" label="综合查询展示内容" class="content-full-field">
                         <div class="combined-type-switches">
                           <div class="toggle-row compact-toggle-row">
                             <div>
@@ -219,93 +356,7 @@
                           </div>
                         </div>
                       </n-form-item>
-                    </n-form>
-                  </section>
-
-                  <section class="settings-panel settings-panel-wide">
-                    <div class="section-heading">
-                      <strong>访问控制</strong>
-                      <span>临时暂停或设置公开查询的有效期</span>
-                    </div>
-                    <n-form label-placement="top" :show-feedback="false" class="query-form">
-                      <div class="query-form-row">
-                        <n-form-item label="开始时间">
-                          <n-date-picker
-                            v-model:formatted-value="queryForm.startTime"
-                            clearable
-                            type="datetime"
-                            value-format="yyyy-MM-dd'T'HH:mm:ss"
-                            placeholder="不限开始时间"
-                          />
-                        </n-form-item>
-                        <n-form-item label="结束时间">
-                          <n-date-picker
-                            v-model:formatted-value="queryForm.endTime"
-                            clearable
-                            type="datetime"
-                            value-format="yyyy-MM-dd'T'HH:mm:ss"
-                            placeholder="不限结束时间"
-                          />
-                        </n-form-item>
-                      </div>
-                      <div class="toggle-list compact-toggle-list">
-                        <div class="toggle-row">
-                          <div>
-                            <strong>暂停公开查询</strong>
-                            <span>开启后公开页仍可访问，但提交查询会被拦截</span>
-                          </div>
-                          <n-switch v-model:value="queryForm.queryPaused" />
-                        </div>
-                      </div>
-                    </n-form>
-                  </section>
-                </div>
-              </n-tab-pane>
-
-              <n-tab-pane name="content" tab="页面内容">
-                <div v-if="activeSettingsTab === 'content'" class="settings-pane content-settings-pane">
-                  <section class="settings-panel">
-                    <div class="section-heading">
-                      <strong>页面信息</strong>
-                      <span>每个公开入口单独配置标题、说明、公告和提示文案</span>
-                    </div>
-                    <n-tabs v-model:value="activeContentPageKey" type="segment" animated class="content-page-tabs">
-                      <n-tab-pane v-for="page in publicContentPages" :key="page.key" :name="page.key" :tab="page.label" />
-                    </n-tabs>
-                    <n-form label-placement="top" :show-feedback="false" class="query-form">
-                      <n-form-item :label="`${activeContentPage.label}标题`">
-                        <n-input v-model:value="activePageContent.title" clearable :placeholder="activeContentPage.titlePlaceholder" />
-                      </n-form-item>
-                      <n-form-item label="页面说明">
-                        <n-input
-                          v-model:value="activePageContent.description"
-                          type="textarea"
-                          clearable
-                          :autosize="{ minRows: 2, maxRows: 4 }"
-                          placeholder="用于提示参会人填写规则、查询范围等；清空后该页不显示说明"
-                        />
-                      </n-form-item>
-                      <n-form-item label="公告">
-                        <n-input
-                          v-model:value="activePageContent.announcement"
-                          type="textarea"
-                          clearable
-                          :autosize="{ minRows: 2, maxRows: 5 }"
-                          placeholder="例如：座位和房间信息如有调整，请以现场安排为准；清空后该页不显示公告"
-                        />
-                      </n-form-item>
-                      <div class="query-form-row">
-                        <n-form-item label="发布人">
-                          <n-input v-model:value="activePageContent.publisher" clearable placeholder="例如：会务组" />
-                        </n-form-item>
-                        <n-form-item v-if="activeContentPage.hasButton" label="按钮文案">
-                          <n-input v-model:value="activePageContent.buttonText" clearable :placeholder="activeContentPage.buttonPlaceholder" />
-                        </n-form-item>
-                      </div>
-                      <n-form-item v-if="activeContentPage.hasEmptyMessage" label="空结果提示">
-                        <n-input v-model:value="activePageContent.emptyMessage" clearable placeholder="未查询到结果，请核对信息后重试" />
-                      </n-form-item>
-                      <n-form-item v-if="activeContentPage.hasNotice" label="结果提示">
+                      <n-form-item v-if="activeContentPage.hasNotice" label="结果提示" class="content-full-field">
                         <n-input
                           v-model:value="activePageContent.notice"
                           type="textarea"
@@ -317,56 +368,7 @@
                     </n-form>
                   </section>
 
-                  <section class="settings-panel result-appearance-panel">
-                    <div class="section-heading">
-                      <strong>外观</strong>
-                      <span>配置公开查询页的基础视觉</span>
-                    </div>
-                    <n-form label-placement="top" :show-feedback="false" class="query-form result-appearance-form">
-                      <div class="query-form-row">
-                        <n-form-item label="主题色">
-                          <div class="theme-color-field">
-                            <n-color-picker v-model:value="queryForm.themeColor" :show-alpha="false" />
-                            <n-input v-model:value="queryForm.themeColor" placeholder="#2563eb" />
-                          </div>
-                        </n-form-item>
-                      </div>
-                      <div class="query-form-row asset-fields-row">
-                        <n-form-item label="Logo URL">
-                          <div class="asset-url-field">
-                            <n-input v-model:value="queryForm.logoUrl" clearable placeholder="https://..." />
-                            <n-upload
-                              :show-file-list="false"
-                              accept=".png,.jpg,.jpeg,.webp,.gif"
-                              :custom-request="uploadLogoAsset"
-                            >
-                              <n-button secondary :loading="uploadingAsset === 'logo'">
-                                <template #icon><n-icon :component="CloudUploadOutline" /></template>
-                                上传
-                              </n-button>
-                            </n-upload>
-                          </div>
-                        </n-form-item>
-                        <n-form-item label="背景图 URL">
-                          <div class="asset-url-field">
-                            <n-input v-model:value="queryForm.backgroundUrl" clearable placeholder="https://..." />
-                            <n-upload
-                              :show-file-list="false"
-                              accept=".png,.jpg,.jpeg,.webp,.gif"
-                              :custom-request="uploadBackgroundAsset"
-                            >
-                              <n-button secondary :loading="uploadingAsset === 'background'">
-                                <template #icon><n-icon :component="CloudUploadOutline" /></template>
-                                上传
-                              </n-button>
-                            </n-upload>
-                          </div>
-                        </n-form-item>
-                      </div>
-                    </n-form>
-                  </section>
-
-                  <section class="settings-panel settings-panel-wide">
+                  <section class="settings-panel settings-panel-wide result-fields-panel">
                     <div class="section-heading">
                       <strong>结果字段</strong>
                       <span>座位、住宿和晚宴入口分别配置；综合查询页会按结果类型使用对应配置</span>
@@ -539,10 +541,10 @@
                     </div>
                   </section>
                 </div>
-              </n-tab-pane>
+              </template>
 
-              <n-tab-pane name="test" tab="后台测试">
-                <div v-if="activeSettingsTab === 'test'" class="settings-pane">
+              <template v-else-if="currentSection === 'test'">
+                <div class="settings-pane">
                   <section class="settings-panel">
                     <div class="section-heading">
                       <strong>后台查询测试</strong>
@@ -576,13 +578,9 @@
                     </div>
                   </section>
                 </div>
-              </n-tab-pane>
-            </n-tabs>
-          </div>
-        </n-tab-pane>
+              </template>
 
-        <n-tab-pane name="history" tab="查询结果">
-          <div v-if="activeQueryTab === 'history'" class="query-history-panel">
+          <div v-else class="query-history-panel">
             <div class="query-history-toolbar">
               <n-radio-group v-model:value="historyView" size="small">
                 <n-radio-button value="logs">查询日志</n-radio-button>
@@ -655,8 +653,7 @@
               :scroll-x="900"
             />
           </div>
-        </n-tab-pane>
-      </n-tabs>
+      </div>
     </n-card>
   </div>
 </template>
@@ -712,8 +709,11 @@ const testingQuery = ref(false);
 const testQueryType = ref<"seat" | "room">("seat");
 const queryResults = ref<AdminQueryCandidate[]>([]);
 const adminQueryTouched = ref(false);
-const activeQueryTab = ref<"settings" | "history">("settings");
-const activeSettingsTab = ref<"entry" | "rules" | "content" | "test">("entry");
+type QuerySectionKey = "entry" | "content" | "test" | "history";
+const currentSection = computed<QuerySectionKey>(() => {
+  const rawValue = Array.isArray(route.query.section) ? route.query.section[0] : route.query.section;
+  return rawValue === "content" || rawValue === "test" || rawValue === "history" ? rawValue : "entry";
+});
 const historyView = ref<"logs" | "summary">("logs");
 const loadingQueryHistory = ref(false);
 const loadingQuerySummary = ref(false);
@@ -740,11 +740,12 @@ interface PublicContentPage {
   hasButton: boolean;
   hasEmptyMessage: boolean;
   hasNotice: boolean;
+  hasResultCheckin: boolean;
 }
 
 const defaultPageContents: Record<PublicPageKey, PublicPageContent> = {
   entry: { title: "", description: "", announcement: "", publisher: "" },
-  combined: { title: "", description: "", announcement: "", publisher: "", buttonText: "立即查询", emptyMessage: "未查询到结果，请核对信息后重试" },
+  combined: { title: "", description: "", announcement: "", publisher: "", buttonText: "立即查询", emptyMessage: "未查询到结果，请核对信息后重试", checkinEnabled: true },
   seat: {
     title: "",
     description: "",
@@ -752,7 +753,8 @@ const defaultPageContents: Record<PublicPageKey, PublicPageContent> = {
     publisher: "",
     buttonText: "立即查询",
     emptyMessage: "未查询到结果，请核对信息后重试",
-    notice: "请按会议通知时间到达会场，凭会议证件从指定入口进入，对号入座。"
+    notice: "请按会议通知时间到达会场，凭会议证件从指定入口进入，对号入座。",
+    checkinEnabled: true
   },
   room: {
     title: "",
@@ -761,7 +763,8 @@ const defaultPageContents: Record<PublicPageKey, PublicPageContent> = {
     publisher: "",
     buttonText: "立即查询",
     emptyMessage: "未查询到结果，请核对信息后重试",
-    notice: "凭会议证件及身份证办理入住，接待台位于酒店大堂。"
+    notice: "凭会议证件及身份证办理入住，接待台位于酒店大堂。",
+    checkinEnabled: true
   },
   dinner: {
     title: "",
@@ -770,7 +773,8 @@ const defaultPageContents: Record<PublicPageKey, PublicPageContent> = {
     publisher: "",
     buttonText: "立即查询",
     emptyMessage: "未查询到结果，请核对信息后重试",
-    notice: "请按现场指引前往晚宴区域入座，如有调整请以会务组通知为准。"
+    notice: "请按现场指引前往晚宴区域入座，如有调整请以会务组通知为准。",
+    checkinEnabled: true
   },
   checkin: { title: "", description: "", announcement: "", publisher: "", buttonText: "自助签到" }
 };
@@ -784,7 +788,8 @@ const publicContentPages: PublicContentPage[] = [
     noticePlaceholder: "",
     hasButton: false,
     hasEmptyMessage: false,
-    hasNotice: false
+    hasNotice: false,
+    hasResultCheckin: false
   },
   {
     key: "combined",
@@ -794,7 +799,8 @@ const publicContentPages: PublicContentPage[] = [
     noticePlaceholder: "",
     hasButton: true,
     hasEmptyMessage: true,
-    hasNotice: false
+    hasNotice: false,
+    hasResultCheckin: true
   },
   {
     key: "seat",
@@ -804,7 +810,8 @@ const publicContentPages: PublicContentPage[] = [
     noticePlaceholder: "例如：请按会议通知时间到达会场，凭会议证件从指定入口进入，对号入座。",
     hasButton: true,
     hasEmptyMessage: true,
-    hasNotice: true
+    hasNotice: true,
+    hasResultCheckin: true
   },
   {
     key: "room",
@@ -814,7 +821,8 @@ const publicContentPages: PublicContentPage[] = [
     noticePlaceholder: "例如：凭身份证办理入住，接待台位于酒店大堂。",
     hasButton: true,
     hasEmptyMessage: true,
-    hasNotice: true
+    hasNotice: true,
+    hasResultCheckin: true
   },
   {
     key: "dinner",
@@ -824,7 +832,8 @@ const publicContentPages: PublicContentPage[] = [
     noticePlaceholder: "例如：请按现场指引前往晚宴区域入座，如有调整请以会务组通知为准。",
     hasButton: true,
     hasEmptyMessage: true,
-    hasNotice: true
+    hasNotice: true,
+    hasResultCheckin: true
   },
   {
     key: "checkin",
@@ -834,7 +843,8 @@ const publicContentPages: PublicContentPage[] = [
     noticePlaceholder: "",
     hasButton: true,
     hasEmptyMessage: false,
-    hasNotice: false
+    hasNotice: false,
+    hasResultCheckin: false
   }
 ];
 
@@ -847,6 +857,7 @@ const queryForm = reactive({
   queryPaused: false,
   fields: ["PHONE", "NAME"] as PublicQueryField[],
   matchMode: "FUZZY" as PublicQueryMatchMode,
+  allowMultipleResults: false,
   combinedQueryTypes: ["SEAT", "ROOM", "DINNER"] as Array<"SEAT" | "ROOM" | "DINNER">,
   pageTitle: "",
   pageDescription: "",
@@ -933,6 +944,13 @@ const fieldSelectOptions = computed(() => fieldOptions.value.map((item) => ({ la
 const resultFieldSelectOptions = computed(() => resultFieldOptions.value.map((item) => ({ label: item.label, value: item.field })));
 const activeContentPage = computed(() => publicContentPages.find((item) => item.key === activeContentPageKey.value) || publicContentPages[0]);
 const activePageContent = computed(() => queryForm.pageContents[activeContentPageKey.value] || queryForm.pageContents.combined);
+const resultCheckinPageKeys: Array<Extract<PublicPageKey, "combined" | "seat" | "room" | "dinner">> = ["combined", "seat", "room", "dinner"];
+const resultCheckinStatus = computed(() => {
+  const enabledCount = resultCheckinPageKeys.filter((key) => queryForm.pageContents[key].checkinEnabled !== false).length;
+  if (enabledCount === resultCheckinPageKeys.length) return { label: "全部开放", type: "success" as const };
+  if (enabledCount > 0) return { label: "部分开放", type: "warning" as const };
+  return { label: "未开放", type: "default" as const };
+});
 const seatResultFields = new Set<PublicQueryResultField>([
   "ATTENDEE_NAME",
   "ATTENDEE_PHONE",
@@ -1007,8 +1025,8 @@ const queryStatusFilterOptions = [
 ];
 const publicQueryLinks = computed<PublicQueryLink[]>(() => {
   if (!meeting.value) return [];
-  const meetingCode = encodeURIComponent(meeting.value.code);
-  const query = `meetingCode=${meetingCode}`;
+  const token = encodeURIComponent(meeting.value.publicQueryToken || "");
+  const query = `token=${token}`;
   return [
     {
       key: "combined" as const,
@@ -1175,6 +1193,7 @@ function loadQuerySettings(targetMeetingId = meetingId.value) {
     queryForm.queryPaused = settings.queryPaused;
     queryForm.fields = [...settings.fields];
     queryForm.matchMode = settings.matchMode;
+    queryForm.allowMultipleResults = settings.allowMultipleResults;
     queryForm.combinedQueryTypes = [...settings.combinedQueryTypes];
     queryForm.pageTitle = settings.pageTitle;
     queryForm.pageDescription = settings.pageDescription || "";
@@ -1304,16 +1323,18 @@ function saveQuerySettings() {
   savingQuerySettings.value = true;
   const pageContents = clonePageContents(queryForm.pageContents);
   const combinedContent = pageContents.combined;
+  const resultCheckinEnabled = resultCheckinPageKeys.some((key) => pageContents[key].checkinEnabled !== false);
   void store
     .saveMeetingQuerySettings(meetingId.value, {
       seatQueryEnabled: queryForm.seatQueryEnabled,
       roomQueryEnabled: queryForm.roomQueryEnabled,
       dinnerQueryEnabled: queryForm.dinnerQueryEnabled,
-      checkinEnabled: queryForm.checkinEnabled,
+      checkinEnabled: resultCheckinEnabled,
       selfCheckinEnabled: queryForm.selfCheckinEnabled,
       queryPaused: queryForm.queryPaused,
       fields: queryForm.fields,
       matchMode: queryForm.matchMode,
+      allowMultipleResults: queryForm.allowMultipleResults,
       combinedQueryTypes: queryForm.combinedQueryTypes,
       pageTitle: combinedContent.title || queryForm.pageTitle,
       pageDescription: combinedContent.description ?? queryForm.pageDescription,
@@ -1590,19 +1611,19 @@ onUnmounted(() => {
   }
 });
 watch(meetingId, loadDetail);
-watch(activeQueryTab, (value) => {
+watch(currentSection, (value) => {
   if (value === "history") {
     loadQueryHistory(1);
     loadQuerySummary();
   }
-});
+}, { immediate: true });
 watch(historyView, (value) => {
-  if (activeQueryTab.value !== "history") return;
+  if (currentSection.value !== "history") return;
   if (value === "logs" && !queryHistoryRows.value.length) loadQueryHistory(1);
   if (value === "summary" && !querySummaryRows.value.length) loadQuerySummary();
 });
 watch(() => [historyFilters.type, historyFilters.status], () => {
-  if (activeQueryTab.value === "history" && historyView.value === "logs") loadQueryHistory(1);
+  if (currentSection.value === "history" && historyView.value === "logs") loadQueryHistory(1);
 });
 watch(
   () => [
@@ -1654,41 +1675,14 @@ watch(activePublicQueryLinkUrl, (url) => {
   margin-bottom: 12px;
 }
 
-.query-tabs {
-  margin-top: 2px;
-  min-width: 0;
-}
-
-.query-tabs :deep(.n-tab-pane) {
-  padding-top: 18px;
-  min-width: 0;
-}
-
-.query-tabs :deep(.n-tabs-pane-wrapper) {
-  min-width: 0;
-  overflow: hidden;
-}
-
 .query-settings-workspace {
   display: grid;
   min-width: 0;
 }
 
-.settings-sub-tabs {
-  min-width: 0;
-}
-
-.settings-sub-tabs :deep(.n-tabs-nav) {
-  padding: 0 2px;
-}
-
-.settings-sub-tabs :deep(.n-tab-pane) {
-  padding-top: 18px;
-}
-
 .settings-pane {
   display: grid;
-  gap: 16px;
+  gap: 18px;
   min-width: 0;
 }
 
@@ -1700,10 +1694,11 @@ watch(activePublicQueryLinkUrl, (url) => {
 .content-settings-pane {
   grid-template-columns: 1fr;
   gap: 18px;
+  align-items: start;
 }
 
 .entry-settings-grid {
-  grid-template-columns: minmax(420px, 1fr) minmax(280px, 0.55fr);
+  grid-template-columns: minmax(500px, 1.35fr) minmax(300px, 0.75fr);
 }
 
 .settings-panel {
@@ -1720,8 +1715,114 @@ watch(activePublicQueryLinkUrl, (url) => {
   grid-column: 1 / -1;
 }
 
+.entry-switch-panel {
+  align-content: start;
+}
+
+.entry-toggle-grid {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+  border: 0;
+  border-radius: 0;
+  overflow: visible;
+}
+
+.entry-toggle-grid .toggle-row {
+  min-height: 76px;
+  align-items: flex-start;
+  padding: 12px;
+  border: 1px solid var(--border-color);
+  border-radius: 8px;
+}
+
+.entry-toggle-grid .toggle-row + .toggle-row {
+  border-top: 1px solid var(--border-color);
+}
+
+.entry-toggle-grid .toggle-row > div {
+  min-width: 0;
+}
+
+.entry-toggle-grid .toggle-row strong {
+  display: block;
+  margin-bottom: 3px;
+}
+
+.entry-status-panel .status-list {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+  border: 0;
+  overflow: visible;
+  background: transparent;
+}
+
+.entry-status-panel .status-row {
+  min-height: 62px;
+  padding: 10px;
+  border: 1px solid var(--border-color);
+  border-radius: 8px;
+  background: #ffffff;
+}
+
+.entry-status-panel .status-row + .status-row {
+  border-top: 1px solid var(--border-color);
+}
+
+.page-content-panel,
+.query-rules-panel,
+.entry-status-panel,
+.access-control-panel {
+  grid-column: auto;
+  grid-row: auto;
+}
+
+.query-rules-panel,
+.page-content-panel,
+.result-fields-panel {
+  gap: 16px;
+}
+
+.query-rules-form {
+  grid-template-columns: minmax(300px, 1fr) minmax(220px, 0.55fr) minmax(280px, 0.75fr);
+  align-items: end;
+  gap: 14px;
+}
+
+.query-rules-form .compact-toggle-row {
+  min-height: 58px;
+  border: 1px solid var(--border-color);
+  border-radius: 8px;
+}
+
+.page-content-form {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px 14px;
+  align-items: start;
+}
+
+.content-title-field,
+.content-two-column-row,
+.content-full-field {
+  grid-column: 1 / -1;
+}
+
+.content-page-tabs {
+  min-width: 0;
+}
+
+.content-page-tabs :deep(.n-tabs-nav) {
+  padding: 3px;
+  border-radius: 8px;
+  background: #f8fafc;
+}
+
+.content-page-tabs :deep(.n-tabs-tab) {
+  min-height: 32px;
+}
+
 .result-appearance-panel {
-  grid-template-columns: minmax(160px, 0.22fr) minmax(0, 1fr);
+  grid-column: 1 / -1;
+  grid-template-columns: minmax(180px, 0.22fr) minmax(0, 1fr);
   align-items: center;
   padding: 14px 16px;
 }
@@ -1744,7 +1845,7 @@ watch(activePublicQueryLinkUrl, (url) => {
 .result-field-config-grid {
   display: grid;
   grid-template-columns: repeat(3, minmax(0, 1fr));
-  gap: 12px;
+  gap: 14px;
 }
 
 .result-field-config {
@@ -1927,6 +2028,29 @@ watch(activePublicQueryLinkUrl, (url) => {
 }
 
 @media (max-width: 1180px) {
+  .content-settings-pane {
+    grid-template-columns: 1fr;
+  }
+
+  .entry-toggle-grid {
+    grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+  }
+
+  .query-rules-form,
+  .page-content-form,
+  .combined-type-switches {
+    grid-template-columns: 1fr;
+  }
+
+  .page-content-panel,
+  .query-rules-panel,
+  .entry-status-panel,
+  .access-control-panel,
+  .result-appearance-panel {
+    grid-column: 1 / -1;
+    grid-row: auto;
+  }
+
   .result-appearance-panel {
     grid-template-columns: 1fr;
     align-items: start;
@@ -1947,13 +2071,26 @@ watch(activePublicQueryLinkUrl, (url) => {
 
 .combined-type-switches {
   display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
   gap: 10px;
   width: 100%;
+}
+
+@media (max-width: 1180px) {
+  .combined-type-switches {
+    grid-template-columns: 1fr;
+  }
 }
 
 .compact-toggle-row {
   min-height: 54px;
   padding: 12px 14px;
+}
+
+.page-checkin-toggle {
+  width: 100%;
+  border: 1px solid var(--border-color);
+  border-radius: 8px;
 }
 
 .entry-switch {
@@ -2146,27 +2283,26 @@ watch(activePublicQueryLinkUrl, (url) => {
 }
 
 @media (max-width: 760px) {
-  .query-tabs :deep(.n-tabs-nav),
-  .settings-sub-tabs :deep(.n-tabs-nav) {
+  .content-page-tabs :deep(.n-tabs-nav) {
     overflow-x: auto;
   }
 
-  .query-tabs :deep(.n-tabs-nav .n-tabs-rail),
-  .settings-sub-tabs :deep(.n-tabs-nav-scroll-content) {
+  .content-page-tabs :deep(.n-tabs-nav-scroll-content) {
     width: max-content;
     min-width: 100%;
   }
 
-  .query-tabs :deep(.n-tabs-tab),
-  .settings-sub-tabs :deep(.n-tabs-tab) {
+  .content-page-tabs :deep(.n-tabs-tab) {
     min-width: max-content;
   }
 
-  .settings-pane-grid,
-  .entry-settings-grid,
-  .result-field-config-grid {
-    grid-template-columns: 1fr;
-  }
+	  .settings-pane-grid,
+	  .entry-settings-grid,
+	  .entry-toggle-grid,
+	  .entry-status-panel .status-list,
+	  .result-field-config-grid {
+	    grid-template-columns: 1fr;
+	  }
 
   .result-appearance-panel,
   .asset-fields-row {

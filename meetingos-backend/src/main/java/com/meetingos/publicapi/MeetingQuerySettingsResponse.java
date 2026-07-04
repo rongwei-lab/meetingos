@@ -9,6 +9,7 @@ import java.util.Map;
 public record MeetingQuerySettingsResponse(
         Long meetingId,
         String meetingCode,
+        String publicQueryToken,
         String meetingName,
         boolean seatQueryEnabled,
         boolean roomQueryEnabled,
@@ -18,6 +19,7 @@ public record MeetingQuerySettingsResponse(
         boolean queryPaused,
         List<PublicQueryField> fields,
         PublicQueryMatchMode matchMode,
+        boolean allowMultipleResults,
         List<PublicQueryType> combinedQueryTypes,
         String pageTitle,
         String pageDescription,

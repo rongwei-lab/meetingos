@@ -1,7 +1,7 @@
 <template>
   <main class="public-page" :style="publicPageStyle(settings)">
-    <section class="public-card" :class="{ 'public-card-result-only': result && resultRows.length }">
-      <template v-if="!result || !resultRows.length">
+    <section class="public-card" :class="{ 'public-card-result-only': hasSingleVisibleResult, 'public-card-wide': hasMultipleVisibleResults }">
+      <template v-if="!hasRawResults">
         <img v-if="safeLogoUrl" class="public-logo" :src="safeLogoUrl" alt="会议 Logo" />
         <p v-if="publisher" class="public-kicker">{{ publisher }}</p>
         <h1>{{ pageTitleFor(settings, "room", "房间号查询") }}</h1>
@@ -21,7 +21,7 @@
         {{ windowState.message }}
       </n-alert>
 
-      <n-form v-else-if="settings && !result" label-placement="top" class="public-form">
+      <n-form v-else-if="settings && !hasRawResults" label-placement="top" class="public-form">
         <n-form-item v-for="field in activeFields" :key="field" :label="fieldLabel(field)">
           <n-input v-model:value="values[field]" :placeholder="`请输入${fieldLabel(field)}`" />
         </n-form-item>
@@ -40,21 +40,24 @@
         {{ errorText }}
       </n-alert>
 
-      <public-result-ticket
-        v-if="result && resultRows.length"
-        kind="room"
-        :attendee-name="result.attendeeName"
-        :rows="resultRows"
-        :notice="roomNotice"
-      />
+      <div v-if="resultItems.length" class="public-multi-results">
+        <public-result-ticket
+          v-for="item in resultItems"
+          :key="item.result.attendeeId"
+          kind="room"
+          :attendee-name="item.result.attendeeName"
+          :rows="item.rows"
+          :notice="roomNotice"
+        />
+      </div>
       <public-result-checkin-action
-        v-if="result && resultRows.length"
+        v-if="resultItems.length === 1 && pageResultCheckinEnabled(settings, 'room')"
         :settings="settings"
-        :meeting-id="queryMeetingId"
-        :meeting-code="queryMeetingCode || null"
+        :public-query-token="publicQueryToken || settings?.publicQueryToken"
         :values="values"
+        page-key="room"
       />
-      <section v-else-if="result" class="public-result">
+      <section v-if="hasRawResults && !resultItems.length" class="public-result">
         <n-alert type="info" :bordered="false">当前未配置可展示的住宿结果字段</n-alert>
       </section>
     </section>
@@ -78,8 +81,10 @@ import {
   pageDescriptionFor,
   pageNoticeFor,
   pagePublisherFor,
+  pageResultCheckinEnabled,
   pageTitleFor,
   publicPageStyle,
+  publicQueryResults,
   queryWindowState
 } from "./queryDisplay";
 
@@ -88,7 +93,7 @@ const store = useMeetingStore();
 const message = useMessage();
 const loading = ref(false);
 const settings = ref<MeetingQuerySettings | null>(null);
-const result = ref<RoomQueryResult | null>(null);
+const results = ref<RoomQueryResult[]>([]);
 const errorText = ref("");
 const captchaId = ref<string | null>(null);
 const captchaQuestion = ref("");
@@ -103,12 +108,7 @@ const values = reactive<Record<PublicQueryField, string>>({
   TITLE: "",
   EMAIL: ""
 });
-const queryMeetingId = computed(() => {
-  const raw = route.query.meetingId ?? route.query.mid;
-  const parsed = Number(Array.isArray(raw) ? raw[0] : raw);
-  return Number.isFinite(parsed) ? parsed : null;
-});
-const queryMeetingCode = computed(() => String(route.query.meetingCode || route.params.meetingCode || ""));
+const publicQueryToken = computed(() => String(route.query.token || ""));
 const activeFields = computed(() => settings.value?.fields || []);
 const publisher = computed(() => pagePublisherFor(settings.value, "room"));
 const subtitle = computed(() => pageDescriptionFor(settings.value, "room"));
@@ -116,8 +116,13 @@ const announcement = computed(() => pageAnnouncementFor(settings.value, "room"))
 const buttonText = computed(() => pageButtonTextFor(settings.value, "room"));
 const roomNotice = computed(() => pageNoticeFor(settings.value, "room"));
 const windowState = computed(() => queryWindowState(settings.value));
-const resultRows = computed(() => buildRoomRows(settings.value, result.value));
-const hasTicketResult = computed(() => Boolean(result.value && resultRows.value.length));
+const resultItems = computed(() => results.value
+  .map((result) => ({ result, rows: buildRoomRows(settings.value, result) }))
+  .filter((item) => item.rows.length));
+const hasRawResults = computed(() => results.value.length > 0);
+const hasTicketResult = computed(() => Boolean(resultItems.value.length));
+const hasSingleVisibleResult = computed(() => resultItems.value.length === 1);
+const hasMultipleVisibleResults = computed(() => resultItems.value.length > 1);
 const safeLogoUrl = computed(() => sanitizeImageUrl(settings.value?.logoUrl));
 
 onMounted(loadSettings);
@@ -134,8 +139,7 @@ onBeforeUnmount(() => {
 async function loadSettings() {
   try {
     settings.value = await store.loadPublicQuerySettings({
-      meetingId: queryMeetingId.value,
-      meetingCode: queryMeetingCode.value || undefined
+      publicQueryToken: publicQueryToken.value || undefined
     });
     if (settings.value.captchaEnabled) {
       await loadCaptcha();
@@ -159,16 +163,15 @@ async function query() {
     return;
   }
   loading.value = true;
-  result.value = null;
+  results.value = [];
   errorText.value = "";
   try {
-    result.value = await store.publicRoomQuery({
-      meetingId: queryMeetingId.value,
-      meetingCode: queryMeetingCode.value || undefined,
+    results.value = publicQueryResults(await store.publicRoomQuery({
+      publicQueryToken: publicQueryToken.value || settings.value.publicQueryToken,
       values,
       captchaId: captchaId.value,
       captchaAnswer: captchaAnswer.value
-    });
+    }));
   } catch (error) {
     const rawMessage = error instanceof Error ? error.message : "住宿查询失败";
     errorText.value = normalizePublicQueryError(rawMessage, settings.value, "room");

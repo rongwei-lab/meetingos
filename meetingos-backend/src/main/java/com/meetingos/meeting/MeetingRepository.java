@@ -12,6 +12,10 @@ public interface MeetingRepository extends JpaRepository<Meeting, Long> {
 
     Optional<Meeting> findByCode(String code);
 
+    Optional<Meeting> findByPublicQueryToken(String publicQueryToken);
+
+    boolean existsByPublicQueryToken(String publicQueryToken);
+
     @Query("""
             select m from Meeting m
             where (:keyword is null or lower(m.name) like lower(concat('%', :keyword, '%')) or lower(m.code) like lower(concat('%', :keyword, '%')))

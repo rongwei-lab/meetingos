@@ -20,6 +20,7 @@ import type {
   PublicQueryField,
   PublicQueryHistory,
   PublicQueryMatchMode,
+  PublicQueryResponse,
   PublicQueryResultField,
   PublicQueryStatus,
   PublicQuerySummary,
@@ -36,6 +37,7 @@ const CURRENT_MEETING_KEY = "meetingos.currentMeetingId";
 interface MeetingSummaryDto {
   id: number;
   code: string;
+  publicQueryToken?: string;
   name: string;
   startTime?: string;
   endTime?: string;
@@ -62,6 +64,7 @@ interface MeetingDetailDto {
   meeting: {
     id: number;
     code: string;
+    publicQueryToken?: string;
     name: string;
     organizer?: string;
     coOrganizer?: string;
@@ -200,6 +203,7 @@ interface RoomDto {
 interface MeetingQuerySettingsDto {
   meetingId: number;
   meetingCode: string;
+  publicQueryToken?: string;
   meetingName: string;
   seatQueryEnabled: boolean;
   roomQueryEnabled: boolean;
@@ -209,6 +213,7 @@ interface MeetingQuerySettingsDto {
   queryPaused?: boolean;
   fields: PublicQueryField[];
   matchMode: PublicQueryMatchMode;
+  allowMultipleResults?: boolean;
   combinedQueryTypes?: CombinedQueryType[];
   pageTitle?: string;
   pageDescription?: string;
@@ -636,6 +641,13 @@ function localMeetingCode() {
   return `MEET${datePart}-${Date.now().toString(36).slice(-6).toUpperCase()}`;
 }
 
+function fallbackPublicQueryToken(seed?: string) {
+  const normalized = (seed || "local")
+    .toLowerCase()
+    .replace(/[^a-z0-9]/g, "");
+  return `pq_${normalized || "local"}`;
+}
+
 function meetingRequestFrom(meeting: Partial<Meeting>, fallback?: Meeting) {
   const venue = blankToUndefined(meeting.venue ?? fallback?.venue);
   return {
@@ -955,6 +967,7 @@ export const useMeetingStore = defineStore("meeting", {
         | "queryPaused"
         | "fields"
         | "matchMode"
+        | "allowMultipleResults"
         | "combinedQueryTypes"
         | "pageTitle"
         | "pageDescription"
@@ -999,6 +1012,7 @@ export const useMeetingStore = defineStore("meeting", {
               queryPaused: settings.queryPaused,
               fields: settings.fields,
               matchMode: settings.matchMode,
+              allowMultipleResults: settings.allowMultipleResults,
               combinedQueryTypes: settings.combinedQueryTypes,
               pageTitle: settings.pageTitle,
               pageDescription: settings.pageDescription,
@@ -1046,6 +1060,7 @@ export const useMeetingStore = defineStore("meeting", {
           queryPaused: settings.queryPaused,
           fields: [...settings.fields],
           matchMode: settings.matchMode,
+          allowMultipleResults: settings.allowMultipleResults,
           combinedQueryTypes: [...settings.combinedQueryTypes],
           pageTitle: settings.pageTitle,
           pageDescription: settings.pageDescription,
@@ -1080,14 +1095,13 @@ export const useMeetingStore = defineStore("meeting", {
         return saved;
       }
     },
-    async loadPublicQuerySettings(params: { meetingId?: string | number | null; meetingCode?: string | null }) {
+    async loadPublicQuerySettings(params: { publicQueryToken?: string | null }) {
       try {
         const settings = mapQuerySettings(
           unwrapApi(
             await http.get<MeetingQuerySettingsDto>("/public/query-settings", {
               params: {
-                meetingId: params.meetingId || undefined,
-                meetingCode: params.meetingCode || undefined
+                token: params.publicQueryToken || undefined
               }
             })
           )
@@ -1099,11 +1113,13 @@ export const useMeetingStore = defineStore("meeting", {
         if (!this.meetings.length) {
           this.loadDemoData();
         }
-        const meeting =
-          this.meetings.find((item) => item.id === String(params.meetingId)) ||
-          this.meetings.find((item) => item.code === params.meetingCode) ||
-          this.currentMeeting ||
-          this.meetings[0];
+        if (!params.publicQueryToken) {
+          throw new Error("公开查询链接无效");
+        }
+        const meeting = this.meetings.find((item) => item.publicQueryToken === params.publicQueryToken);
+        if (!meeting) {
+          throw new Error("公开查询链接无效");
+        }
         return meetingToQuerySettings(meeting);
       }
     },
@@ -1111,54 +1127,51 @@ export const useMeetingStore = defineStore("meeting", {
       return unwrapApi(await http.get<PublicCaptchaDto>("/public/captcha"));
     },
     async publicSeatQuery(payload: {
-      meetingId?: string | number | null;
-      meetingCode?: string | null;
+      publicQueryToken?: string | null;
       values: Record<PublicQueryField, string>;
       captchaId?: string | null;
       captchaAnswer?: string | null;
     }) {
       try {
-        return unwrapApi(await http.post<SeatQueryResult>("/public/seat-query", payload));
+        return unwrapApi(await http.post<PublicQueryResponse<SeatQueryResult>>("/public/seat-query", payload));
       } catch (error) {
         if (!canUseDemoFallback(error)) throw new Error(extractErrorMessage(error, "座位查询失败"));
         return localSeatQuery(this, payload);
       }
     },
     async publicRoomQuery(payload: {
-      meetingId?: string | number | null;
-      meetingCode?: string | null;
+      publicQueryToken?: string | null;
       values: Record<PublicQueryField, string>;
       captchaId?: string | null;
       captchaAnswer?: string | null;
     }) {
       try {
-        return unwrapApi(await http.post<RoomQueryResult>("/public/room-query", payload));
+        return unwrapApi(await http.post<PublicQueryResponse<RoomQueryResult>>("/public/room-query", payload));
       } catch (error) {
         if (!canUseDemoFallback(error)) throw new Error(extractErrorMessage(error, "住宿查询失败"));
         return localRoomQuery(this, payload);
       }
     },
     async publicDinnerQuery(payload: {
-      meetingId?: string | number | null;
-      meetingCode?: string | null;
+      publicQueryToken?: string | null;
       values: Record<PublicQueryField, string>;
       captchaId?: string | null;
       captchaAnswer?: string | null;
     }) {
       try {
-        return unwrapApi(await http.post<DinnerQueryResult>("/public/dinner-query", payload));
+        return unwrapApi(await http.post<PublicQueryResponse<DinnerQueryResult>>("/public/dinner-query", payload));
       } catch (error) {
         if (!canUseDemoFallback(error)) throw new Error(extractErrorMessage(error, "晚宴查询失败"));
         return localDinnerQuery(this, payload);
       }
     },
     async publicSelfCheckin(payload: {
-      meetingId?: string | number | null;
-      meetingCode?: string | null;
+      publicQueryToken?: string | null;
       values: Record<PublicQueryField, string>;
       captchaId?: string | null;
       captchaAnswer?: string | null;
       checkinSource?: PublicCheckinSource;
+      checkinPage?: PublicPageKey;
     }) {
       try {
         return unwrapApi(await http.post<PublicCheckinResult>("/public/checkin", payload));
@@ -1214,13 +1227,15 @@ export const useMeetingStore = defineStore("meeting", {
       }
     },
     applyMeetingQuerySettings(settings: MeetingQuerySettings) {
-      const meeting = this.meetings.find((item) => item.id === settings.meetingId || item.code === settings.meetingCode);
+      const meeting = this.meetings.find((item) => item.id === settings.meetingId || item.code === settings.meetingCode || item.publicQueryToken === settings.publicQueryToken);
       if (!meeting) return;
+      meeting.publicQueryToken = settings.publicQueryToken;
       meeting.seatQueryEnabled = settings.seatQueryEnabled;
       meeting.roomQueryEnabled = settings.roomQueryEnabled;
       meeting.dinnerQueryEnabled = settings.dinnerQueryEnabled;
       meeting.checkinEnabled = settings.checkinEnabled;
       meeting.selfCheckinEnabled = settings.selfCheckinEnabled;
+      meeting.publicQueryAllowMultipleResults = settings.allowMultipleResults;
       meeting.publicQueryFields = [...settings.fields];
       meeting.publicQueryMatchMode = settings.matchMode;
     },
@@ -1562,6 +1577,7 @@ export const useMeetingStore = defineStore("meeting", {
         const meeting: Meeting = {
           id: `m-${Date.now()}`,
           code: request.code || localMeetingCode(),
+          publicQueryToken: fallbackPublicQueryToken(request.code || payload.name),
           name: request.name,
           organizer: request.organizer,
           venue: request.venueName || "",
@@ -1604,6 +1620,7 @@ export const useMeetingStore = defineStore("meeting", {
         const meeting: Meeting = {
           ...current,
           code: current.code || request.code || localMeetingCode(),
+          publicQueryToken: current.publicQueryToken || fallbackPublicQueryToken(current.code || request.code),
           name: request.name,
           organizer: request.organizer,
           coOrganizer: request.coOrganizer,
@@ -2593,6 +2610,7 @@ function mapMeetingSummary(item: MeetingSummaryDto): Meeting {
   return {
     id: idOf(item.id),
     code: item.code,
+    publicQueryToken: item.publicQueryToken || fallbackPublicQueryToken(item.code),
     name: item.name,
     organizer: "主办方",
     venue: item.location || "",
@@ -2637,6 +2655,7 @@ function mapMeetingEntity(item: MeetingDetailDto["meeting"]): Meeting {
   return {
     id: idOf(item.id),
     code: item.code,
+    publicQueryToken: item.publicQueryToken || fallbackPublicQueryToken(item.code),
     name: item.name,
     organizer: item.organizer || "主办方",
     coOrganizer: item.coOrganizer || "",
@@ -2869,6 +2888,7 @@ function buildDefaultPageContents(base: {
   seatNotice?: string;
   roomNotice?: string;
   dinnerNotice?: string;
+  resultCheckinEnabled?: boolean;
 }): Record<PublicPageKey, PublicPageContent> {
   const title = base.pageTitle || `${base.meetingName}查询`;
   const description = base.pageDescription || "";
@@ -2876,9 +2896,10 @@ function buildDefaultPageContents(base: {
   const publisher = base.publisher || "";
   const buttonText = base.buttonText || "立即查询";
   const emptyMessage = base.emptyMessage || "未查询到结果，请核对信息后重试";
+  const resultCheckinEnabled = base.resultCheckinEnabled ?? true;
   return {
     entry: { title, description, announcement, publisher },
-    combined: { title, description, announcement, publisher, buttonText, emptyMessage },
+    combined: { title, description, announcement, publisher, buttonText, emptyMessage, checkinEnabled: resultCheckinEnabled },
     seat: {
       title,
       description,
@@ -2886,7 +2907,8 @@ function buildDefaultPageContents(base: {
       publisher,
       buttonText,
       emptyMessage,
-      notice: base.seatNotice || defaultSeatNotice
+      notice: base.seatNotice || defaultSeatNotice,
+      checkinEnabled: resultCheckinEnabled
     },
     room: {
       title,
@@ -2895,7 +2917,8 @@ function buildDefaultPageContents(base: {
       publisher,
       buttonText,
       emptyMessage,
-      notice: base.roomNotice || defaultRoomNotice
+      notice: base.roomNotice || defaultRoomNotice,
+      checkinEnabled: resultCheckinEnabled
     },
     dinner: {
       title,
@@ -2904,7 +2927,8 @@ function buildDefaultPageContents(base: {
       publisher,
       buttonText,
       emptyMessage,
-      notice: base.dinnerNotice || defaultDinnerNotice
+      notice: base.dinnerNotice || defaultDinnerNotice,
+      checkinEnabled: resultCheckinEnabled
     },
     checkin: { title, description, announcement, publisher, buttonText: "自助签到" }
   };
@@ -2970,12 +2994,14 @@ function mapQuerySettings(item: MeetingQuerySettingsDto): MeetingQuerySettings {
       emptyMessage,
       seatNotice,
       roomNotice,
-      dinnerNotice
+      dinnerNotice,
+      resultCheckinEnabled: item.checkinEnabled ?? true
     })
   );
   return {
     meetingId: idOf(item.meetingId),
     meetingCode: item.meetingCode,
+    publicQueryToken: item.publicQueryToken || fallbackPublicQueryToken(item.meetingCode),
     meetingName: item.meetingName,
     seatQueryEnabled: item.seatQueryEnabled,
     roomQueryEnabled: item.roomQueryEnabled,
@@ -2985,6 +3011,7 @@ function mapQuerySettings(item: MeetingQuerySettingsDto): MeetingQuerySettings {
     queryPaused: Boolean(item.queryPaused),
     fields: parseQueryFields(item.fields),
     matchMode: item.matchMode || "FUZZY",
+    allowMultipleResults: Boolean(item.allowMultipleResults),
     combinedQueryTypes: normalizeCombinedQueryTypes(item.combinedQueryTypes),
     pageTitle,
     pageDescription,
@@ -3032,11 +3059,13 @@ function meetingToQuerySettings(meeting?: Meeting | null): MeetingQuerySettings 
     emptyMessage: "未查询到结果，请核对信息后重试",
     seatNotice: defaultSeatNotice,
     roomNotice: defaultRoomNotice,
-    dinnerNotice: defaultDinnerNotice
+    dinnerNotice: defaultDinnerNotice,
+    resultCheckinEnabled: meeting?.checkinEnabled ?? true
   });
   return {
     meetingId: meeting?.id || "",
     meetingCode: meeting?.code || "",
+    publicQueryToken: meeting?.publicQueryToken || "",
     meetingName,
     seatQueryEnabled: meeting?.seatQueryEnabled ?? true,
     roomQueryEnabled: meeting?.roomQueryEnabled ?? true,
@@ -3046,6 +3075,7 @@ function meetingToQuerySettings(meeting?: Meeting | null): MeetingQuerySettings 
     queryPaused: false,
     fields: meeting?.publicQueryFields?.length ? meeting.publicQueryFields : ["PHONE", "NAME"],
     matchMode: meeting?.publicQueryMatchMode || "FUZZY",
+    allowMultipleResults: Boolean(meeting?.publicQueryAllowMultipleResults),
     combinedQueryTypes: [...defaultCombinedQueryTypes],
     pageTitle: `${meetingName}查询`,
     pageDescription: "",
@@ -3112,7 +3142,7 @@ function mapPublicQuerySummary(item: PublicQuerySummaryDto): PublicQuerySummary 
 
 function localSeatQuery(
   store: ReturnType<typeof useMeetingStore>,
-  payload: { meetingId?: string | number | null; meetingCode?: string | null; values: Record<PublicQueryField, string> }
+  payload: { publicQueryToken?: string | null; values: Record<PublicQueryField, string> }
 ): SeatQueryResult {
   const meeting = resolveLocalMeeting(store, payload);
   if (!meeting.seatQueryEnabled) throw new Error("座位查询尚未开放");
@@ -3149,7 +3179,7 @@ function localSeatQuery(
 
 function localRoomQuery(
   store: ReturnType<typeof useMeetingStore>,
-  payload: { meetingId?: string | number | null; meetingCode?: string | null; values: Record<PublicQueryField, string> }
+  payload: { publicQueryToken?: string | null; values: Record<PublicQueryField, string> }
 ): RoomQueryResult {
   const meeting = resolveLocalMeeting(store, payload);
   if (!meeting.roomQueryEnabled) throw new Error("住宿查询尚未开放");
@@ -3171,7 +3201,7 @@ function localRoomQuery(
 
 function localDinnerQuery(
   store: ReturnType<typeof useMeetingStore>,
-  payload: { meetingId?: string | number | null; meetingCode?: string | null; values: Record<PublicQueryField, string> }
+  payload: { publicQueryToken?: string | null; values: Record<PublicQueryField, string> }
 ): DinnerQueryResult {
   const meeting = resolveLocalMeeting(store, payload);
   if (!meeting.dinnerQueryEnabled) throw new Error("晚宴查询尚未开放");
@@ -3192,12 +3222,15 @@ function localDinnerQuery(
 
 function localPublicSelfCheckin(
   store: ReturnType<typeof useMeetingStore>,
-  payload: { meetingId?: string | number | null; meetingCode?: string | null; values: Record<PublicQueryField, string>; checkinSource?: PublicCheckinSource }
+  payload: { publicQueryToken?: string | null; values: Record<PublicQueryField, string>; checkinSource?: PublicCheckinSource; checkinPage?: PublicPageKey }
 ): PublicCheckinResult {
   const meeting = resolveLocalMeeting(store, payload);
   const source = payload.checkinSource || "SELF";
   if (source === "RESULT") {
-    if (!meeting.checkinEnabled) throw new Error("查询后签到按钮尚未开放");
+    const settings = meetingToQuerySettings(meeting);
+    const pageKey = normalizeLocalResultCheckinPage(payload.checkinPage);
+    const pageEnabled = settings.pageContents[pageKey].checkinEnabled ?? settings.checkinEnabled;
+    if (!pageEnabled) throw new Error("当前页面查询后签到按钮尚未开放");
   } else if (!meeting.selfCheckinEnabled) {
     throw new Error("签到独立页尚未开放");
   }
@@ -3250,6 +3283,10 @@ function localPublicSelfCheckin(
   };
 }
 
+function normalizeLocalResultCheckinPage(pageKey?: PublicPageKey): Extract<PublicPageKey, "combined" | "seat" | "room" | "dinner"> {
+  return pageKey === "seat" || pageKey === "room" || pageKey === "dinner" ? pageKey : "combined";
+}
+
 function localAdminCandidates(store: ReturnType<typeof useMeetingStore>, meetingId: string, values: Record<PublicQueryField, string>): AdminQueryCandidate[] {
   const meeting = store.meetings.find((item) => item.id === meetingId);
   if (!meeting) throw new Error("会议不存在");
@@ -3268,12 +3305,11 @@ function localAdminCandidates(store: ReturnType<typeof useMeetingStore>, meeting
     }));
 }
 
-function resolveLocalMeeting(store: ReturnType<typeof useMeetingStore>, payload: { meetingId?: string | number | null; meetingCode?: string | null }) {
-  const meeting =
-    store.meetings.find((item) => item.id === String(payload.meetingId)) ||
-    store.meetings.find((item) => item.code === payload.meetingCode) ||
-    store.currentMeeting;
-  if (!meeting) throw new Error("会议不存在");
+function resolveLocalMeeting(store: ReturnType<typeof useMeetingStore>, payload: { publicQueryToken?: string | null }) {
+  const token = payload.publicQueryToken?.trim();
+  if (!token) throw new Error("公开查询链接无效");
+  const meeting = store.meetings.find((item) => item.publicQueryToken === token);
+  if (!meeting) throw new Error("公开查询链接无效");
   return meeting;
 }
 

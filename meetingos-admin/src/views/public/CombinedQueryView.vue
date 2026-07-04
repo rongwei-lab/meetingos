@@ -36,54 +36,63 @@
 
       <div v-if="hasQueried && queryResultEnabled" class="combined-results">
         <template v-if="combinedSeatEnabled">
-          <public-result-ticket
-            v-if="seatResult && seatRows.length"
-            kind="seat"
-            :attendee-name="seatResult.attendeeName"
-            :rows="seatRows"
-            :notice="seatNotice"
-          />
+          <template v-if="seatItems.length">
+            <public-result-ticket
+              v-for="item in seatItems"
+              :key="item.result.attendeeId"
+              kind="seat"
+              :attendee-name="item.result.attendeeName"
+              :rows="item.rows"
+              :notice="seatNotice"
+            />
+          </template>
           <section v-else class="public-result">
-            <n-alert v-if="seatResult" type="info" :bordered="false">当前未配置可展示的座位结果字段</n-alert>
+            <n-alert v-if="seatResults.length" type="info" :bordered="false">当前未配置可展示的座位结果字段</n-alert>
             <n-alert v-else type="warning" :bordered="false">{{ seatMessage }}</n-alert>
           </section>
         </template>
 
         <template v-if="combinedRoomEnabled">
-          <public-result-ticket
-            v-if="roomResult && roomRows.length"
-            kind="room"
-            :attendee-name="roomResult.attendeeName"
-            :rows="roomRows"
-            :notice="roomNotice"
-          />
+          <template v-if="roomItems.length">
+            <public-result-ticket
+              v-for="item in roomItems"
+              :key="item.result.attendeeId"
+              kind="room"
+              :attendee-name="item.result.attendeeName"
+              :rows="item.rows"
+              :notice="roomNotice"
+            />
+          </template>
           <section v-else class="public-result">
-            <n-alert v-if="roomResult" type="info" :bordered="false">当前未配置可展示的住宿结果字段</n-alert>
+            <n-alert v-if="roomResults.length" type="info" :bordered="false">当前未配置可展示的住宿结果字段</n-alert>
             <n-alert v-else type="warning" :bordered="false">{{ roomMessage }}</n-alert>
           </section>
         </template>
 
         <template v-if="combinedDinnerEnabled">
-          <public-result-ticket
-            v-if="dinnerResult && dinnerRows.length"
-            kind="dinner"
-            :attendee-name="dinnerResult.attendeeName"
-            :rows="dinnerRows"
-            :notice="dinnerNotice"
-          />
+          <template v-if="dinnerItems.length">
+            <public-result-ticket
+              v-for="item in dinnerItems"
+              :key="item.result.attendeeId"
+              kind="dinner"
+              :attendee-name="item.result.attendeeName"
+              :rows="item.rows"
+              :notice="dinnerNotice"
+            />
+          </template>
           <section v-else class="public-result">
-            <n-alert v-if="dinnerResult" type="info" :bordered="false">当前未配置可展示的晚宴结果字段</n-alert>
+            <n-alert v-if="dinnerResults.length" type="info" :bordered="false">当前未配置可展示的晚宴结果字段</n-alert>
             <n-alert v-else type="warning" :bordered="false">{{ dinnerMessage }}</n-alert>
           </section>
         </template>
       </div>
 
       <public-result-checkin-action
-        v-if="hasQueryResult && settings?.checkinEnabled"
+        v-if="canCheckinAfterQuery && pageResultCheckinEnabled(settings, 'combined')"
         :settings="settings"
-        :meeting-id="queryMeetingId"
-        :meeting-code="queryMeetingCode || null"
+        :public-query-token="publicQueryToken || settings?.publicQueryToken"
         :values="values"
+        page-key="combined"
       />
 
       <section v-if="checkinResult" class="self-checkin-result" :class="`self-checkin-result-${checkinResultTone}`">
@@ -132,8 +141,10 @@ import {
   pageDescriptionFor,
   pageNoticeFor,
   pagePublisherFor,
+  pageResultCheckinEnabled,
   pageTitleFor,
   publicPageStyle,
+  publicQueryResults,
   queryWindowState
 } from "./queryDisplay";
 
@@ -144,9 +155,9 @@ const loading = ref(false);
 const hasQueried = ref(false);
 const settings = ref<MeetingQuerySettings | null>(null);
 const settingsError = ref("");
-const seatResult = ref<SeatQueryResult | null>(null);
-const roomResult = ref<RoomQueryResult | null>(null);
-const dinnerResult = ref<DinnerQueryResult | null>(null);
+const seatResults = ref<SeatQueryResult[]>([]);
+const roomResults = ref<RoomQueryResult[]>([]);
+const dinnerResults = ref<DinnerQueryResult[]>([]);
 const checkinResult = ref<PublicCheckinResult | null>(null);
 const seatMessage = ref("尚未查询座位");
 const roomMessage = ref("尚未查询住宿");
@@ -165,12 +176,7 @@ const values = reactive<Record<PublicQueryField, string>>({
   EMAIL: ""
 });
 
-const queryMeetingId = computed(() => {
-  const raw = route.query.meetingId ?? route.query.mid;
-  const parsed = Number(Array.isArray(raw) ? raw[0] : raw);
-  return Number.isFinite(parsed) ? parsed : null;
-});
-const queryMeetingCode = computed(() => String(route.query.meetingCode || route.params.meetingCode || ""));
+const publicQueryToken = computed(() => String(route.query.token || ""));
 const activeFields = computed(() => settings.value?.fields || []);
 const combinedQueryTypeSet = computed(() => new Set(settings.value?.combinedQueryTypes || ["SEAT", "ROOM", "DINNER"]));
 const combinedSeatEnabled = computed(() => Boolean(settings.value?.seatQueryEnabled && combinedQueryTypeSet.value.has("SEAT")));
@@ -183,14 +189,21 @@ const publisher = computed(() => pagePublisherFor(settings.value, "combined"));
 const subtitle = computed(() => pageDescriptionFor(settings.value, "combined", "查询会议安排，或完成自助签到"));
 const announcement = computed(() => pageAnnouncementFor(settings.value, "combined"));
 const windowState = computed(() => queryWindowState(settings.value));
-const seatRows = computed(() => buildSeatRows(settings.value, seatResult.value));
-const roomRows = computed(() => buildRoomRows(settings.value, roomResult.value));
-const dinnerRows = computed(() => buildDinnerRows(settings.value, dinnerResult.value));
+const seatItems = computed(() => seatResults.value
+  .map((result) => ({ result, rows: buildSeatRows(settings.value, result) }))
+  .filter((item) => item.rows.length));
+const roomItems = computed(() => roomResults.value
+  .map((result) => ({ result, rows: buildRoomRows(settings.value, result) }))
+  .filter((item) => item.rows.length));
+const dinnerItems = computed(() => dinnerResults.value
+  .map((result) => ({ result, rows: buildDinnerRows(settings.value, result) }))
+  .filter((item) => item.rows.length));
 const hasQueryResult = computed(() => Boolean(
-  (seatResult.value && seatRows.value.length) ||
-  (roomResult.value && roomRows.value.length) ||
-  (dinnerResult.value && dinnerRows.value.length)
+  seatItems.value.length ||
+  roomItems.value.length ||
+  dinnerItems.value.length
 ));
+const canCheckinAfterQuery = computed(() => hasQueryResult.value && ![seatResults.value, roomResults.value, dinnerResults.value].some((items) => items.length > 1));
 const hasFinalResult = computed(() => Boolean(hasQueryResult.value || checkinResult.value));
 const safeLogoUrl = computed(() => sanitizeImageUrl(settings.value?.logoUrl));
 const primaryButtonText = computed(() => (checkinOnlyEnabled.value ? "自助签到" : pageButtonTextFor(settings.value, "combined")));
@@ -229,8 +242,7 @@ onBeforeUnmount(() => {
 async function loadSettings() {
   try {
     settings.value = await store.loadPublicQuerySettings({
-      meetingId: queryMeetingId.value,
-      meetingCode: queryMeetingCode.value || undefined
+      publicQueryToken: publicQueryToken.value || undefined
     });
     if (settings.value.captchaEnabled) {
       await loadCaptcha();
@@ -257,9 +269,9 @@ async function query() {
 
   loading.value = true;
   hasQueried.value = true;
-  seatResult.value = null;
-  roomResult.value = null;
-  dinnerResult.value = null;
+  seatResults.value = [];
+  roomResults.value = [];
+  dinnerResults.value = [];
   checkinResult.value = null;
   seatMessage.value = combinedSeatEnabled.value ? "座位查询中" : "综合查询未展示座位结果";
   roomMessage.value = combinedRoomEnabled.value ? "住宿查询中" : "综合查询未展示住宿结果";
@@ -270,8 +282,7 @@ async function query() {
    * 座位结果仍应展示，住宿区域则显示后端返回的明确原因。
    */
   const payload = {
-    meetingId: queryMeetingId.value,
-    meetingCode: queryMeetingCode.value || undefined,
+    publicQueryToken: publicQueryToken.value || settings.value.publicQueryToken,
     values,
     captchaId: captchaId.value,
     captchaAnswer: captchaAnswer.value
@@ -310,7 +321,7 @@ async function query() {
     tasks.push(
       store.publicSeatQuery(payload)
         .then((result) => {
-          seatResult.value = result;
+          seatResults.value = publicQueryResults(result);
         })
         .catch((error) => {
           const rawMessage = error instanceof Error ? error.message : "座位查询失败";
@@ -323,7 +334,7 @@ async function query() {
     tasks.push(
       store.publicRoomQuery(payload)
         .then((result) => {
-          roomResult.value = result;
+          roomResults.value = publicQueryResults(result);
         })
         .catch((error) => {
           const rawMessage = error instanceof Error ? error.message : "住宿查询失败";
@@ -336,7 +347,7 @@ async function query() {
     tasks.push(
       store.publicDinnerQuery(payload)
         .then((result) => {
-          dinnerResult.value = result;
+          dinnerResults.value = publicQueryResults(result);
         })
         .catch((error) => {
           const rawMessage = error instanceof Error ? error.message : "晚宴查询失败";
@@ -347,9 +358,9 @@ async function query() {
 
   await Promise.allSettled(tasks);
   const enabledResults = [
-    combinedSeatEnabled.value ? seatResult.value : true,
-    combinedRoomEnabled.value ? roomResult.value : true,
-    combinedDinnerEnabled.value ? dinnerResult.value : true
+    combinedSeatEnabled.value ? seatResults.value.length : true,
+    combinedRoomEnabled.value ? roomResults.value.length : true,
+    combinedDinnerEnabled.value ? dinnerResults.value.length : true
   ];
   if (settings.value.captchaEnabled && enabledResults.some((result) => !result)) {
     await loadCaptcha();

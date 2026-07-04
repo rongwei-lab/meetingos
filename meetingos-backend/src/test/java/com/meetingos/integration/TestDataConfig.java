@@ -52,6 +52,7 @@ class TestDataConfig {
 
             Meeting meeting = new Meeting();
             meeting.setCode("NDEF2026");
+            meeting.setPublicQueryToken("pq_test_ndef2026");
             meeting.setName("2026年全国数字经济发展论坛");
             meeting.setLocation("北京国家会议中心");
             meeting.setVenueName("主会场");

@@ -188,6 +188,30 @@
   margin-top: 18px;
 }
 
+.public-multi-results {
+  display: grid;
+  grid-template-columns: 1fr;
+  gap: 22px;
+  margin-top: 20px;
+}
+
+.public-card-wide .public-multi-results {
+  grid-template-columns: repeat(auto-fit, minmax(320px, 1fr));
+}
+
+.public-multi-result-item {
+  display: grid;
+  justify-items: center;
+  gap: 16px;
+  min-width: 0;
+}
+
+.public-multi-results > .result-ticket,
+.public-multi-result-item > .result-ticket {
+  width: 100%;
+  margin-top: 0;
+}
+
 .public-result {
   display: grid;
   gap: 14px;
@@ -293,6 +317,19 @@
   box-shadow: 0 28px 70px rgba(46, 54, 103, 0.16);
 }
 
+.public-card-result-only > .public-multi-results {
+  width: 100%;
+  margin: 0;
+}
+
+.public-card-result-only > .public-multi-results > .result-ticket,
+.public-card-result-only > .public-multi-results > .public-multi-result-item > .result-ticket {
+  width: 100%;
+  max-width: 100%;
+  border-radius: 28px;
+  box-shadow: 0 28px 70px rgba(46, 54, 103, 0.16);
+}
+
 .public-card-seat-map > .result-ticket {
   width: min(400px, 100%);
 }
@@ -367,6 +404,12 @@
     box-shadow: none;
   }
 
+  :global(body.public-result-mode .public-card-result-only > .public-multi-results > .result-ticket),
+  :global(body.public-result-mode .public-card-result-only > .public-multi-results > .public-multi-result-item > .result-ticket) {
+    border-radius: 0;
+    box-shadow: none;
+  }
+
   .public-card-seat-map {
     width: 100%;
     max-width: 400px;
@@ -384,6 +427,10 @@
   :global(body.public-result-mode .combined-results .result-ticket) {
     border-radius: 0;
     box-shadow: none;
+  }
+
+  :global(body.public-result-mode .public-card-wide .public-multi-results) {
+    grid-template-columns: 1fr;
   }
 
   .result-row {

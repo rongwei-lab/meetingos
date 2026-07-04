@@ -1,5 +1,5 @@
 <template>
-  <section v-if="settings?.checkinEnabled" class="result-checkin-action">
+  <section v-if="canShowCheckin" class="result-checkin-action">
     <n-alert v-if="result" :type="resultAlertType" :bordered="false" class="result-checkin-message">
       <div class="result-checkin-message-body">
         <strong>{{ resultTitle }}</strong>
@@ -9,7 +9,7 @@
     </n-alert>
 
     <template v-else>
-      <div v-if="settings.captchaEnabled" class="result-checkin-captcha">
+      <div v-if="settings?.captchaEnabled" class="result-checkin-captcha">
         <span>{{ captchaQuestion || "验证码" }}</span>
         <div class="captcha-row">
           <n-input v-model:value="captchaAnswer" placeholder="请输入计算结果" />
@@ -17,7 +17,7 @@
         </div>
       </div>
 
-      <n-button type="primary" block :color="settings.themeColor" :loading="loading" @click="submitCheckin">
+      <n-button type="primary" block :color="settings?.themeColor" :loading="loading" @click="submitCheckin">
         立即签到
       </n-button>
     </template>
@@ -29,14 +29,14 @@ import { computed, onMounted, ref } from "vue";
 import { useMessage } from "naive-ui";
 import { useMeetingStore } from "@/stores/meeting";
 import { formatDateTimeSecondLabel } from "@/utils/meetingDisplay";
-import type { MeetingQuerySettings, PublicCheckinResult, PublicQueryField } from "@/utils/types";
-import { normalizePublicQueryError } from "./queryDisplay";
+import type { MeetingQuerySettings, PublicCheckinResult, PublicQueryField, PublicResultCheckinPageKey } from "@/utils/types";
+import { normalizePublicQueryError, pageResultCheckinEnabled } from "./queryDisplay";
 
 const props = defineProps<{
   settings: MeetingQuerySettings | null;
-  meetingId?: string | number | null;
-  meetingCode?: string | null;
+  publicQueryToken?: string | null;
   values: Record<PublicQueryField, string>;
+  pageKey: PublicResultCheckinPageKey;
 }>();
 
 const store = useMeetingStore();
@@ -47,6 +47,7 @@ const captchaQuestion = ref("");
 const captchaAnswer = ref("");
 const captchaLoading = ref(false);
 const result = ref<PublicCheckinResult | null>(null);
+const canShowCheckin = computed(() => pageResultCheckinEnabled(props.settings, props.pageKey));
 
 const resultAlertType = computed(() => {
   if (result.value?.status === "SUCCESS") return "success";
@@ -87,12 +88,12 @@ async function submitCheckin() {
   loading.value = true;
   try {
     result.value = await store.publicSelfCheckin({
-      meetingId: props.meetingId,
-      meetingCode: props.meetingCode || undefined,
+      publicQueryToken: props.publicQueryToken || undefined,
       values: { ...props.values },
       captchaId: captchaId.value,
       captchaAnswer: captchaAnswer.value,
-      checkinSource: "RESULT"
+      checkinSource: "RESULT",
+      checkinPage: props.pageKey
     });
     if (result.value.status === "SUCCESS") {
       message.success("签到成功");

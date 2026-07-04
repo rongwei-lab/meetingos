@@ -1,5 +1,5 @@
 import type { CSSProperties } from "vue";
-import type { DinnerQueryResult, MeetingQuerySettings, PublicPageContent, PublicPageKey, PublicQueryResultField, RoomQueryResult, SeatQueryResult } from "@/utils/types";
+import type { DinnerQueryResult, MeetingQuerySettings, PublicPageContent, PublicPageKey, PublicQueryResponse, PublicQueryResultsResponse, PublicQueryResultField, PublicResultCheckinPageKey, RoomQueryResult, SeatQueryResult } from "@/utils/types";
 import { sanitizeImageUrl } from "@/utils/safeUrl";
 
 export type QueryResultKind = "seat" | "room" | "dinner";
@@ -27,6 +27,13 @@ export function pageTitle(settings: MeetingQuerySettings | null, fallback: strin
 
 export function pageContent(settings: MeetingQuerySettings | null, key: PublicPageKey): PublicPageContent {
   return settings?.pageContents?.[key] || {};
+}
+
+export function pageResultCheckinEnabled(settings: MeetingQuerySettings | null, key: PublicResultCheckinPageKey) {
+  if (!settings) return false;
+  const pageEnabled = pageContent(settings, key).checkinEnabled;
+  // 老数据没有页面级开关时，继续使用原全局 checkinEnabled 作为默认值。
+  return pageEnabled ?? settings.checkinEnabled;
 }
 
 export function pageTitleFor(settings: MeetingQuerySettings | null, key: PublicPageKey, fallback: string) {
@@ -116,6 +123,18 @@ export function buildRoomRows(settings: MeetingQuerySettings | null, result: Roo
 
 export function buildDinnerRows(settings: MeetingQuerySettings | null, result: DinnerQueryResult | null) {
   return buildResultRows(settings, result, "dinner");
+}
+
+export function publicQueryResults<T>(response: PublicQueryResponse<T> | null): T[] {
+  if (!response) return [];
+  if (isPublicQueryResultsResponse(response)) {
+    return response.results || [];
+  }
+  return [response];
+}
+
+function isPublicQueryResultsResponse<T>(response: PublicQueryResponse<T>): response is PublicQueryResultsResponse<T> {
+  return Boolean(response && typeof response === "object" && "multiple" in response && "results" in response);
 }
 
 function buildResultRows(

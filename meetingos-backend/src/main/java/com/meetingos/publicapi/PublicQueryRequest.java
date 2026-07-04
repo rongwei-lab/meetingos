@@ -5,22 +5,21 @@ import jakarta.validation.constraints.NotNull;
 import java.util.Map;
 
 public record PublicQueryRequest(
-        Long meetingId,
-        String meetingCode,
+        String publicQueryToken,
         @NotNull Map<PublicQueryField, String> values,
         String captchaId,
         String captchaAnswer,
-        String checkinSource
+        String checkinSource,
+        String checkinPage
 ) {
-    public PublicQueryRequest(Long meetingId, String meetingCode, Map<PublicQueryField, String> values) {
-        this(meetingId, meetingCode, values, null, null, null);
+    public PublicQueryRequest(String publicQueryToken, Map<PublicQueryField, String> values) {
+        this(publicQueryToken, values, null, null, null, null);
     }
 
-    public PublicQueryRequest(Long meetingId,
-                              String meetingCode,
+    public PublicQueryRequest(String publicQueryToken,
                               Map<PublicQueryField, String> values,
                               String captchaId,
                               String captchaAnswer) {
-        this(meetingId, meetingCode, values, captchaId, captchaAnswer, null);
+        this(publicQueryToken, values, captchaId, captchaAnswer, null, null);
     }
 }

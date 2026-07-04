@@ -97,12 +97,7 @@ const values = reactive<Record<PublicQueryField, string>>({
   EMAIL: ""
 });
 
-const queryMeetingId = computed(() => {
-  const raw = route.query.meetingId ?? route.query.mid;
-  const parsed = Number(Array.isArray(raw) ? raw[0] : raw);
-  return Number.isFinite(parsed) ? parsed : null;
-});
-const queryMeetingCode = computed(() => String(route.query.meetingCode || route.params.meetingCode || ""));
+const publicQueryToken = computed(() => String(route.query.token || ""));
 const activeFields = computed(() => settings.value?.fields || []);
 const publisher = computed(() => pagePublisherFor(settings.value, "checkin"));
 const subtitle = computed(() => pageDescriptionFor(settings.value, "checkin", "请填写报名信息完成现场签到"));
@@ -137,8 +132,7 @@ onMounted(loadSettings);
 async function loadSettings() {
   try {
     settings.value = await store.loadPublicQuerySettings({
-      meetingId: queryMeetingId.value,
-      meetingCode: queryMeetingCode.value || undefined
+      publicQueryToken: publicQueryToken.value || undefined
     });
     if (settings.value.captchaEnabled) {
       await loadCaptcha();
@@ -167,8 +161,7 @@ async function submitCheckin() {
   errorText.value = "";
   try {
     result.value = await store.publicSelfCheckin({
-      meetingId: queryMeetingId.value,
-      meetingCode: queryMeetingCode.value || undefined,
+      publicQueryToken: publicQueryToken.value || settings.value.publicQueryToken,
       values,
       captchaId: captchaId.value,
       captchaAnswer: captchaAnswer.value,

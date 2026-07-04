@@ -10,6 +10,7 @@ export type PublicQueryType = "SEAT" | "ROOM" | "DINNER" | "CHECKIN";
 export type CombinedQueryType = Extract<PublicQueryType, "SEAT" | "ROOM" | "DINNER">;
 export type PublicQueryStatus = "SUCCESS" | "FAILED";
 export type PublicCheckinSource = "SELF" | "RESULT";
+export type PublicResultCheckinPageKey = Extract<PublicPageKey, "combined" | "seat" | "room" | "dinner">;
 export type PublicQueryResultField =
   | "ATTENDEE_NAME"
   | "ATTENDEE_PHONE"
@@ -34,6 +35,7 @@ export type PublicQueryResultField =
 export interface Meeting {
   id: string;
   code: string;
+  publicQueryToken: string;
   name: string;
   organizer: string;
   coOrganizer?: string;
@@ -65,6 +67,7 @@ export interface Meeting {
   dinnerQueryEnabled: boolean;
   checkinEnabled: boolean;
   selfCheckinEnabled: boolean;
+  publicQueryAllowMultipleResults?: boolean;
   publicQueryFields: PublicQueryField[];
   publicQueryMatchMode: PublicQueryMatchMode;
 }
@@ -153,11 +156,13 @@ export interface PublicPageContent {
   buttonText?: string;
   emptyMessage?: string;
   notice?: string;
+  checkinEnabled?: boolean;
 }
 
 export interface MeetingQuerySettings {
   meetingId: string;
   meetingCode: string;
+  publicQueryToken: string;
   meetingName: string;
   seatQueryEnabled: boolean;
   roomQueryEnabled: boolean;
@@ -167,6 +172,7 @@ export interface MeetingQuerySettings {
   queryPaused: boolean;
   fields: PublicQueryField[];
   matchMode: PublicQueryMatchMode;
+  allowMultipleResults: boolean;
   combinedQueryTypes: CombinedQueryType[];
   pageTitle: string;
   pageDescription?: string;
@@ -278,6 +284,14 @@ export interface DinnerQueryResult {
   dinnerTime?: string;
   remark?: string;
 }
+
+export interface PublicQueryResultsResponse<T> {
+  multiple: boolean;
+  total: number;
+  results: T[];
+}
+
+export type PublicQueryResponse<T> = T | PublicQueryResultsResponse<T>;
 
 export type PublicCheckinResultStatus = "SUCCESS" | "DUPLICATE" | "NOT_APPROVED" | "NOT_FOUND";
 

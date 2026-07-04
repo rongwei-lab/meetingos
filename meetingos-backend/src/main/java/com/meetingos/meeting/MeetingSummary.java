@@ -5,6 +5,7 @@ import java.time.LocalDateTime;
 public record MeetingSummary(
         Long id,
         String code,
+        String publicQueryToken,
         String name,
         LocalDateTime startTime,
         LocalDateTime endTime,

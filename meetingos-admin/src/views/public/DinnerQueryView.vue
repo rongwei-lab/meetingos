@@ -1,10 +1,12 @@
 <template>
   <main class="public-page" :style="publicPageStyle(settings)">
-    <section class="public-card">
-      <img v-if="safeLogoUrl" class="public-logo" :src="safeLogoUrl" alt="会议 Logo" />
-      <p v-if="publisher" class="public-kicker">{{ publisher }}</p>
-      <h1>{{ pageTitleFor(settings, "dinner", "晚宴桌号查询") }}</h1>
-      <p v-if="subtitle" class="public-subtitle">{{ subtitle }}</p>
+    <section class="public-card" :class="{ 'public-card-result-only': hasSingleVisibleResult, 'public-card-wide': hasMultipleVisibleResults }">
+      <template v-if="!hasRawResults">
+        <img v-if="safeLogoUrl" class="public-logo" :src="safeLogoUrl" alt="会议 Logo" />
+        <p v-if="publisher" class="public-kicker">{{ publisher }}</p>
+        <h1>{{ pageTitleFor(settings, "dinner", "晚宴桌号查询") }}</h1>
+        <p v-if="subtitle" class="public-subtitle">{{ subtitle }}</p>
+      </template>
 
       <n-alert v-if="!settings" class="public-alert" :type="settingsError ? 'warning' : 'info'" :bordered="false">
         {{ settingsError || "查询设置加载中" }}
@@ -19,7 +21,7 @@
         {{ windowState.message }}
       </n-alert>
 
-      <n-form v-else-if="settings && !result" label-placement="top" class="public-form">
+      <n-form v-else-if="settings && !hasRawResults" label-placement="top" class="public-form">
         <n-form-item v-for="field in activeFields" :key="field" :label="fieldLabel(field)">
           <n-input v-model:value="values[field]" :placeholder="`请输入${fieldLabel(field)}`" />
         </n-form-item>
@@ -34,16 +36,29 @@
         </n-button>
       </n-form>
 
-      <public-result-ticket
-        v-if="result && resultRows.length"
-        kind="dinner"
-        :attendee-name="result.attendeeName"
-        :rows="resultRows"
-        :notice="dinnerNotice"
+      <div v-if="resultItems.length" class="public-multi-results">
+        <public-result-ticket
+          v-for="item in resultItems"
+          :key="item.result.attendeeId"
+          kind="dinner"
+          :attendee-name="item.result.attendeeName"
+          :rows="item.rows"
+          :notice="dinnerNotice"
+        />
+      </div>
+      <public-result-checkin-action
+        v-if="resultItems.length === 1 && pageResultCheckinEnabled(settings, 'dinner')"
+        :settings="settings"
+        :public-query-token="publicQueryToken || settings?.publicQueryToken"
+        :values="values"
+        page-key="dinner"
       />
-      <n-alert v-else-if="messageText" class="public-alert" type="warning" :bordered="false">
+      <n-alert v-if="messageText" class="public-alert" type="warning" :bordered="false">
         {{ messageText }}
       </n-alert>
+      <section v-if="hasRawResults && !resultItems.length" class="public-result">
+        <n-alert type="info" :bordered="false">当前未配置可展示的晚宴结果字段</n-alert>
+      </section>
     </section>
   </main>
 </template>
@@ -55,6 +70,7 @@ import { useMessage } from "naive-ui";
 import { useMeetingStore } from "@/stores/meeting";
 import type { DinnerQueryResult, MeetingQuerySettings, PublicQueryField } from "@/utils/types";
 import { sanitizeImageUrl } from "@/utils/safeUrl";
+import PublicResultCheckinAction from "./PublicResultCheckinAction.vue";
 import PublicResultTicket from "./PublicResultTicket.vue";
 import {
   buildDinnerRows,
@@ -64,8 +80,10 @@ import {
   pageDescriptionFor,
   pageNoticeFor,
   pagePublisherFor,
+  pageResultCheckinEnabled,
   pageTitleFor,
   publicPageStyle,
+  publicQueryResults,
   queryWindowState
 } from "./queryDisplay";
 
@@ -75,7 +93,7 @@ const message = useMessage();
 const loading = ref(false);
 const settings = ref<MeetingQuerySettings | null>(null);
 const settingsError = ref("");
-const result = ref<DinnerQueryResult | null>(null);
+const results = ref<DinnerQueryResult[]>([]);
 const messageText = ref("");
 const captchaId = ref<string | null>(null);
 const captchaQuestion = ref("");
@@ -91,12 +109,7 @@ const values = reactive<Record<PublicQueryField, string>>({
   EMAIL: ""
 });
 
-const queryMeetingId = computed(() => {
-  const raw = route.query.meetingId ?? route.query.mid;
-  const parsed = Number(Array.isArray(raw) ? raw[0] : raw);
-  return Number.isFinite(parsed) ? parsed : null;
-});
-const queryMeetingCode = computed(() => String(route.query.meetingCode || route.params.meetingCode || ""));
+const publicQueryToken = computed(() => String(route.query.token || ""));
 const activeFields = computed(() => settings.value?.fields || []);
 const publisher = computed(() => pagePublisherFor(settings.value, "dinner"));
 const subtitle = computed(() => pageDescriptionFor(settings.value, "dinner"));
@@ -104,7 +117,12 @@ const announcement = computed(() => pageAnnouncementFor(settings.value, "dinner"
 const buttonText = computed(() => pageButtonTextFor(settings.value, "dinner"));
 const dinnerNotice = computed(() => pageNoticeFor(settings.value, "dinner"));
 const windowState = computed(() => queryWindowState(settings.value));
-const resultRows = computed(() => buildDinnerRows(settings.value, result.value));
+const resultItems = computed(() => results.value
+  .map((result) => ({ result, rows: buildDinnerRows(settings.value, result) }))
+  .filter((item) => item.rows.length));
+const hasRawResults = computed(() => results.value.length > 0);
+const hasSingleVisibleResult = computed(() => resultItems.value.length === 1);
+const hasMultipleVisibleResults = computed(() => resultItems.value.length > 1);
 const safeLogoUrl = computed(() => sanitizeImageUrl(settings.value?.logoUrl));
 
 onMounted(loadSettings);
@@ -112,8 +130,7 @@ onMounted(loadSettings);
 async function loadSettings() {
   try {
     settings.value = await store.loadPublicQuerySettings({
-      meetingId: queryMeetingId.value,
-      meetingCode: queryMeetingCode.value || undefined
+      publicQueryToken: publicQueryToken.value || undefined
     });
     if (settings.value.captchaEnabled) {
       await loadCaptcha();
@@ -139,16 +156,15 @@ async function query() {
   }
 
   loading.value = true;
-  result.value = null;
+  results.value = [];
   messageText.value = "";
   try {
-    result.value = await store.publicDinnerQuery({
-      meetingId: queryMeetingId.value,
-      meetingCode: queryMeetingCode.value || undefined,
+    results.value = publicQueryResults(await store.publicDinnerQuery({
+      publicQueryToken: publicQueryToken.value || settings.value.publicQueryToken,
       values,
       captchaId: captchaId.value,
       captchaAnswer: captchaAnswer.value
-    });
+    }));
   } catch (error) {
     const rawMessage = error instanceof Error ? error.message : "晚宴查询失败";
     messageText.value = normalizePublicQueryError(rawMessage, settings.value, "dinner");
