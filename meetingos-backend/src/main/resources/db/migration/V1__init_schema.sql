@@ -1,6 +1,6 @@
 -- MeetingOS 当前完整初始化结构。
--- 注意：这是合并后的 Flyway 基线脚本，适用于新库或可重建的开发库。
--- 已经执行过拆分版 V1~V5 的数据库需要重建或修正 Flyway 历史，避免版本缺失和 checksum 不一致。
+-- 注意：当前仓库仅保留一个 Flyway 初始化脚本，适用于新服务器、新数据库或可重建的开发库。
+-- 已执行过旧版 V1~V7 的数据库不要直接替换迁移文件启动，需要重建库或单独处理 Flyway 历史。
 
 create table app_users (
   id bigint primary key auto_increment,
@@ -24,6 +24,7 @@ create table meetings (
   created_at datetime(6) not null,
   updated_at datetime(6) not null,
   code varchar(64) not null,
+  public_query_token varchar(80) not null,
   name varchar(160) not null,
   organizer varchar(160),
   co_organizer varchar(160),
@@ -47,8 +48,11 @@ create table meetings (
   room_query_enabled boolean not null default false,
   dinner_query_enabled boolean not null default false,
   checkin_enabled boolean not null default true,
+  self_checkin_enabled boolean not null default true,
   public_query_fields varchar(255) not null default 'PHONE,NAME',
   public_query_match_mode varchar(20) not null default 'FUZZY',
+  public_query_allow_multiple_results boolean not null default false,
+  public_combined_query_types varchar(80) not null default 'SEAT,ROOM,DINNER',
   public_query_paused boolean not null default false,
   public_query_title varchar(160),
   public_query_description varchar(500),
@@ -61,6 +65,7 @@ create table meetings (
   public_query_seat_notice text,
   public_query_room_notice text,
   public_query_dinner_notice text,
+  public_query_page_content json,
   public_query_theme_color varchar(20) not null default '#2563eb',
   public_query_logo_url varchar(500),
   public_query_background_url varchar(500),
@@ -77,7 +82,8 @@ create table meetings (
   public_query_dinner_visible_result_fields varchar(500) not null default 'ATTENDEE_NAME,DINNER_TABLE_NO,DINNER_VENUE,DINNER_TIME,DINNER_REMARK',
   public_query_dinner_masked_result_fields varchar(500) not null default '',
   public_query_dinner_highlight_result_fields varchar(500) not null default 'DINNER_TABLE_NO',
-  constraint uk_meeting_code unique (code)
+  constraint uk_meeting_code unique (code),
+  constraint uk_meeting_public_query_token unique (public_query_token)
 );
 
 create table attendees (
@@ -123,6 +129,7 @@ create table tduck_form_bindings (
   form_key varchar(120) not null,
   form_name varchar(160) not null,
   registration_url varchar(500) not null,
+  registration_enabled boolean not null default true,
   binding_status varchar(32) not null,
   mapping_status varchar(32) not null,
   webhook_status varchar(32) not null,
@@ -373,6 +380,20 @@ create table public_query_history (
   index idx_public_query_history_meeting_type (meeting_id, query_type)
 );
 
+-- 当前初始化脚本已吸收历史性能索引，新库直接具备高频查询索引。
+create index idx_attendee_meeting_review_status on attendees (meeting_id, review_status);
+create index idx_attendee_meeting_checkin_status on attendees (meeting_id, checkin_status);
+create index idx_attendee_meeting_room_no on attendees (meeting_id, room_no);
+create index idx_attendee_meeting_registered_at on attendees (meeting_id, registered_at);
+create index idx_attendee_meeting_type on attendees (meeting_id, attendee_type);
+create index idx_attendee_meeting_accommodation_room on attendees (meeting_id, accommodation_required, room_no);
+create index idx_attendee_meeting_tduck_data on attendees (meeting_id, tduck_data_id);
+create index idx_seat_assignment_meeting_attendee on seat_assignments (meeting_id, attendee_id);
+create index idx_checkin_record_meeting_status_time on checkin_records (meeting_id, result_status, checked_in_at);
+create index idx_public_query_history_meeting_type_attendee on public_query_history (meeting_id, query_type, attendee_id);
+create index idx_public_query_history_attendee_type on public_query_history (attendee_id, query_type);
+create index idx_tduck_sync_event_status_id on tduck_sync_logs (event_id, status, id);
+
 -- 保留旧演示管理员账号但直接置为禁用；启动器会要求通过环境变量创建强密码管理员。
 insert into app_users (id, created_at, updated_at, username, display_name, password_hash, status)
 values (1, now(6), now(6), 'admin', '超级管理员', '{noop}admin123', 'DISABLED');
@@ -380,12 +401,12 @@ values (1, now(6), now(6), 'admin', '超级管理员', '{noop}admin123', 'DISABL
 insert into app_user_roles (user_id, role) values (1, 'SUPER_ADMIN'), (1, 'MEETING_ADMIN');
 
 insert into meetings (
-  id, created_at, updated_at, code, name, organizer, start_time, end_time,
+  id, created_at, updated_at, code, public_query_token, name, organizer, start_time, end_time,
   registration_start_time, registration_end_time, location, venue_name, capacity,
   description, contact_name, contact_phone, dinner_venue, dinner_time, status, created_by,
   public_query_seat_notice, public_query_room_notice, public_query_dinner_notice
 ) values (
-  1, now(6), now(6), 'NDEF2026', '2026年全国数字经济发展论坛', '数字经济产业联盟',
+  1, now(6), now(6), 'NDEF2026', 'pq_seed_ndef2026', '2026年全国数字经济发展论坛', '数字经济产业联盟',
   '2026-07-15 09:00:00', '2026-07-15 18:00:00',
   '2026-06-01 09:00:00', '2026-07-10 18:00:00',
   '北京国家会议中心', '主会场', 500,
@@ -399,10 +420,10 @@ insert into meetings (
 
 insert into tduck_form_bindings (
   id, created_at, updated_at, meeting_id, form_key, form_name, registration_url,
-  binding_status, mapping_status, webhook_status
+  registration_enabled, binding_status, mapping_status, webhook_status
 ) values (
   1, now(6), now(6), 1, 'ndef2026', '数字经济论坛报名表',
-  'http://localhost:8888/s/ndef2026', 'BOUND', 'VALID', 'CONFIGURED'
+  'http://localhost:8888/s/ndef2026', true, 'BOUND', 'VALID', 'CONFIGURED'
 );
 
 insert into tduck_field_mappings (created_at, updated_at, meeting_id, attendee_field, tduck_field_key, tduck_field_label, required_mapping)

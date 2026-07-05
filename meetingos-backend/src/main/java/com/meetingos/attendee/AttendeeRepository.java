@@ -10,6 +10,7 @@ import org.springframework.data.repository.query.Param;
 
 import jakarta.persistence.LockModeType;
 import java.time.LocalDateTime;
+import java.util.Collection;
 import java.util.List;
 import java.util.Optional;
 
@@ -19,15 +20,37 @@ public interface AttendeeRepository extends JpaRepository<Attendee, Long> {
 
     Optional<Attendee> findByMeetingIdAndAttendeeCode(Long meetingId, String attendeeCode);
 
+    List<Attendee> findByMeetingIdAndAttendeeCodeIgnoreCase(Long meetingId, String attendeeCode);
+
+    List<Attendee> findByMeetingIdAndAttendeeCodeContainingIgnoreCase(Long meetingId, String attendeeCode);
+
     Optional<Attendee> findByMeetingIdAndPhone(Long meetingId, String phone);
+
+    List<Attendee> findByMeetingIdAndPhoneContaining(Long meetingId, String phone);
+
+    List<Attendee> findByMeetingIdAndPhoneEndingWith(Long meetingId, String phone);
 
     Optional<Attendee> findByMeetingIdAndTduckDataId(Long meetingId, String tduckDataId);
 
     Optional<Attendee> findByMeetingIdAndIdentityNo(Long meetingId, String identityNo);
 
+    List<Attendee> findByMeetingIdAndNameIgnoreCase(Long meetingId, String name);
+
     List<Attendee> findByMeetingIdAndNameAndOrganization(Long meetingId, String name, String organization);
 
     List<Attendee> findByMeetingIdAndNameContainingIgnoreCase(Long meetingId, String name);
+
+    List<Attendee> findByMeetingIdAndOrganizationIgnoreCase(Long meetingId, String organization);
+
+    List<Attendee> findByMeetingIdAndOrganizationContainingIgnoreCase(Long meetingId, String organization);
+
+    List<Attendee> findByMeetingIdAndTitleIgnoreCase(Long meetingId, String title);
+
+    List<Attendee> findByMeetingIdAndTitleContainingIgnoreCase(Long meetingId, String title);
+
+    List<Attendee> findByMeetingIdAndEmailIgnoreCase(Long meetingId, String email);
+
+    List<Attendee> findByMeetingIdAndEmailContainingIgnoreCase(Long meetingId, String email);
 
     @Lock(LockModeType.PESSIMISTIC_WRITE)
     @Query("select a from Attendee a where a.meeting.id = :meetingId and a.attendeeCode = :attendeeCode")
@@ -63,6 +86,8 @@ public interface AttendeeRepository extends JpaRepository<Attendee, Long> {
 
     List<Attendee> findByMeetingIdOrderByIdAsc(Long meetingId);
 
+    List<Attendee> findByMeetingIdAndRoomNoIsNotNullOrderByIdAsc(Long meetingId);
+
     List<Attendee> findByMeetingIdAndReviewStatusOrderByIdAsc(Long meetingId, ReviewStatus reviewStatus);
 
     List<Attendee> findByMeetingIdAndCheckinStatusOrderByIdAsc(Long meetingId, CheckinStatus checkinStatus);
@@ -76,6 +101,40 @@ public interface AttendeeRepository extends JpaRepository<Attendee, Long> {
     long countByMeetingIdAndRoomNo(Long meetingId, String roomNo);
 
     long countByMeetingIdAndCheckinStatus(Long meetingId, CheckinStatus checkinStatus);
+
+    @Query("""
+            select a.meeting.id,
+                   count(a),
+                   coalesce(sum(case when a.reviewStatus = :approved then 1 else 0 end), 0),
+                   coalesce(sum(case when a.roomNo is not null then 1 else 0 end), 0),
+                   coalesce(sum(case when a.checkinStatus = :checkedIn then 1 else 0 end), 0)
+            from Attendee a
+            where a.meeting.id in :meetingIds
+            group by a.meeting.id
+            """)
+    List<Object[]> countSummaryByMeetingIds(@Param("meetingIds") Collection<Long> meetingIds,
+                                            @Param("approved") ReviewStatus approved,
+                                            @Param("checkedIn") CheckinStatus checkedIn);
+
+    @Query("""
+            select count(a),
+                   coalesce(sum(case when a.reviewStatus = :pending then 1 else 0 end), 0),
+                   coalesce(sum(case when a.reviewStatus = :approved then 1 else 0 end), 0),
+                   coalesce(sum(case when a.reviewStatus = :rejected then 1 else 0 end), 0),
+                   coalesce(sum(case when a.roomNo is not null then 1 else 0 end), 0),
+                   coalesce(sum(case when a.roomNo is null then 1 else 0 end), 0),
+                   coalesce(sum(case when a.accommodationRequired = true then 1 else 0 end), 0),
+                   coalesce(sum(case when a.accommodationRequired = true and a.roomNo is not null then 1 else 0 end), 0),
+                   coalesce(sum(case when a.accommodationRequired = true and a.roomNo is null then 1 else 0 end), 0),
+                   coalesce(sum(case when a.checkinStatus = :checkedIn then 1 else 0 end), 0)
+            from Attendee a
+            where a.meeting.id = :meetingId
+            """)
+    List<Object[]> countOverviewByMeetingId(@Param("meetingId") Long meetingId,
+                                            @Param("pending") ReviewStatus pending,
+                                            @Param("approved") ReviewStatus approved,
+                                            @Param("rejected") ReviewStatus rejected,
+                                            @Param("checkedIn") CheckinStatus checkedIn);
 
     long countByMeetingIdAndRoomNoIsNull(Long meetingId);
 

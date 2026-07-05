@@ -200,7 +200,7 @@ public class ExportTaskService {
     }
 
     private ExportTable exportSeatsTable(Long meetingId) {
-        Map<Long, SeatAssignment> assignmentBySeat = seatAssignmentRepository.findByMeetingId(meetingId).stream()
+        Map<Long, SeatAssignment> assignmentBySeat = seatAssignmentRepository.findWithAttendeeAndSeatByMeetingId(meetingId).stream()
                 .collect(Collectors.toMap(assignment -> assignment.getSeat().getId(), assignment -> assignment));
         var rows = seatRepository.findByMeetingIdOrderByRowNoAscSeatNoAsc(meetingId).stream()
                 .map(seat -> {
@@ -232,7 +232,7 @@ public class ExportTaskService {
     }
 
     private ExportTable exportCheckinTable(Long meetingId) {
-        var rows = checkinRecordRepository.findByMeetingIdOrderByIdAsc(meetingId).stream()
+        var rows = checkinRecordRepository.findWithAttendeeByMeetingIdOrderByIdAsc(meetingId).stream()
                 .map(this::checkinRow)
                 .toList();
         return new ExportTable("签到记录", List.of("记录ID", "姓名", "手机号", "签到方式", "结果", "入口", "操作人", "签到时间", "消息"), rows);

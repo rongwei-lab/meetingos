@@ -79,7 +79,7 @@ public class CheckinService {
 
     @Transactional(readOnly = true)
     public PageResponse<CheckinRecordResponse> records(Long meetingId, int page, int size) {
-        var result = checkinRecordRepository.findByMeetingId(meetingId, PageRequests.of(page, size));
+        var result = checkinRecordRepository.findPageWithAttendeeByMeetingId(meetingId, PageRequests.of(page, size));
         // open-in-view=false 时 Controller 序列化阶段已经离开事务，不能再触碰记录里的懒加载会议/参会人。
         // 在只读事务内提前组装脱敏 DTO，可以同时保证接口稳定和敏感签到快照不会原样外泄。
         return new PageResponse<>(

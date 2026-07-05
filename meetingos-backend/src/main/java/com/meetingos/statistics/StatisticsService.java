@@ -17,6 +17,7 @@ import java.time.LocalDate;
 import java.time.LocalDateTime;
 import java.util.HashMap;
 import java.util.LinkedHashMap;
+import java.util.List;
 import java.util.Map;
 
 @Service
@@ -51,26 +52,28 @@ public class StatisticsService {
     @Transactional(readOnly = true)
     public StatisticsOverview overview(Long meetingId, LocalDate startDate, LocalDate endDate) {
         DateRange range = resolveRange(startDate, endDate);
-        long registrations = attendeeRepository.countByMeetingId(meetingId);
-        long pending = attendeeRepository.countByMeetingIdAndReviewStatus(meetingId, ReviewStatus.PENDING);
-        long approved = attendeeRepository.countByMeetingIdAndReviewStatus(meetingId, ReviewStatus.APPROVED);
-        long rejected = attendeeRepository.countByMeetingIdAndReviewStatus(meetingId, ReviewStatus.REJECTED);
+        AttendeeOverview attendeeOverview = attendeeOverview(meetingId);
+        long registrations = attendeeOverview.registrations();
+        long pending = attendeeOverview.pending();
+        long approved = attendeeOverview.approved();
+        long rejected = attendeeOverview.rejected();
         LocalDateTime todayStart = LocalDate.now().atStartOfDay();
         long todayRegistrations = attendeeRepository.countByMeetingIdAndRegisteredAtBetween(meetingId, todayStart, todayStart.plusDays(1));
-        long totalSeats = seatRepository.countByMeetingId(meetingId);
-        long disabledSeats = seatRepository.countByMeetingIdAndDisabledTrue(meetingId);
+        SeatOverview seatOverview = seatOverview(meetingId);
+        long totalSeats = seatOverview.totalSeats();
+        long disabledSeats = seatOverview.disabledSeats();
         long seated = seatAssignmentRepository.countByMeetingId(meetingId);
         long availableSeats = Math.max(0, totalSeats - disabledSeats);
         long emptySeats = Math.max(0, availableSeats - seated);
         double seatUsageRate = availableSeats == 0 ? 0 : (double) seated / availableSeats;
         long roomCount = roomRepository.countByMeetingId(meetingId);
-        long roomAssigned = attendeeRepository.countByMeetingIdAndRoomNoIsNotNull(meetingId);
-        long roomUnassigned = attendeeRepository.countByMeetingIdAndRoomNoIsNull(meetingId);
-        long accommodationRequired = attendeeRepository.countByMeetingIdAndAccommodationRequiredTrue(meetingId);
-        long roomAssignedRequired = attendeeRepository.countByMeetingIdAndAccommodationRequiredTrueAndRoomNoIsNotNull(meetingId);
-        long roomUnassignedRequired = attendeeRepository.countByMeetingIdAndAccommodationRequiredTrueAndRoomNoIsNull(meetingId);
+        long roomAssigned = attendeeOverview.roomAssigned();
+        long roomUnassigned = attendeeOverview.roomUnassigned();
+        long accommodationRequired = attendeeOverview.accommodationRequired();
+        long roomAssignedRequired = attendeeOverview.roomAssignedRequired();
+        long roomUnassignedRequired = attendeeOverview.roomUnassignedRequired();
         long dinnerAssigned = dinnerAssignmentRepository.countByMeetingId(meetingId);
-        long checkedIn = attendeeRepository.countByMeetingIdAndCheckinStatus(meetingId, CheckinStatus.CHECKED_IN);
+        long checkedIn = attendeeOverview.checkedIn();
         long notCheckedIn = Math.max(0, approved - checkedIn);
         double rate = approved == 0 ? 0 : (double) checkedIn / approved;
         long rangeRegistrations = attendeeRepository.countByMeetingIdAndRegisteredAtBetween(meetingId, range.startDateTime(), range.exclusiveEndDateTime());
@@ -126,6 +129,40 @@ public class StatisticsService {
         return result;
     }
 
+    private AttendeeOverview attendeeOverview(Long meetingId) {
+        List<Object[]> rows = attendeeRepository.countOverviewByMeetingId(
+                meetingId,
+                ReviewStatus.PENDING,
+                ReviewStatus.APPROVED,
+                ReviewStatus.REJECTED,
+                CheckinStatus.CHECKED_IN
+        );
+        Object[] row = rows.isEmpty() ? null : rows.get(0);
+        return new AttendeeOverview(
+                numberAt(row, 0),
+                numberAt(row, 1),
+                numberAt(row, 2),
+                numberAt(row, 3),
+                numberAt(row, 4),
+                numberAt(row, 5),
+                numberAt(row, 6),
+                numberAt(row, 7),
+                numberAt(row, 8),
+                numberAt(row, 9)
+        );
+    }
+
+    private SeatOverview seatOverview(Long meetingId) {
+        List<Object[]> rows = seatRepository.countOverviewByMeetingId(meetingId);
+        Object[] row = rows.isEmpty() ? null : rows.get(0);
+        return new SeatOverview(numberAt(row, 0), numberAt(row, 1));
+    }
+
+    private long numberAt(Object[] row, int index) {
+        if (row == null || index >= row.length) return 0L;
+        return row[index] instanceof Number number ? number.longValue() : 0L;
+    }
+
     private DateRange resolveRange(LocalDate startDate, LocalDate endDate) {
         LocalDate resolvedEnd = endDate == null ? LocalDate.now() : endDate;
         LocalDate resolvedStart = startDate == null ? resolvedEnd.minusDays(6) : startDate;
@@ -155,6 +192,23 @@ public class StatisticsService {
             series.put(key, actual.getOrDefault(key, 0L));
         }
         return series;
+    }
+
+    private record AttendeeOverview(
+            long registrations,
+            long pending,
+            long approved,
+            long rejected,
+            long roomAssigned,
+            long roomUnassigned,
+            long accommodationRequired,
+            long roomAssignedRequired,
+            long roomUnassignedRequired,
+            long checkedIn
+    ) {
+    }
+
+    private record SeatOverview(long totalSeats, long disabledSeats) {
     }
 
     private record DateRange(LocalDate startDate, LocalDate endDate) {

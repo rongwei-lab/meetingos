@@ -92,6 +92,15 @@ public class PublicQueryService {
     private static final List<String> PUBLIC_PAGE_CONTENT_KEYS = List.of("entry", "combined", "seat", "room", "dinner", "checkin");
     private static final int ADMIN_QUERY_LIMIT = 20;
     private static final int PUBLIC_QUERY_RESULT_LIMIT = 20;
+    private static final List<PublicQueryField> CANDIDATE_FIELD_PRIORITY = List.of(
+            PublicQueryField.ATTENDEE_CODE,
+            PublicQueryField.PHONE,
+            PublicQueryField.PHONE_LAST4,
+            PublicQueryField.EMAIL,
+            PublicQueryField.NAME,
+            PublicQueryField.ORGANIZATION,
+            PublicQueryField.TITLE
+    );
 
     private final MeetingRepository meetingRepository;
     private final AttendeeRepository attendeeRepository;
@@ -268,7 +277,7 @@ public class PublicQueryService {
             }
             return results;
         } catch (RuntimeException ex) {
-            historyService.recordFailure(meeting, PublicQueryType.SEAT, request.values(), firstNonNull(attendee, identifySingleMatchedAttendee(meeting, request.values())), ex.getMessage(), clientIp, userAgent);
+            historyService.recordFailure(meeting, PublicQueryType.SEAT, request.values(), failureAttendee(attendee, meeting, request.values()), ex.getMessage(), clientIp, userAgent);
             throw ex;
         }
     }
@@ -317,7 +326,7 @@ public class PublicQueryService {
             }
             return results;
         } catch (RuntimeException ex) {
-            historyService.recordFailure(meeting, PublicQueryType.ROOM, request.values(), firstNonNull(attendee, identifySingleMatchedAttendee(meeting, request.values())), ex.getMessage(), clientIp, userAgent);
+            historyService.recordFailure(meeting, PublicQueryType.ROOM, request.values(), failureAttendee(attendee, meeting, request.values()), ex.getMessage(), clientIp, userAgent);
             throw ex;
         }
     }
@@ -366,7 +375,7 @@ public class PublicQueryService {
             }
             return results;
         } catch (RuntimeException ex) {
-            historyService.recordFailure(meeting, PublicQueryType.DINNER, request.values(), firstNonNull(attendee, identifySingleMatchedAttendee(meeting, request.values())), ex.getMessage(), clientIp, userAgent);
+            historyService.recordFailure(meeting, PublicQueryType.DINNER, request.values(), failureAttendee(attendee, meeting, request.values()), ex.getMessage(), clientIp, userAgent);
             throw ex;
         }
     }
@@ -438,9 +447,62 @@ public class PublicQueryService {
         List<PublicQueryField> fields = parseFields(meeting);
         PublicQueryMatchMode mode = parseMatchMode(meeting);
         requireConfiguredValues(fields, values);
-        return attendeeRepository.findByMeetingIdOrderByIdAsc(meeting.getId()).stream()
+        return queryCandidateAttendees(meeting.getId(), fields, values, mode).stream()
                 .filter(attendee -> fields.stream().allMatch(field -> matches(attendee, field, values.get(field), mode)))
                 .toList();
+    }
+
+    private List<Attendee> queryCandidateAttendees(Long meetingId,
+                                                   List<PublicQueryField> fields,
+                                                   Map<PublicQueryField, String> values,
+                                                   PublicQueryMatchMode mode) {
+        /*
+         * 公开查询原先会把整场会议参会人全部加载进 JVM 后再逐条匹配。会议人数上来后，
+         * 即便用户填了唯一手机号，也会产生不必要的数据库传输和对象创建。
+         *
+         * 这里先按“最有区分度”的已配置字段取候选集，再继续走 matches(...) 做完整校验。
+         * 这样不改变精确/模糊匹配语义，同时让默认的“手机号 + 姓名”查询优先命中手机号索引。
+         */
+        for (PublicQueryField field : CANDIDATE_FIELD_PRIORITY) {
+            if (fields.contains(field)) {
+                return queryCandidateAttendeesByField(meetingId, field, values.get(field), mode);
+            }
+        }
+        return attendeeRepository.findByMeetingIdOrderByIdAsc(meetingId);
+    }
+
+    private List<Attendee> queryCandidateAttendeesByField(Long meetingId,
+                                                          PublicQueryField field,
+                                                          String rawValue,
+                                                          PublicQueryMatchMode mode) {
+        String value = normalizeForMatch(field, rawValue);
+        if (value.isBlank()) {
+            return List.of();
+        }
+        boolean exact = mode == PublicQueryMatchMode.EXACT;
+        return switch (field) {
+            case ATTENDEE_CODE -> exact
+                    ? attendeeRepository.findByMeetingIdAndAttendeeCodeIgnoreCase(meetingId, rawValue.trim())
+                    : attendeeRepository.findByMeetingIdAndAttendeeCodeContainingIgnoreCase(meetingId, rawValue.trim());
+            case PHONE -> exact
+                    ? attendeeRepository.findByMeetingIdAndPhone(meetingId, value).stream().toList()
+                    : attendeeRepository.findByMeetingIdAndPhoneContaining(meetingId, value);
+            case PHONE_LAST4 -> exact
+                    ? attendeeRepository.findByMeetingIdAndPhoneEndingWith(meetingId, value)
+                    : attendeeRepository.findByMeetingIdAndPhoneContaining(meetingId, value);
+            case EMAIL -> exact
+                    ? attendeeRepository.findByMeetingIdAndEmailIgnoreCase(meetingId, rawValue.trim())
+                    : attendeeRepository.findByMeetingIdAndEmailContainingIgnoreCase(meetingId, rawValue.trim());
+            case NAME -> exact
+                    ? attendeeRepository.findByMeetingIdAndNameIgnoreCase(meetingId, rawValue.trim())
+                    : attendeeRepository.findByMeetingIdAndNameContainingIgnoreCase(meetingId, rawValue.trim());
+            case ORGANIZATION -> exact
+                    ? attendeeRepository.findByMeetingIdAndOrganizationIgnoreCase(meetingId, rawValue.trim())
+                    : attendeeRepository.findByMeetingIdAndOrganizationContainingIgnoreCase(meetingId, rawValue.trim());
+            case TITLE -> exact
+                    ? attendeeRepository.findByMeetingIdAndTitleIgnoreCase(meetingId, rawValue.trim())
+                    : attendeeRepository.findByMeetingIdAndTitleContainingIgnoreCase(meetingId, rawValue.trim());
+        };
     }
 
     private void ensureQueryWindowOpen(Meeting meeting) {
@@ -578,9 +640,16 @@ public class PublicQueryService {
     }
 
     private SeatQueryResult.PublicSeatMap buildPublicSeatMap(Long meetingId, Seat currentSeat) {
-        List<Seat> areaSeats = seatRepository.findByMeetingIdAndAreaNameOrderByRowNoAscSeatNoAsc(meetingId, currentSeat.getAreaName());
-        int rowCount = areaSeats.stream().mapToInt(Seat::getRowNo).max().orElse(0);
-        int seatsPerRow = areaSeats.stream().mapToInt(Seat::getSeatNo).max().orElse(0);
+        /*
+         * 公开查询只需要区域边界来渲染当前座位位置。旧逻辑会加载同区域所有座位实体再算 max，
+         * 大会场或高并发查询时会造成不必要的内存分配和数据库传输。
+         */
+        Object[] bounds = seatRepository.findAreaBoundsByMeetingIdAndAreaName(meetingId, currentSeat.getAreaName())
+                .stream()
+                .findFirst()
+                .orElse(null);
+        int rowCount = numberAt(bounds, 0);
+        int seatsPerRow = numberAt(bounds, 1);
         if (rowCount <= 0 || seatsPerRow <= 0) {
             return null;
         }
@@ -591,6 +660,13 @@ public class PublicQueryService {
                 currentSeat.getRowNo(),
                 currentSeat.getSeatNo()
         );
+    }
+
+    private int numberAt(Object[] row, int index) {
+        if (row == null || index >= row.length) {
+            return 0;
+        }
+        return row[index] instanceof Number number ? number.intValue() : 0;
     }
 
     private boolean shouldExposeSeatMap(List<PublicQueryResultField> visible, List<PublicQueryResultField> masked) {
@@ -683,8 +759,12 @@ public class PublicQueryService {
         return venue + result.tableNo();
     }
 
-    private Attendee firstNonNull(Attendee primary, Attendee fallback) {
-        return primary == null ? fallback : primary;
+    private Attendee failureAttendee(Attendee knownAttendee, Meeting meeting, Map<PublicQueryField, String> values) {
+        /*
+         * Java 会先求值方法参数。之前即使 knownAttendee 已经存在，也会先执行一次
+         * identifySingleMatchedAttendee(...)，导致查询失败日志路径重复匹配参会人。
+         */
+        return knownAttendee == null ? identifySingleMatchedAttendee(meeting, values) : knownAttendee;
     }
 
     private AdminQueryCandidate toCandidate(Attendee attendee) {

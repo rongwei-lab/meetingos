@@ -50,6 +50,8 @@ meetingos:
     admin-api-base-url: "${TDUCK_ADMIN_API_URL:${TDUCK_API_PUBLIC_URL:http://localhost:8999}}"
     admin-email: "${TDUCK_ADMIN_EMAIL:}"
     admin-password: "${TDUCK_ADMIN_PASSWORD:}"
+    connect-timeout: ${TDUCK_CONNECT_TIMEOUT:3s}
+    read-timeout: ${TDUCK_READ_TIMEOUT:10s}
   public-query:
     rate-limit-per-minute: ${PUBLIC_QUERY_RATE_LIMIT_PER_MINUTE:30}
     captcha-enabled: ${PUBLIC_QUERY_CAPTCHA_ENABLED:false}

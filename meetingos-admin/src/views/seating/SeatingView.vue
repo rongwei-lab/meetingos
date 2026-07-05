@@ -603,7 +603,7 @@ const swapTargetOptions = computed(() => {
   return store.currentSeats
     .filter((seat) => seat.attendeeId && seat.attendeeId !== currentAttendeeId && seat.status !== "DISABLED" && !seat.locked)
     .map((seat) => {
-      const attendee = store.currentAttendees.find((item) => item.id === seat.attendeeId);
+      const attendee = seat.attendeeId ? store.currentAttendeeById.get(seat.attendeeId) : undefined;
       return {
         label: `${attendee?.name || seat.attendeeName || "已分配参会人"} · ${seat.areaName} ${seat.rowNo}排${seat.seatNo}座`,
         value: seat.attendeeId as string
@@ -617,7 +617,7 @@ const selectedSeatTitle = computed(() =>
 
 const currentAssignee = computed(() => {
   if (!selectedSeat.value?.attendeeId) return null;
-  return store.currentAttendees.find((attendee) => attendee.id === selectedSeat.value?.attendeeId) || null;
+  return selectedSeat.value?.attendeeId ? store.currentAttendeeById.get(selectedSeat.value.attendeeId) || null : null;
 });
 
 const currentAssigneeInitial = computed(() => (currentAssignee.value?.name || selectedSeat.value?.attendeeName || "已").slice(0, 1));
@@ -685,7 +685,7 @@ function seatLabel(seat: Seat) {
 }
 
 function seatAssigneeName(seat: Seat) {
-  const attendee = seat.attendeeId ? store.currentAttendees.find((item) => item.id === seat.attendeeId) : undefined;
+  const attendee = seat.attendeeId ? store.currentAttendeeById.get(seat.attendeeId) : undefined;
   return (seat.attendeeName || attendee?.name || "").trim();
 }
 

@@ -137,7 +137,12 @@ public class SeatingService {
         Meeting meeting = meetingRepository.findById(meetingId)
                 .orElseThrow(() -> BusinessException.notFound("会议不存在"));
         List<Attendee> approved = attendeeRepository.findByMeetingIdAndReviewStatus(meetingId, ReviewStatus.APPROVED);
-        Set<Long> alreadyAssignedAttendeeIds = assignmentRepository.findByMeetingId(meetingId).stream()
+        /*
+         * 已分配关系在本方法里会同时按 attendee 和 seat 维度使用。一次 fetch join 后复用，
+         * 避免自动排座开始阶段重复扫描 seat_assignments，并避免懒加载 attendee/seat 产生 N+1。
+         */
+        List<SeatAssignment> existingAssignments = assignmentRepository.findWithAttendeeAndSeatByMeetingId(meetingId);
+        Set<Long> alreadyAssignedAttendeeIds = existingAssignments.stream()
                 .map(assignment -> assignment.getAttendee().getId())
                 .collect(Collectors.toSet());
 
@@ -149,7 +154,7 @@ public class SeatingService {
             return new AutoSeatingResult(0, 0, List.of("没有需要自动排座的已审核参会人"));
         }
 
-        Map<Long, SeatAssignment> assignedBySeat = assignmentRepository.findByMeetingId(meetingId).stream()
+        Map<Long, SeatAssignment> assignedBySeat = existingAssignments.stream()
                 .collect(Collectors.toMap(assignment -> assignment.getSeat().getId(), assignment -> assignment));
         List<Seat> availableSeats = seatRepository.findByMeetingIdAndDisabledFalseOrderByRowNoAscSeatNoAsc(meetingId).stream()
                 .filter(seat -> !seat.isLocked())
@@ -276,7 +281,7 @@ public class SeatingService {
 
     @Transactional(readOnly = true)
     public List<SeatView> seatMap(Long meetingId) {
-        Map<Long, SeatAssignment> assignmentBySeatId = assignmentRepository.findByMeetingId(meetingId).stream()
+        Map<Long, SeatAssignment> assignmentBySeatId = assignmentRepository.findWithAttendeeAndSeatByMeetingId(meetingId).stream()
                 .collect(Collectors.toMap(assignment -> assignment.getSeat().getId(), assignment -> assignment));
         return seatRepository.findByMeetingIdOrderByLayoutSortOrderAscAreaNameAscRowNoAscSeatNoAsc(meetingId).stream()
                 .map(seat -> toView(seat, assignmentBySeatId.get(seat.getId())))

@@ -13,7 +13,29 @@ public interface CheckinRecordRepository extends JpaRepository<CheckinRecord, Lo
 
     Page<CheckinRecord> findByMeetingId(Long meetingId, Pageable pageable);
 
+    @Query(value = """
+            select record
+            from CheckinRecord record
+            left join fetch record.attendee
+            where record.meeting.id = :meetingId
+            """,
+            countQuery = """
+                    select count(record)
+                    from CheckinRecord record
+                    where record.meeting.id = :meetingId
+                    """)
+    Page<CheckinRecord> findPageWithAttendeeByMeetingId(@Param("meetingId") Long meetingId, Pageable pageable);
+
     List<CheckinRecord> findByMeetingIdOrderByIdAsc(Long meetingId);
+
+    @Query("""
+            select record
+            from CheckinRecord record
+            left join fetch record.attendee
+            where record.meeting.id = :meetingId
+            order by record.id asc
+            """)
+    List<CheckinRecord> findWithAttendeeByMeetingIdOrderByIdAsc(@Param("meetingId") Long meetingId);
 
     @Query("select coalesce(c.entrance, '未填写'), count(c) from CheckinRecord c where c.meeting.id = :meetingId and c.resultStatus = 'SUCCESS' group by coalesce(c.entrance, '未填写')")
     List<Object[]> countSuccessByEntrance(@Param("meetingId") Long meetingId);

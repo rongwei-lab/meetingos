@@ -513,8 +513,8 @@ function transition(row: Meeting, status: Meeting["status"]) {
 
 .meeting-grid {
   display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(260px, 360px));
-  gap: 16px;
+  grid-template-columns: repeat(auto-fill, minmax(240px, 320px));
+  gap: 14px;
 }
 
 .meeting-table {
@@ -534,16 +534,16 @@ function transition(row: Meeting, status: Meeting["status"]) {
 
 .meeting-card,
 .create-card {
-  min-height: 260px;
+  min-height: 220px;
 }
 
 .meeting-card {
   position: relative;
-  padding: 18px 20px 16px;
+  padding: 14px 16px;
   display: flex;
   flex-direction: column;
   align-items: stretch;
-  gap: 11px;
+  gap: 8px;
   overflow: hidden;
 }
 
@@ -555,10 +555,10 @@ function transition(row: Meeting, status: Meeting["status"]) {
 
 .card-menu {
   position: absolute;
-  top: 14px;
-  right: 14px;
-  width: 30px;
-  height: 30px;
+  top: 10px;
+  right: 10px;
+  width: 28px;
+  height: 28px;
   border: 0;
   border-radius: 8px;
   display: grid;
@@ -573,13 +573,13 @@ function transition(row: Meeting, status: Meeting["status"]) {
 }
 
 .meeting-icon {
-  width: 58px;
-  height: 58px;
-  margin: 6px auto 0;
+  width: 48px;
+  height: 48px;
+  margin: 2px auto 0;
   border-radius: 8px;
   display: grid;
   place-items: center;
-  font-size: 31px;
+  font-size: 27px;
 }
 
 .tone-0 {
@@ -605,16 +605,16 @@ function transition(row: Meeting, status: Meeting["status"]) {
 .meeting-title-row {
   display: grid;
   justify-items: center;
-  gap: 6px;
+  gap: 5px;
 }
 
 .meeting-title-row h3 {
   max-width: 100%;
-  min-height: 48px;
+  min-height: 42px;
   margin: 0;
   color: var(--text-primary);
-  font-size: 17px;
-  line-height: 24px;
+  font-size: 16px;
+  line-height: 21px;
   font-weight: 760;
   display: -webkit-box;
   overflow: hidden;
@@ -631,32 +631,32 @@ function transition(row: Meeting, status: Meeting["status"]) {
 }
 
 .meeting-meta {
-  margin-top: 8px;
+  margin-top: 5px;
   display: inline-flex;
   align-items: center;
   gap: 6px;
 }
 
 .meeting-subtitle {
-  min-height: 36px;
-  margin-top: 4px;
+  min-height: 18px;
+  margin-top: 3px;
   display: -webkit-box;
   overflow: hidden;
   -webkit-box-orient: vertical;
-  -webkit-line-clamp: 2;
+  -webkit-line-clamp: 1;
 }
 
 .meeting-card-footer {
   margin-top: auto;
   display: grid;
-  gap: 14px;
+  gap: 9px;
 }
 
 .meeting-stats {
   display: grid;
   grid-template-columns: repeat(3, 1fr);
   gap: 8px;
-  padding: 9px 0;
+  padding: 7px 0;
   border-top: 1px solid var(--border-color);
   border-bottom: 1px solid var(--border-color);
 }
@@ -671,7 +671,7 @@ function transition(row: Meeting, status: Meeting["status"]) {
 
 .meeting-stats strong {
   color: var(--text-primary);
-  font-size: 14px;
+  font-size: 13px;
 }
 
 .enter-button {
@@ -684,28 +684,28 @@ function transition(row: Meeting, status: Meeting["status"]) {
   display: grid;
   justify-items: center;
   align-content: center;
-  gap: 10px;
-  padding: 22px;
+  gap: 8px;
+  padding: 18px;
   color: var(--text-primary);
   background: var(--surface-bg);
   cursor: pointer;
 }
 
 .create-icon {
-  width: 64px;
-  height: 64px;
+  width: 52px;
+  height: 52px;
   border-radius: 999px;
   display: grid;
   place-items: center;
   color: var(--accent-pressed);
   background: var(--accent-soft);
   border: 1px solid var(--accent-border);
-  font-size: 36px;
+  font-size: 30px;
 }
 
 .create-card strong {
-  font-size: 20px;
-  line-height: 28px;
+  font-size: 18px;
+  line-height: 24px;
 }
 
 .create-card small {
@@ -759,7 +759,7 @@ function transition(row: Meeting, status: Meeting["status"]) {
 
   .meeting-card,
   .create-card {
-    min-height: 250px;
+    min-height: 220px;
   }
 
   .section-heading {

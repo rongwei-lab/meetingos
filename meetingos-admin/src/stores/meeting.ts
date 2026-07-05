@@ -784,6 +784,16 @@ function singleFlight<T>(promises: Map<string, Promise<T>>, key: string, loader:
   return promise;
 }
 
+function groupByMeetingId<T extends { meetingId: string }>(items: T[]): Map<string, T[]> {
+  const index = new Map<string, T[]>();
+  for (const item of items) {
+    const existing = index.get(item.meetingId);
+    if (existing) existing.push(item);
+    else index.set(item.meetingId, [item]);
+  }
+  return index;
+}
+
 export const useMeetingStore = defineStore("meeting", {
   state: () => ({
     meetings: [] as Meeting[],
@@ -801,23 +811,82 @@ export const useMeetingStore = defineStore("meeting", {
     branding: defaultBranding()
   }),
   getters: {
-    currentMeeting(state) {
-      return state.meetings.find((meeting) => meeting.id === state.currentMeetingId) || null;
+    meetingById(state): Map<string, Meeting> {
+      return new Map(state.meetings.map((meeting) => [meeting.id, meeting]));
     },
-    currentAttendees(state) {
-      return state.attendees.filter((attendee) => attendee.meetingId === state.currentMeetingId);
+    attendeesByMeetingId(state): Map<string, Attendee[]> {
+      return groupByMeetingId(state.attendees);
     },
-    currentSeats(state) {
-      return state.seats.filter((seat) => seat.meetingId === state.currentMeetingId);
+    seatsByMeetingId(state): Map<string, Seat[]> {
+      return groupByMeetingId(state.seats);
     },
-    currentRooms(state) {
-      return state.rooms.filter((room) => room.meetingId === state.currentMeetingId);
+    roomsByMeetingId(state): Map<string, Room[]> {
+      return groupByMeetingId(state.rooms);
     },
-    currentDinnerAssignments(state) {
-      return state.dinnerAssignments.filter((assignment) => assignment.meetingId === state.currentMeetingId);
+    dinnerAssignmentsByMeetingId(state): Map<string, DinnerAssignment[]> {
+      return groupByMeetingId(state.dinnerAssignments);
     },
-    currentDinnerTables(state) {
-      return state.dinnerTables.filter((table) => table.meetingId === state.currentMeetingId);
+    dinnerTablesByMeetingId(state): Map<string, DinnerTable[]> {
+      return groupByMeetingId(state.dinnerTables);
+    },
+    currentMeeting(): Meeting | null {
+      return this.meetingById.get(this.currentMeetingId) || null;
+    },
+    currentAttendees(): Attendee[] {
+      return this.attendeesByMeetingId.get(this.currentMeetingId) || [];
+    },
+    currentSeats(): Seat[] {
+      return this.seatsByMeetingId.get(this.currentMeetingId) || [];
+    },
+    currentRooms(): Room[] {
+      return this.roomsByMeetingId.get(this.currentMeetingId) || [];
+    },
+    currentDinnerAssignments(): DinnerAssignment[] {
+      return this.dinnerAssignmentsByMeetingId.get(this.currentMeetingId) || [];
+    },
+    currentDinnerTables(): DinnerTable[] {
+      return this.dinnerTablesByMeetingId.get(this.currentMeetingId) || [];
+    },
+    currentAttendeeById(): Map<string, Attendee> {
+      return new Map(this.currentAttendees.map((attendee) => [attendee.id, attendee]));
+    },
+    currentSeatByAttendeeId(): Map<string, Seat> {
+      return new Map(this.currentSeats.filter((seat) => seat.attendeeId).map((seat) => [seat.attendeeId as string, seat]));
+    },
+    currentRoomByNo(): Map<string, Room> {
+      return new Map(this.currentRooms.map((room) => [room.roomNo, room]));
+    },
+    currentAttendeesByRoomNo(): Map<string, Attendee[]> {
+      const index = new Map<string, Attendee[]>();
+      for (const attendee of this.currentAttendees) {
+        if (!attendee.roomNo) continue;
+        const existing = index.get(attendee.roomNo);
+        if (existing) existing.push(attendee);
+        else index.set(attendee.roomNo, [attendee]);
+      }
+      return index;
+    },
+    currentAttendeesByRoomId(): Map<string, Attendee[]> {
+      const index = new Map<string, Attendee[]>();
+      for (const attendee of this.currentAttendees) {
+        if (!attendee.roomId) continue;
+        const existing = index.get(attendee.roomId);
+        if (existing) existing.push(attendee);
+        else index.set(attendee.roomId, [attendee]);
+      }
+      return index;
+    },
+    currentDinnerAssignmentByAttendeeId(): Map<string, DinnerAssignment> {
+      return new Map(this.currentDinnerAssignments.map((assignment) => [assignment.attendeeId, assignment]));
+    },
+    currentDinnerAssignmentsByTableNo(): Map<string, DinnerAssignment[]> {
+      const index = new Map<string, DinnerAssignment[]>();
+      for (const assignment of this.currentDinnerAssignments) {
+        const existing = index.get(assignment.tableNo);
+        if (existing) existing.push(assignment);
+        else index.set(assignment.tableNo, [assignment]);
+      }
+      return index;
     }
   },
   actions: {
@@ -2319,17 +2388,21 @@ export const useMeetingStore = defineStore("meeting", {
       });
     },
     reconcileAssignments() {
+      const currentMeetingId = this.currentMeetingId;
+      const currentSeats = this.currentSeats;
+      const currentRooms = this.currentRooms;
+      const currentDinnerAssignments = this.currentDinnerAssignments;
       const seatLabelByAttendee = new Map<string, string>();
-      const hasLoadedSeatsForMeeting = this.currentSeats.length > 0;
-      for (const seat of this.currentSeats) {
+      const hasLoadedSeatsForMeeting = currentSeats.length > 0;
+      for (const seat of currentSeats) {
         if (seat.attendeeId) {
           seatLabelByAttendee.set(seat.attendeeId, `${seat.areaName} ${seat.rowNo}排${seat.seatNo}座`);
         }
       }
-      const roomByNo = new Map(this.currentRooms.map((room) => [room.roomNo, room]));
-      const dinnerAssignedAttendeeIds = new Set(this.currentDinnerAssignments.map((assignment) => assignment.attendeeId));
+      const roomByNo = new Map(currentRooms.map((room) => [room.roomNo, room]));
+      const dinnerAssignedAttendeeIds = new Set(currentDinnerAssignments.map((assignment) => assignment.attendeeId));
       this.attendees = this.attendees.map((attendee) => {
-        if (attendee.meetingId !== this.currentMeetingId) return attendee;
+        if (attendee.meetingId !== currentMeetingId) return attendee;
         const room = attendee.roomNo ? roomByNo.get(attendee.roomNo) : undefined;
         const seatLabel = hasLoadedSeatsForMeeting ? seatLabelByAttendee.get(attendee.id) : attendee.seatLabel;
         return {
@@ -2345,13 +2418,24 @@ export const useMeetingStore = defineStore("meeting", {
       });
     },
     refreshMeetingCounters() {
+      const attendeesByMeetingId = this.attendeesByMeetingId;
       for (const meeting of this.meetings) {
-        const attendees = this.attendees.filter((item) => item.meetingId === meeting.id);
+        const attendees = attendeesByMeetingId.get(meeting.id) || [];
+        let approvedCount = 0;
+        let seatedCount = 0;
+        let roomedCount = 0;
+        let checkedInCount = 0;
+        for (const attendee of attendees) {
+          if (attendee.auditStatus === "APPROVED") approvedCount += 1;
+          if (attendee.seatLabel) seatedCount += 1;
+          if (attendee.roomNo) roomedCount += 1;
+          if (attendee.checkinStatus === "CHECKED_IN") checkedInCount += 1;
+        }
         meeting.registeredCount = attendees.length || meeting.registeredCount || 0;
-        meeting.approvedCount = attendees.filter((item) => item.auditStatus === "APPROVED").length || meeting.approvedCount || 0;
-        meeting.seatedCount = attendees.filter((item) => Boolean(item.seatLabel)).length || meeting.seatedCount || 0;
-        meeting.roomedCount = attendees.filter((item) => Boolean(item.roomNo)).length || meeting.roomedCount || 0;
-        meeting.checkedInCount = attendees.filter((item) => item.checkinStatus === "CHECKED_IN").length || meeting.checkedInCount || 0;
+        meeting.approvedCount = approvedCount || meeting.approvedCount || 0;
+        meeting.seatedCount = seatedCount || meeting.seatedCount || 0;
+        meeting.roomedCount = roomedCount || meeting.roomedCount || 0;
+        meeting.checkedInCount = checkedInCount || meeting.checkedInCount || 0;
       }
     },
     upsertMeeting(meeting: Meeting) {

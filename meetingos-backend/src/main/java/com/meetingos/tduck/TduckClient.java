@@ -3,6 +3,7 @@ package com.meetingos.tduck;
 import com.meetingos.security.TduckProperties;
 import com.meetingos.settings.SystemSettingsService;
 import org.springframework.http.MediaType;
+import org.springframework.http.client.SimpleClientHttpRequestFactory;
 import org.springframework.stereotype.Service;
 import org.springframework.util.StringUtils;
 import org.springframework.web.client.HttpClientErrorException;
@@ -11,6 +12,7 @@ import org.springframework.web.client.RestClientResponseException;
 import org.springframework.web.util.HtmlUtils;
 import org.springframework.web.util.UriComponentsBuilder;
 
+import java.time.Duration;
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
@@ -22,6 +24,8 @@ public class TduckClient {
 
     private static final int LOGIN_RETRY_ATTEMPTS = 3;
     private static final long LOGIN_DUPLICATE_TOKEN_RETRY_DELAY_MS = 1_100L;
+    private static final Duration DEFAULT_CONNECT_TIMEOUT = Duration.ofSeconds(3);
+    private static final Duration DEFAULT_READ_TIMEOUT = Duration.ofSeconds(10);
 
     private final TduckProperties properties;
     private final SystemSettingsService settingsService;
@@ -34,7 +38,12 @@ public class TduckClient {
                        RestClient.Builder restClientBuilder) {
         this.properties = properties;
         this.settingsService = settingsService;
-        this.restClient = restClientBuilder.build();
+        SimpleClientHttpRequestFactory requestFactory = new SimpleClientHttpRequestFactory();
+        requestFactory.setConnectTimeout(timeoutMillis(properties.connectTimeout(), DEFAULT_CONNECT_TIMEOUT));
+        requestFactory.setReadTimeout(timeoutMillis(properties.readTimeout(), DEFAULT_READ_TIMEOUT));
+        this.restClient = restClientBuilder
+                .requestFactory(requestFactory)
+                .build();
     }
 
     public List<TduckFormOption> listForms(String keyword, int page, int size) {
@@ -259,6 +268,12 @@ public class TduckClient {
     public String registrationUrlFor(String formKey) {
         String frontUrl = settingsService.tduckFrontUrl();
         return trimTrailingSlash(frontUrl) + "/s/" + formKey;
+    }
+
+    private int timeoutMillis(Duration configured, Duration fallback) {
+        Duration resolved = configured == null || configured.isZero() || configured.isNegative() ? fallback : configured;
+        long millis = resolved.toMillis();
+        return millis > Integer.MAX_VALUE ? Integer.MAX_VALUE : (int) millis;
     }
 
     private Map<String, Object> requestPost(String url, Map<String, Object> body, String token) {

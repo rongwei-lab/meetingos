@@ -79,31 +79,46 @@ public class AttendeeController {
         PageResponse<Attendee> result = attendeeService.search(meetingId, keyword, reviewStatus, checkinStatus, attendeeType, hasSeat, tags, page, size);
         boolean masked = systemSettingsService.maskSensitiveEnabled();
         /*
-         * 参会人列表需要快速判断该人员是否已经在公开查询页查过座位/住宿。
-         * 查询历史可能包含失败记录；只要日志能关联到该参会人，就说明对方已经尝试查询过对应入口。
+         * 参会人列表只展示当前页数据。这里先取当前页 attendeeId，再批量读取当前页需要的
+         * 公开查询历史、座位和晚宴状态，避免分页接口随整场会议人数/历史记录线性变慢。
          */
-        Set<Long> seatQueriedAttendeeIds = Set.copyOf(publicQueryHistoryRepository.findQueriedAttendeeIds(meetingId, PublicQueryType.SEAT));
-        Set<Long> roomQueriedAttendeeIds = Set.copyOf(publicQueryHistoryRepository.findQueriedAttendeeIds(meetingId, PublicQueryType.ROOM));
-        Set<Long> dinnerQueriedAttendeeIds = Set.copyOf(publicQueryHistoryRepository.findQueriedAttendeeIds(meetingId, PublicQueryType.DINNER));
-        var seatAssignments = seatAssignmentRepository.findWithAttendeeAndSeatByMeetingId(meetingId);
-        Set<Long> seatAssignedAttendeeIds = seatAssignments.stream()
-                .filter(assignment -> assignment.getAttendee() != null)
-                .map(assignment -> assignment.getAttendee().getId())
-                .collect(Collectors.toSet());
-        Set<Long> dinnerAssignedAttendeeIds = dinnerAssignmentRepository.findByMeetingIdOrderByTableNoAscIdAsc(meetingId).stream()
-                .filter(assignment -> assignment.getAttendee() != null)
-                .map(assignment -> assignment.getAttendee().getId())
-                .collect(Collectors.toSet());
-        Map<Long, String> seatLabelByAttendeeId = seatAssignments.stream()
-                .filter(assignment -> assignment.getAttendee() != null
-                        && assignment.getSeat() != null
-                        && assignment.getSeat().getAreaName() != null
-                        && !assignment.getSeat().getAreaName().isBlank())
-                .collect(Collectors.toMap(
-                        assignment -> assignment.getAttendee().getId(),
-                        this::seatLabel,
-                        (existing, replacement) -> existing
-                ));
+        var attendeeIds = result.content().stream()
+                .map(Attendee::getId)
+                .toList();
+        Set<Long> seatQueriedAttendeeIds;
+        Set<Long> roomQueriedAttendeeIds;
+        Set<Long> dinnerQueriedAttendeeIds;
+        Set<Long> seatAssignedAttendeeIds;
+        Set<Long> dinnerAssignedAttendeeIds;
+        Map<Long, String> seatLabelByAttendeeId;
+        if (attendeeIds.isEmpty()) {
+            seatQueriedAttendeeIds = Set.of();
+            roomQueriedAttendeeIds = Set.of();
+            dinnerQueriedAttendeeIds = Set.of();
+            seatAssignedAttendeeIds = Set.of();
+            dinnerAssignedAttendeeIds = Set.of();
+            seatLabelByAttendeeId = Map.of();
+        } else {
+            seatQueriedAttendeeIds = Set.copyOf(publicQueryHistoryRepository.findQueriedAttendeeIds(meetingId, PublicQueryType.SEAT, attendeeIds));
+            roomQueriedAttendeeIds = Set.copyOf(publicQueryHistoryRepository.findQueriedAttendeeIds(meetingId, PublicQueryType.ROOM, attendeeIds));
+            dinnerQueriedAttendeeIds = Set.copyOf(publicQueryHistoryRepository.findQueriedAttendeeIds(meetingId, PublicQueryType.DINNER, attendeeIds));
+            var seatAssignments = seatAssignmentRepository.findWithAttendeeAndSeatByMeetingIdAndAttendeeIdIn(meetingId, attendeeIds);
+            seatAssignedAttendeeIds = seatAssignments.stream()
+                    .filter(assignment -> assignment.getAttendee() != null)
+                    .map(assignment -> assignment.getAttendee().getId())
+                    .collect(Collectors.toSet());
+            dinnerAssignedAttendeeIds = Set.copyOf(dinnerAssignmentRepository.findAssignedAttendeeIdsByMeetingIdAndAttendeeIdIn(meetingId, attendeeIds));
+            seatLabelByAttendeeId = seatAssignments.stream()
+                    .filter(assignment -> assignment.getAttendee() != null
+                            && assignment.getSeat() != null
+                            && assignment.getSeat().getAreaName() != null
+                            && !assignment.getSeat().getAreaName().isBlank())
+                    .collect(Collectors.toMap(
+                            assignment -> assignment.getAttendee().getId(),
+                            this::seatLabel,
+                            (existing, replacement) -> existing
+                    ));
+        }
         return ApiResponse.ok(new PageResponse<>(
                 result.content().stream()
                         .map(attendee -> response(

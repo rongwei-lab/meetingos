@@ -23,6 +23,7 @@ import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.stream.Collectors;
 
 @Service
 public class DinnerService {
@@ -52,7 +53,7 @@ public class DinnerService {
     public List<DinnerAssignmentResponse> list(Long meetingId) {
         Meeting meeting = meetingRepository.findById(meetingId)
                 .orElseThrow(() -> BusinessException.notFound("会议不存在"));
-        return dinnerAssignmentRepository.findByMeetingIdOrderByTableNoAscIdAsc(meetingId).stream()
+        return dinnerAssignmentRepository.findWithAttendeeByMeetingIdOrderByTableNoAscIdAsc(meetingId).stream()
                 .map(assignment -> toResponse(assignment, meeting))
                 .toList();
     }
@@ -81,8 +82,10 @@ public class DinnerService {
     public List<DinnerTableResponse> listTables(Long meetingId) {
         meetingRepository.findById(meetingId)
                 .orElseThrow(() -> BusinessException.notFound("会议不存在"));
+        Map<String, Long> occupiedByTableNo = dinnerAssignmentRepository.countByMeetingIdGroupByTableNo(meetingId).stream()
+                .collect(Collectors.toMap(row -> String.valueOf(row[0]), row -> row[1] instanceof Number number ? number.longValue() : 0L));
         return dinnerTableRepository.findByMeetingIdOrderByTableNoAsc(meetingId).stream()
-                .map(this::toTableResponse)
+                .map(table -> toTableResponse(table, occupiedByTableNo.getOrDefault(table.getTableNo(), 0L)))
                 .toList();
     }
 
@@ -135,8 +138,7 @@ public class DinnerService {
              * 晚宴安排用桌号字符串保存，允许历史导入的自由桌号继续存在。
              * 管理端主动重命名桌号时同步已安排记录，避免统计被拆成“旧桌号”和“新桌号”两组。
              */
-            dinnerAssignmentRepository.findByMeetingIdOrderByTableNoAscIdAsc(request.meetingId()).stream()
-                    .filter(assignment -> oldTableNo.equals(assignment.getTableNo()))
+            dinnerAssignmentRepository.findByMeetingIdAndTableNo(request.meetingId(), oldTableNo).stream()
                     .forEach(assignment -> assignment.setTableNo(newTableNo));
         }
         return toTableResponse(saved);
@@ -215,7 +217,7 @@ public class DinnerService {
     public ExportTable exportDinnerTable(Long meetingId) {
         Meeting meeting = meetingRepository.findById(meetingId)
                 .orElseThrow(() -> BusinessException.notFound("会议不存在"));
-        var rows = dinnerAssignmentRepository.findByMeetingIdOrderByTableNoAscIdAsc(meetingId).stream()
+        var rows = dinnerAssignmentRepository.findWithAttendeeByMeetingIdOrderByTableNoAscIdAsc(meetingId).stream()
                 .map(assignment -> {
                     Attendee attendee = assignment.getAttendee();
                     return List.of(
@@ -263,7 +265,7 @@ public class DinnerService {
         Attendee attendee = assignment.getAttendee();
         return new DinnerAssignmentResponse(
                 assignment.getId(),
-                assignment.getMeeting().getId(),
+                meeting.getId(),
                 attendee.getId(),
                 attendee.getName(),
                 attendee.getPhone(),
@@ -297,7 +299,10 @@ public class DinnerService {
     }
 
     private DinnerTableResponse toTableResponse(DinnerTable table) {
-        long occupied = dinnerAssignmentRepository.countByMeetingIdAndTableNo(table.getMeeting().getId(), table.getTableNo());
+        return toTableResponse(table, dinnerAssignmentRepository.countByMeetingIdAndTableNo(table.getMeeting().getId(), table.getTableNo()));
+    }
+
+    private DinnerTableResponse toTableResponse(DinnerTable table, long occupied) {
         int capacity = normalizedCapacity(table.getCapacity());
         return new DinnerTableResponse(
                 table.getId(),

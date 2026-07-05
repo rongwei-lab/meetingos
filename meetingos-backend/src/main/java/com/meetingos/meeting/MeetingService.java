@@ -24,6 +24,8 @@ import org.springframework.util.StringUtils;
 import java.security.SecureRandom;
 import java.time.LocalDate;
 import java.time.format.DateTimeFormatter;
+import java.util.List;
+import java.util.Map;
 import java.util.Set;
 import java.util.UUID;
 import java.util.stream.Collectors;
@@ -98,8 +100,20 @@ public class MeetingService {
     public PageResponse<MeetingSummary> list(String keyword, MeetingStatus status, int page, int size) {
         PageRequest pageRequest = PageRequests.of(page, size);
         Page<Meeting> meetings = searchVisibleMeetings(keyword, status, pageRequest);
-        Page<MeetingSummary> summaries = meetings.map(this::toSummary);
-        return PageResponse.from(summaries);
+        List<Meeting> content = meetings.getContent();
+        if (content.isEmpty()) {
+            return new PageResponse<>(List.of(), meetings.getNumber(), meetings.getSize(), meetings.getTotalElements(), meetings.getTotalPages());
+        }
+
+        /*
+         * 会议列表只需要当前页会议的统计。批量 group by 后再组装 Summary，避免每条会议
+         * 分别执行报名/审核/排座/住宿/晚宴/签到 count 导致列表接口出现 N+1 查询。
+         */
+        SummaryStats stats = loadSummaryStats(content.stream().map(Meeting::getId).toList());
+        List<MeetingSummary> summaries = content.stream()
+                .map(meeting -> toSummary(meeting, stats))
+                .toList();
+        return new PageResponse<>(summaries, meetings.getNumber(), meetings.getSize(), meetings.getTotalElements(), meetings.getTotalPages());
     }
 
     @Transactional(readOnly = true)
@@ -125,6 +139,49 @@ public class MeetingService {
         long roomAssignedCount = attendeeRepository.countByMeetingIdAndRoomNoIsNotNull(meeting.getId());
         long dinnerAssignedCount = dinnerAssignmentRepository.countByMeetingId(meeting.getId());
         long checkedInCount = attendeeRepository.countByMeetingIdAndCheckinStatus(meeting.getId(), CheckinStatus.CHECKED_IN);
+        return toSummary(meeting, registrationCount, approvedCount, seatedCount, roomAssignedCount, dinnerAssignedCount, checkedInCount);
+    }
+
+    private SummaryStats loadSummaryStats(List<Long> meetingIds) {
+        SummaryStats stats = new SummaryStats();
+        for (Object[] row : attendeeRepository.countSummaryByMeetingIds(meetingIds, ReviewStatus.APPROVED, CheckinStatus.CHECKED_IN)) {
+            Long meetingId = ((Number) row[0]).longValue();
+            stats.registrationCounts().put(meetingId, ((Number) row[1]).longValue());
+            stats.approvedCounts().put(meetingId, ((Number) row[2]).longValue());
+            stats.roomAssignedCounts().put(meetingId, ((Number) row[3]).longValue());
+            stats.checkedInCounts().put(meetingId, ((Number) row[4]).longValue());
+        }
+        putCounts(stats.seatedCounts(), seatAssignmentRepository.countByMeetingIds(meetingIds));
+        putCounts(stats.dinnerAssignedCounts(), dinnerAssignmentRepository.countByMeetingIds(meetingIds));
+        return stats;
+    }
+
+    private void putCounts(Map<Long, Long> target, List<Object[]> rows) {
+        for (Object[] row : rows) {
+            target.put(((Number) row[0]).longValue(), ((Number) row[1]).longValue());
+        }
+    }
+
+    private MeetingSummary toSummary(Meeting meeting, SummaryStats stats) {
+        Long meetingId = meeting.getId();
+        return toSummary(
+                meeting,
+                stats.registrationCounts().getOrDefault(meetingId, 0L),
+                stats.approvedCounts().getOrDefault(meetingId, 0L),
+                stats.seatedCounts().getOrDefault(meetingId, 0L),
+                stats.roomAssignedCounts().getOrDefault(meetingId, 0L),
+                stats.dinnerAssignedCounts().getOrDefault(meetingId, 0L),
+                stats.checkedInCounts().getOrDefault(meetingId, 0L)
+        );
+    }
+
+    private MeetingSummary toSummary(Meeting meeting,
+                                     long registrationCount,
+                                     long approvedCount,
+                                     long seatedCount,
+                                     long roomAssignedCount,
+                                     long dinnerAssignedCount,
+                                     long checkedInCount) {
         return new MeetingSummary(
                 meeting.getId(),
                 meeting.getCode(),
@@ -150,6 +207,20 @@ public class MeetingService {
                 meeting.getPublicQueryFields(),
                 meeting.getPublicQueryMatchMode()
         );
+    }
+
+    private record SummaryStats(
+            Map<Long, Long> registrationCounts,
+            Map<Long, Long> approvedCounts,
+            Map<Long, Long> seatedCounts,
+            Map<Long, Long> roomAssignedCounts,
+            Map<Long, Long> dinnerAssignedCounts,
+            Map<Long, Long> checkedInCounts
+    ) {
+        private SummaryStats() {
+            this(new java.util.HashMap<>(), new java.util.HashMap<>(), new java.util.HashMap<>(),
+                    new java.util.HashMap<>(), new java.util.HashMap<>(), new java.util.HashMap<>());
+        }
     }
 
     private void applyRequest(Meeting meeting, MeetingRequest request) {

@@ -23,6 +23,8 @@ import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.function.Function;
+import java.util.stream.Collectors;
 
 @Service
 public class RoomService {
@@ -196,12 +198,18 @@ public class RoomService {
 
     @Transactional(readOnly = true)
     public ExportTable exportRoomsTable(Long meetingId) {
-        List<Attendee> assignments = attendeeRepository.findByMeetingIdOrderByIdAsc(meetingId).stream()
-                .filter(attendee -> attendee.getRoomNo() != null && !attendee.getRoomNo().isBlank())
-                .toList();
+        List<Attendee> assignments = attendeeRepository.findByMeetingIdAndRoomNoIsNotNullOrderByIdAsc(meetingId);
+        var roomNos = assignments.stream()
+                .map(Attendee::getRoomNo)
+                .filter(roomNo -> roomNo != null && !roomNo.isBlank())
+                .collect(Collectors.toSet());
+        Map<String, Room> roomByNo = roomNos.isEmpty()
+                ? Map.of()
+                : roomRepository.findByMeetingIdAndRoomNoIn(meetingId, roomNos).stream()
+                .collect(Collectors.toMap(Room::getRoomNo, Function.identity(), (existing, replacement) -> existing));
         var rows = assignments.stream()
                 .map(attendee -> {
-                    Room room = roomRepository.findByMeetingIdAndRoomNo(meetingId, attendee.getRoomNo()).orElse(null);
+                    Room room = roomByNo.get(attendee.getRoomNo());
                     return List.of(
                             attendee.getName(),
                             exportPhone(attendee.getPhone()),

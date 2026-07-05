@@ -26,6 +26,8 @@ meetingos:
     admin-api-base-url: "http://tduck-api.test"
     admin-email: ""
     admin-password: ""
+    connect-timeout: 100ms
+    read-timeout: 200ms
     api-token: ""
     sync-api-url: ""
   public-query:

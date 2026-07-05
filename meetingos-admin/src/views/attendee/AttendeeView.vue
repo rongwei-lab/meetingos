@@ -799,15 +799,15 @@ async function handleDetailDinnerChange(value: string | null) {
 }
 
 function currentSeatId(attendee: Attendee) {
-  return store.currentSeats.find((seat) => seat.attendeeId === attendee.id)?.id || null;
+  return store.currentSeatByAttendeeId.get(attendee.id)?.id || null;
 }
 
 function currentRoomId(attendee: Attendee) {
-  return attendee.roomId || (attendee.roomNo ? store.currentRooms.find((room) => room.roomNo === attendee.roomNo)?.id || null : null);
+  return attendee.roomId || (attendee.roomNo ? store.currentRoomByNo.get(attendee.roomNo)?.id || null : null);
 }
 
 function currentDinnerTableNo(attendee: Attendee) {
-  return store.currentDinnerAssignments.find((assignment) => assignment.attendeeId === attendee.id)?.tableNo || null;
+  return store.currentDinnerAssignmentByAttendeeId.get(attendee.id)?.tableNo || null;
 }
 
 function seatLabelText(seat: { areaName: string; rowNo: number; seatNo: number; seatType?: string }) {
@@ -815,7 +815,7 @@ function seatLabelText(seat: { areaName: string; rowNo: number; seatNo: number; 
 }
 
 function roomOccupancy(room: { id: string; roomNo: string; capacity?: number }, currentAttendeeId?: string) {
-  const occupied = store.currentAttendees.filter((attendee) => (attendee.roomId === room.id || attendee.roomNo === room.roomNo) && attendee.id !== currentAttendeeId).length;
+  const occupied = currentAttendeesForRoom(room).filter((attendee) => attendee.id !== currentAttendeeId).length;
   return {
     occupied,
     capacity: Math.max(1, room.capacity || 1)
@@ -829,7 +829,7 @@ function dinnerTableLabelText(tableNo: string, table?: DinnerTable) {
 }
 
 function dinnerTableOccupancy(tableNo: string, table?: DinnerTable) {
-  const occupied = table?.occupiedCount ?? store.currentDinnerAssignments.filter((assignment) => assignment.tableNo === tableNo).length;
+  const occupied = table?.occupiedCount ?? (store.currentDinnerAssignmentsByTableNo.get(tableNo)?.length || 0);
   return {
     occupied,
     capacity: Math.max(1, table?.capacity || occupied || 10)
@@ -840,9 +840,17 @@ function errorMessageOf(error: unknown, fallback: string) {
   return error instanceof Error ? error.message : fallback;
 }
 
+function currentAttendeesForRoom(room: { id: string; roomNo: string }) {
+  const byRoomId = store.currentAttendeesByRoomId.get(room.id) || [];
+  const byRoomNo = store.currentAttendeesByRoomNo.get(room.roomNo) || [];
+  if (!byRoomId.length) return byRoomNo;
+  if (!byRoomNo.length) return byRoomId;
+  return Array.from(new Map([...byRoomId, ...byRoomNo].map((attendee) => [attendee.id, attendee])).values());
+}
+
 function roomAvailableForDetail(room: { id: string; roomNo: string; capacity?: number; status?: string }, currentAttendeeId?: string) {
   if (room.status === "DISABLED") return false;
-  const occupants = store.currentAttendees.filter((attendee) => attendee.roomId === room.id || attendee.roomNo === room.roomNo);
+  const occupants = currentAttendeesForRoom(room);
   if (currentAttendeeId && occupants.some((attendee) => attendee.id === currentAttendeeId)) return true;
   return occupants.length < Math.max(1, room.capacity || 1);
 }

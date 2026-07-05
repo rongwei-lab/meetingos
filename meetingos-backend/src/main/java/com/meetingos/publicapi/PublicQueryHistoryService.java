@@ -11,9 +11,9 @@ import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Propagation;
 import org.springframework.transaction.annotation.Transactional;
 
+import java.sql.Timestamp;
 import java.time.LocalDateTime;
 import java.util.ArrayList;
-import java.util.Comparator;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
@@ -77,17 +77,32 @@ public class PublicQueryHistoryService {
     @Transactional(readOnly = true)
     public List<PublicQuerySummaryResponse> summary(Long meetingId) {
         ensureMeetingExists(meetingId);
-        Map<String, SummaryAccumulator> groups = new LinkedHashMap<>();
-        for (PublicQueryHistory history : historyRepository.findAllByMeetingIdForSummary(meetingId)) {
-            String groupKey = history.getAttendee() != null
-                    ? "ATTENDEE:" + history.getAttendee().getId()
-                    : "UNRECOGNIZED:" + normalizeFailureReason(history.getErrorMessage());
-            groups.computeIfAbsent(groupKey, key -> SummaryAccumulator.from(groupKey, history)).accept(history);
-        }
-        return groups.values().stream()
-                .map(SummaryAccumulator::toResponse)
-                .sorted(Comparator.comparing(PublicQuerySummaryResponse::latestQueryAt, Comparator.nullsLast(Comparator.reverseOrder())))
+        /*
+         * 汇总页只需要“每个参会人/失败原因的一行统计”。旧逻辑会把全部历史投影到 JVM 再分组，
+         * 日志量大时容易拖慢后台页面。这里让数据库用窗口函数完成分组计数和最近一条结果选择，
+         * Java 层只做脱敏和类型转换，接口返回结构保持不变。
+         */
+        return historyRepository.findSummaryAggregatesByMeetingId(meetingId).stream()
+                .map(this::toSummaryResponse)
                 .toList();
+    }
+
+    private PublicQuerySummaryResponse toSummaryResponse(Object[] row) {
+        String groupType = stringAt(row, 1);
+        String attendeePhone = "ATTENDEE".equals(groupType) ? SensitiveDataMasker.maskPhone(stringAt(row, 4)) : null;
+        return new PublicQuerySummaryResponse(
+                stringAt(row, 0),
+                groupType,
+                longAt(row, 2),
+                stringAt(row, 3),
+                attendeePhone,
+                stringAt(row, 5),
+                numberAt(row, 6),
+                numberAt(row, 7),
+                numberAt(row, 8),
+                dateTimeAt(row, 9),
+                stringAt(row, 10)
+        );
     }
 
     private void save(Meeting meeting,
@@ -160,11 +175,6 @@ public class PublicQueryHistoryService {
         return String.join("; ", parts);
     }
 
-    private String normalizeFailureReason(String errorMessage) {
-        String reason = blankToNull(errorMessage);
-        return reason == null ? "未知失败" : reason;
-    }
-
     private void ensureMeetingExists(Long meetingId) {
         if (!meetingRepository.existsById(meetingId)) {
             throw com.meetingos.common.BusinessException.notFound("会议不存在");
@@ -178,6 +188,36 @@ public class PublicQueryHistoryService {
 
     private String firstNonBlank(String primary, String fallback) {
         return blankToNull(primary) == null ? fallback : primary;
+    }
+
+    private String stringAt(Object[] row, int index) {
+        Object value = valueAt(row, index);
+        return value == null ? null : String.valueOf(value);
+    }
+
+    private Long longAt(Object[] row, int index) {
+        Object value = valueAt(row, index);
+        return value instanceof Number number ? number.longValue() : null;
+    }
+
+    private long numberAt(Object[] row, int index) {
+        Object value = valueAt(row, index);
+        return value instanceof Number number ? number.longValue() : 0L;
+    }
+
+    private LocalDateTime dateTimeAt(Object[] row, int index) {
+        Object value = valueAt(row, index);
+        if (value instanceof LocalDateTime localDateTime) {
+            return localDateTime;
+        }
+        if (value instanceof Timestamp timestamp) {
+            return timestamp.toLocalDateTime();
+        }
+        return null;
+    }
+
+    private Object valueAt(Object[] row, int index) {
+        return row == null || index >= row.length ? null : row[index];
     }
 
     private String truncate(String value, int maxLength) {
@@ -224,88 +264,4 @@ public class PublicQueryHistoryService {
         return "Other";
     }
 
-    private static final class SummaryAccumulator {
-        private final String groupKey;
-        private final String groupType;
-        private final Long attendeeId;
-        private final String attendeeName;
-        private final String attendeePhone;
-        private final String failureReason;
-        private long totalCount;
-        private long successCount;
-        private long failedCount;
-        private LocalDateTime latestQueryAt;
-        private String latestResult;
-
-        private SummaryAccumulator(String groupKey,
-                                   String groupType,
-                                   Long attendeeId,
-                                   String attendeeName,
-                                   String attendeePhone,
-                                   String failureReason) {
-            this.groupKey = groupKey;
-            this.groupType = groupType;
-            this.attendeeId = attendeeId;
-            this.attendeeName = attendeeName;
-            this.attendeePhone = attendeePhone;
-            this.failureReason = failureReason;
-        }
-
-        static SummaryAccumulator from(String groupKey, PublicQueryHistory history) {
-            Attendee attendee = history.getAttendee();
-            if (attendee != null) {
-                return new SummaryAccumulator(
-                        groupKey,
-                        "ATTENDEE",
-                        attendee.getId(),
-                        firstNonBlankStatic(history.getAttendeeName(), attendee.getName()),
-                        SensitiveDataMasker.maskPhone(firstNonBlankStatic(history.getAttendeePhone(), attendee.getPhone())),
-                        null
-                );
-            }
-            return new SummaryAccumulator(
-                    groupKey,
-                    "UNRECOGNIZED",
-                    null,
-                    null,
-                    null,
-                    firstNonBlankStatic(history.getErrorMessage(), "未知失败")
-            );
-        }
-
-        void accept(PublicQueryHistory history) {
-            totalCount += 1;
-            if (history.getQueryStatus() == PublicQueryStatus.SUCCESS) {
-                successCount += 1;
-            } else {
-                failedCount += 1;
-            }
-            if (latestQueryAt == null || history.getCreatedAt().isAfter(latestQueryAt)) {
-                latestQueryAt = history.getCreatedAt();
-                latestResult = history.getQueryStatus() == PublicQueryStatus.SUCCESS
-                        ? history.getResultSummary()
-                        : history.getErrorMessage();
-            }
-        }
-
-        PublicQuerySummaryResponse toResponse() {
-            return new PublicQuerySummaryResponse(
-                    groupKey,
-                    groupType,
-                    attendeeId,
-                    attendeeName,
-                    attendeePhone,
-                    failureReason,
-                    totalCount,
-                    successCount,
-                    failedCount,
-                    latestQueryAt,
-                    latestResult
-            );
-        }
-
-        private static String firstNonBlankStatic(String primary, String fallback) {
-            return primary == null || primary.isBlank() ? fallback : primary;
-        }
-    }
 }
