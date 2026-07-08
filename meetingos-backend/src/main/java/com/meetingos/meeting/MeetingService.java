@@ -21,13 +21,18 @@ import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.util.StringUtils;
 
+import java.net.URI;
+import java.net.URISyntaxException;
 import java.security.SecureRandom;
 import java.time.LocalDate;
 import java.time.format.DateTimeFormatter;
+import java.util.ArrayList;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
 import java.util.UUID;
+import java.util.regex.Pattern;
 import java.util.stream.Collectors;
 
 @Service
@@ -37,6 +42,12 @@ public class MeetingService {
     private static final DateTimeFormatter MEETING_CODE_DATE_FORMAT = DateTimeFormatter.BASIC_ISO_DATE;
     private static final String PUBLIC_QUERY_TOKEN_PREFIX = "pq_";
     private static final char[] PUBLIC_QUERY_TOKEN_ALPHABET = "0123456789abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ".toCharArray();
+    private static final Set<String> NAMEPLATE_FIELD_KEYS = Set.of(
+            "name", "company", "title", "phone", "attendeeType",
+            "seatLabel", "roomNo", "dinnerTableNo", "attendeeCode", "tags"
+    );
+    private static final Pattern HEX_COLOR_PATTERN = Pattern.compile("^#[0-9a-fA-F]{3}([0-9a-fA-F]{3})?$");
+    private static final List<NameplateFieldSetting> DEFAULT_NAMEPLATE_FIELDS = List.of(new NameplateFieldSetting("name", null, null));
     private static final SecureRandom SECURE_RANDOM = new SecureRandom();
 
     private final MeetingRepository meetingRepository;
@@ -130,6 +141,24 @@ public class MeetingService {
                 summary.dinnerAssignedCount(),
                 summary.checkedInCount()
         );
+    }
+
+    @Transactional(readOnly = true)
+    public MeetingPrintSettingsResponse printSettings(Long id) {
+        Meeting meeting = meetingRepository.findById(id)
+                .orElseThrow(() -> BusinessException.notFound("会议不存在"));
+        return toPrintSettings(meeting);
+    }
+
+    @Transactional
+    public MeetingPrintSettingsResponse updatePrintSettings(Long id, MeetingPrintSettingsRequest request) {
+        Meeting meeting = meetingRepository.findById(id)
+                .orElseThrow(() -> BusinessException.notFound("会议不存在"));
+        meeting.setNameplateTemplateUrl(normalizeNameplateTemplateUrl(request.nameplateTemplateUrl()));
+        if (request.nameplateFields() != null) {
+            meeting.setNameplateFields(normalizeNameplateFields(request.nameplateFields()));
+        }
+        return toPrintSettings(meeting);
     }
 
     public MeetingSummary toSummary(Meeting meeting) {
@@ -283,6 +312,87 @@ public class MeetingService {
             return value;
         }
         return value.substring(0, maxLength);
+    }
+
+    private MeetingPrintSettingsResponse toPrintSettings(Meeting meeting) {
+        List<NameplateFieldSetting> fields = meeting.getNameplateFields();
+        return new MeetingPrintSettingsResponse(
+                meeting.getId(),
+                meeting.getNameplateTemplateUrl(),
+                fields == null || fields.isEmpty() ? DEFAULT_NAMEPLATE_FIELDS : fields
+        );
+    }
+
+    private String normalizeNameplateTemplateUrl(String value) {
+        String text = blankToNull(value);
+        if (text == null) {
+            return null;
+        }
+        text = text.trim();
+        /*
+         * 席签模板会直接进入打印页 background-image。
+         * 会议级设置只允许后台上传出的同源 /uploads 图片，或显式 https 图片；
+         * 拒绝 javascript/data/file 等地址，避免把不可信内容写入后续打印页面。
+         */
+        if (text.startsWith("/uploads/") && !text.contains("..") && !text.contains("\\")) {
+            return limit(text, 500);
+        }
+        try {
+            URI uri = new URI(text);
+            if (uri.isAbsolute() && "https".equalsIgnoreCase(uri.getScheme())) {
+                return limit(text, 500);
+            }
+        } catch (URISyntaxException ignored) {
+            // 统一走下面的业务错误，避免把解析细节暴露给前端。
+        }
+        throw BusinessException.badRequest("席签模板仅允许 /uploads/ 下的同源图片或 https 图片地址");
+    }
+
+    private List<NameplateFieldSetting> normalizeNameplateFields(List<NameplateFieldSetting> fields) {
+        if (fields.isEmpty()) {
+            throw BusinessException.badRequest("席签至少保留一个展示字段");
+        }
+        LinkedHashSet<String> seen = new LinkedHashSet<>();
+        List<NameplateFieldSetting> normalized = new ArrayList<>();
+        for (NameplateFieldSetting field : fields) {
+            if (field == null) {
+                throw BusinessException.badRequest("席签展示字段不能为空");
+            }
+            String fieldKey = blankToNull(field.fieldKey());
+            if (fieldKey != null) {
+                fieldKey = fieldKey.trim();
+            }
+            if (fieldKey == null || !NAMEPLATE_FIELD_KEYS.contains(fieldKey)) {
+                throw BusinessException.badRequest("席签展示字段不合法");
+            }
+            if (!seen.add(fieldKey)) {
+                throw BusinessException.badRequest("席签展示字段不能重复");
+            }
+            Integer fontSizePt = field.fontSizePt();
+            if (fontSizePt != null && (fontSizePt < 10 || fontSizePt > 120)) {
+                throw BusinessException.badRequest("席签字号必须在 10-120pt 之间");
+            }
+            String color = blankToNull(field.color());
+            if (color != null) {
+                color = color.trim();
+                if (!HEX_COLOR_PATTERN.matcher(color).matches()) {
+                    throw BusinessException.badRequest("席签字段颜色仅允许 hex 格式");
+                }
+            }
+            Double letterSpacingEm = field.letterSpacingEm();
+            if (letterSpacingEm != null) {
+                if (!Double.isFinite(letterSpacingEm) || letterSpacingEm < 0 || letterSpacingEm > 1) {
+                    throw BusinessException.badRequest("席签字距必须在 0-1em 之间");
+                }
+                letterSpacingEm = Math.round(letterSpacingEm * 100.0) / 100.0;
+            }
+            /*
+             * 保存前重建对象，保证 JSON 里只落库经过白名单校验和 trim 的字段。
+             * 字号/颜色/字距/加粗为空时表示使用前端自动字号、默认黑色、自动字距和默认粗细，避免写入无意义默认值。
+             */
+            normalized.add(new NameplateFieldSetting(fieldKey, fontSizePt, color, letterSpacingEm, field.bold()));
+        }
+        return List.copyOf(normalized);
     }
 
     private String generateMeetingCode() {

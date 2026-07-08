@@ -10,6 +10,7 @@ import org.hibernate.annotations.JdbcTypeCode;
 import org.hibernate.type.SqlTypes;
 
 import java.time.LocalDateTime;
+import java.util.List;
 import java.util.Map;
 
 @Entity
@@ -187,6 +188,13 @@ public class Meeting extends BaseEntity {
 
     @Column(nullable = false, length = 500)
     private String publicQueryDinnerHighlightResultFields = "DINNER_TABLE_NO";
+
+    @Column(length = 500)
+    private String nameplateTemplateUrl;
+
+    @JdbcTypeCode(SqlTypes.JSON)
+    @Column(columnDefinition = "json")
+    private List<NameplateFieldSetting> nameplateFields;
 
     public String getCode() {
         return code;
@@ -658,5 +666,21 @@ public class Meeting extends BaseEntity {
 
     public void setPublicQueryDinnerHighlightResultFields(String publicQueryDinnerHighlightResultFields) {
         this.publicQueryDinnerHighlightResultFields = publicQueryDinnerHighlightResultFields;
+    }
+
+    public String getNameplateTemplateUrl() {
+        return nameplateTemplateUrl;
+    }
+
+    public void setNameplateTemplateUrl(String nameplateTemplateUrl) {
+        this.nameplateTemplateUrl = nameplateTemplateUrl;
+    }
+
+    public List<NameplateFieldSetting> getNameplateFields() {
+        return nameplateFields;
+    }
+
+    public void setNameplateFields(List<NameplateFieldSetting> nameplateFields) {
+        this.nameplateFields = nameplateFields;
     }
 }

@@ -255,6 +255,20 @@ interface AssetUploadDto {
   contentType: string;
 }
 
+export interface MeetingPrintSettingsDto {
+  meetingId: string;
+  nameplateTemplateUrl?: string | null;
+  nameplateFields?: MeetingPrintFieldSettingsDto[];
+}
+
+export interface MeetingPrintFieldSettingsDto {
+  fieldKey: string;
+  fontSizePt?: number | null;
+  color?: string | null;
+  letterSpacingEm?: number | null;
+  bold?: boolean | null;
+}
+
 export interface PublicCaptchaDto {
   enabled: boolean;
   captchaId?: string | null;
@@ -2259,6 +2273,57 @@ export const useMeetingStore = defineStore("meeting", {
           throw new Error("当前后端未启动，无法上传图片。请启动后端后重试，或先手动填写图片 URL。");
         }
         throw new Error(extractErrorMessage(error, "图片上传失败"));
+      }
+    },
+    async loadMeetingPrintSettings(meetingId?: string) {
+      const targetMeetingId = requireMeetingId(meetingId || this.currentMeetingId);
+      try {
+        const response = unwrapApi(
+          await http.get<{
+            meetingId: number;
+            nameplateTemplateUrl?: string | null;
+            nameplateFields?: MeetingPrintFieldSettingsDto[] | null;
+          }>(`/admin/meetings/${backendId(targetMeetingId)}/print-settings`)
+        );
+        return {
+          meetingId: idOf(response.meetingId),
+          nameplateTemplateUrl: response.nameplateTemplateUrl || "",
+          nameplateFields: response.nameplateFields || []
+        } satisfies MeetingPrintSettingsDto;
+      } catch (error) {
+        if (canUseDemoFallback(error)) {
+          return { meetingId: targetMeetingId, nameplateTemplateUrl: "", nameplateFields: [] } satisfies MeetingPrintSettingsDto;
+        }
+        throw new Error(extractErrorMessage(error, "打印设置加载失败"));
+      }
+    },
+    async saveMeetingPrintSettings(meetingId: string, settings: Pick<MeetingPrintSettingsDto, "nameplateTemplateUrl" | "nameplateFields">) {
+      const targetMeetingId = requireMeetingId(meetingId);
+      try {
+        const response = unwrapApi(
+          await http.put<{
+            meetingId: number;
+            nameplateTemplateUrl?: string | null;
+            nameplateFields?: MeetingPrintFieldSettingsDto[] | null;
+          }>(`/admin/meetings/${backendId(targetMeetingId)}/print-settings`, {
+            nameplateTemplateUrl: settings.nameplateTemplateUrl || null,
+            nameplateFields: settings.nameplateFields || []
+          })
+        );
+        return {
+          meetingId: idOf(response.meetingId),
+          nameplateTemplateUrl: response.nameplateTemplateUrl || "",
+          nameplateFields: response.nameplateFields || []
+        } satisfies MeetingPrintSettingsDto;
+      } catch (error) {
+        if (canUseDemoFallback(error)) {
+          return {
+            meetingId: targetMeetingId,
+            nameplateTemplateUrl: settings.nameplateTemplateUrl || "",
+            nameplateFields: settings.nameplateFields || []
+          } satisfies MeetingPrintSettingsDto;
+        }
+        throw new Error(extractErrorMessage(error, "打印设置保存失败"));
       }
     },
     async checkinByCode(input: string, entrance = "A入口", options: { checkinType?: "SCAN" | "SEARCH" | "MANUAL" | "SUPPLEMENT"; remark?: string } = {}) {

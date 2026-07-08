@@ -16,6 +16,7 @@
         批量拒绝
       </n-button>
       <n-button @click="exportAttendees">导出参会人</n-button>
+      <n-button secondary @click="openNameplatePrint">打印席签</n-button>
       <n-upload
         :show-file-list="false"
         accept=".xlsx"
@@ -146,6 +147,218 @@
     </n-modal>
 
     <n-modal
+      v-model:show="nameplateModalVisible"
+      preset="card"
+      title="打印席签"
+      class="nameplate-modal"
+      style="width: min(1080px, calc(100vw - 48px))"
+    >
+      <div class="nameplate-modal-body">
+        <section class="nameplate-settings">
+          <div class="nameplate-section">
+            <div class="nameplate-section-head">
+              <strong>折后单面尺寸</strong>
+              <span>{{ selectedNameplateSize.label }}，展开高 {{ selectedNameplateSize.heightMm * 2 }}mm</span>
+            </div>
+            <div class="nameplate-size-grid">
+              <button
+                v-for="size in nameplateSizePresets"
+                :key="size.value"
+                type="button"
+                class="nameplate-size-option"
+                :class="{ active: nameplateSizeValue === size.value }"
+                @click="nameplateSizeValue = size.value"
+              >
+                {{ size.label }}
+              </button>
+            </div>
+          </div>
+
+          <div class="nameplate-section">
+            <div class="nameplate-section-head">
+              <strong>字体</strong>
+              <span>颜色和字号在展示字段中单独设置</span>
+            </div>
+            <div class="nameplate-font-grid">
+              <n-select v-model:value="nameplateFontValue" :options="nameplateFontOptions" placeholder="选择字体" />
+            </div>
+          </div>
+
+          <div class="nameplate-section">
+            <div class="nameplate-section-head">
+              <strong>模板背景</strong>
+              <span>{{ safeNameplateTemplateUrl ? "当前会议已配置" : "未上传时为白底" }}</span>
+            </div>
+            <div class="nameplate-template-control">
+              <n-input :value="safeNameplateTemplateUrl || '白底默认模板'" readonly />
+              <n-upload
+                :show-file-list="false"
+                accept=".png,.jpg,.jpeg,.webp,.gif"
+                :custom-request="uploadNameplateTemplate"
+              >
+                <n-button secondary :loading="uploadingNameplateTemplate">上传模板</n-button>
+              </n-upload>
+              <n-button secondary :disabled="!safeNameplateTemplateUrl || savingNameplateTemplate" @click="clearNameplateTemplate">清空</n-button>
+            </div>
+          </div>
+
+          <div class="nameplate-section">
+            <div class="nameplate-section-head">
+              <strong>展示字段</strong>
+              <span>按当前顺序打印</span>
+            </div>
+            <n-select
+              v-model:value="pendingNameplateField"
+              :options="availableNameplateFieldOptions"
+              placeholder="添加字段"
+              clearable
+              @update:value="handleNameplateFieldSelect"
+            />
+            <div class="nameplate-field-list">
+              <div
+                v-for="(field, index) in selectedNameplateFieldSettings"
+                :key="field.fieldKey"
+                class="nameplate-field-row"
+              >
+                <span>{{ nameplateFieldLabel(field.fieldKey) }}</span>
+                <div class="nameplate-field-style-controls">
+                  <div class="nameplate-field-style-control">
+                    <span>字号</span>
+                    <n-input-number
+                      class="nameplate-font-size-input"
+                      :value="displayNameplateFieldFontSize(field, index)"
+                      :min="10"
+                      :max="120"
+                      :precision="0"
+                      :show-button="false"
+                      clearable
+                      placeholder="自动"
+                      size="small"
+                      @update:value="updateNameplateFieldFontSize(index, $event)"
+                    >
+                      <template #suffix>pt</template>
+                    </n-input-number>
+                  </div>
+                  <div class="nameplate-field-style-control">
+                    <span>颜色</span>
+                    <n-color-picker
+                      class="nameplate-field-color-picker"
+                      :value="field.color || '#000000'"
+                      :show-alpha="false"
+                      :modes="['hex']"
+                      size="small"
+                      @update:value="updateNameplateFieldColor(index, $event)"
+                    />
+                  </div>
+                  <div class="nameplate-field-style-control">
+                    <span>字距</span>
+                    <n-input-number
+                      class="nameplate-letter-spacing-input"
+                      :value="displayNameplateFieldLetterSpacing(field, index)"
+                      :min="0"
+                      :max="1"
+                      :step="0.02"
+                      :precision="2"
+                      :show-button="false"
+                      clearable
+                      placeholder="自动"
+                      size="small"
+                      @update:value="updateNameplateFieldLetterSpacing(index, $event)"
+                    >
+                      <template #suffix>em</template>
+                    </n-input-number>
+                  </div>
+                  <div class="nameplate-field-style-control is-switch-control">
+                    <span>加粗</span>
+                    <n-switch
+                      :value="displayNameplateFieldBold(field, index)"
+                      size="small"
+                      @update:value="updateNameplateFieldBold(index, $event)"
+                    />
+                  </div>
+                </div>
+                <div class="nameplate-field-actions">
+                  <n-button text size="tiny" :disabled="index === 0" @click="moveNameplateField(index, -1)">上移</n-button>
+                  <n-button
+                    text
+                    size="tiny"
+                    :disabled="index === selectedNameplateFieldSettings.length - 1"
+                    @click="moveNameplateField(index, 1)"
+                  >
+                    下移
+                  </n-button>
+                  <n-button text size="tiny" type="error" @click="removeNameplateField(index)">移除</n-button>
+                </div>
+              </div>
+            </div>
+            <n-button size="small" quaternary @click="resetNameplateFields">恢复默认字段</n-button>
+          </div>
+        </section>
+
+        <section class="nameplate-preview-panel">
+          <div class="nameplate-section-head">
+            <strong>打印预览</strong>
+            <span>已选择 {{ selectedNameplateAttendees.length }} 人</span>
+          </div>
+          <div class="nameplate-preview-shell">
+            <div ref="nameplatePreviewViewportRef" class="nameplate-preview-viewport" :style="nameplatePreviewViewportStyle">
+              <div
+                class="nameplate-preview-a4"
+                :style="nameplatePreviewPaperStyle"
+              >
+                <div class="nameplate-preview-page-layout" :class="nameplatePreviewLayoutClass">
+                  <div
+                    v-for="(previewAttendee, sheetIndex) in nameplatePreviewSheetAttendees"
+                    :key="`${previewAttendee?.id || 'placeholder'}-${sheetIndex}`"
+                    class="nameplate-preview-sheet"
+                    :style="nameplatePreviewSheetStyle"
+                  >
+                    <div class="nameplate-preview-face is-top" :style="nameplatePreviewFaceStyle">
+                      <div class="nameplate-preview-content" :style="nameplatePreviewContentStyle">
+                        <div
+                          v-for="(field, index) in selectedNameplateFieldSettings"
+                          :key="field.fieldKey"
+                          class="nameplate-preview-line"
+                          :class="nameplateFieldClass(field.fieldKey, index)"
+                          :style="nameplatePreviewLineStyle(field, index)"
+                        >
+                          {{ previewNameplateFieldValue(field.fieldKey, previewAttendee) }}
+                        </div>
+                      </div>
+                    </div>
+                    <div class="nameplate-preview-fold-line" />
+                    <div class="nameplate-preview-face" :style="nameplatePreviewFaceStyle">
+                      <div class="nameplate-preview-content" :style="nameplatePreviewContentStyle">
+                        <div
+                          v-for="(field, index) in selectedNameplateFieldSettings"
+                          :key="field.fieldKey"
+                          class="nameplate-preview-line"
+                          :class="nameplateFieldClass(field.fieldKey, index)"
+                          :style="nameplatePreviewLineStyle(field, index)"
+                        >
+                          {{ previewNameplateFieldValue(field.fieldKey, previewAttendee) }}
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
+          <p class="nameplate-print-hint">
+            预览按 {{ nameplatePreviewPaperHint }} 显示，席签居中放置。沿中线对折成 V 型席签，打印时边距设为无或最小。
+          </p>
+        </section>
+      </div>
+      <template #footer>
+        <n-space justify="end">
+          <n-button @click="nameplateModalVisible = false">取消</n-button>
+          <n-button type="primary" :loading="printingNameplates" @click="printNameplates">打开打印</n-button>
+        </n-space>
+      </template>
+    </n-modal>
+
+    <n-modal
       v-model:show="detailVisible"
       preset="card"
       :title="detailAttendee ? `${detailAttendee.name} 的报名详情` : '报名详情'"
@@ -263,16 +476,17 @@
 <script setup lang="ts">
 import type { SelectOption, UploadCustomRequestOptions } from "naive-ui";
 import { NButton, NDataTable, NDynamicTags, NForm, NFormItem, NModal, NSpace, NTag, NUpload, useDialog, useMessage } from "naive-ui";
-import { computed, h, onMounted, ref, watch } from "vue";
+import { computed, defineAsyncComponent, h, nextTick, onBeforeUnmount, onMounted, ref, watch } from "vue";
 import { useRoute } from "vue-router";
 import PageHeader from "@/components/PageHeader.vue";
 import StatusTag from "@/components/StatusTag.vue";
 import { useRouteMeeting } from "@/composables/useRouteMeeting";
 import { useIsMobile } from "@/composables/useResponsive";
-import type { ImportResultDto, TduckFieldMappingDto } from "@/stores/meeting";
+import type { ImportResultDto, MeetingPrintFieldSettingsDto, TduckFieldMappingDto } from "@/stores/meeting";
 import { useMeetingStore } from "@/stores/meeting";
 import { attendeeFieldLabel, normalizedAttendeeFieldText } from "@/utils/attendeeFields";
 import { attendeeTypeLabel, formatDateLikeValue, formatDateTimeLabel, seatTypeLabel } from "@/utils/meetingDisplay";
+import { isAllowedUploadImage, sanitizeImageUrl } from "@/utils/safeUrl";
 import type { Attendee, AuditStatus, DinnerTable } from "@/utils/types";
 
 const store = useMeetingStore();
@@ -280,6 +494,7 @@ const route = useRoute();
 const message = useMessage();
 const dialog = useDialog();
 const isMobile = useIsMobile();
+const NColorPicker = defineAsyncComponent(() => import("naive-ui/es/color-picker").then((module) => module.NColorPicker));
 const keyword = ref("");
 const auditStatus = ref<AuditStatus | null>(null);
 const attendeeType = ref<Attendee["attendeeType"] | null>(null);
@@ -306,8 +521,22 @@ const savingDinnerAssignment = ref(false);
 const auditingById = ref<Record<string, AuditStatus>>({});
 const batchAuditingStatus = ref<AuditStatus | null>(null);
 const attendeePageLoading = ref(false);
+const nameplateModalVisible = ref(false);
+const printingNameplates = ref(false);
+const nameplateSizeValue = ref("100x220");
+const nameplateFontValue = ref<NameplateFontKey>("hei");
+const nameplateTemplateUrl = ref("");
+const loadingNameplateTemplate = ref(false);
+const savingNameplateTemplate = ref(false);
+const uploadingNameplateTemplate = ref(false);
+const pendingNameplateField = ref<NameplateFieldKey | null>(null);
+const selectedNameplateFieldSettings = ref<NameplateFieldSetting[]>([defaultNameplateFieldSetting("name")]);
+const nameplatePreviewViewportRef = ref<HTMLElement | null>(null);
+const nameplatePreviewViewportWidth = ref(420);
 const auditStatusValues = new Set<AuditStatus>(["PENDING", "APPROVED", "REJECTED", "CANCELLED"]);
 let attendeePageLoadToken = 0;
+let nameplateSettingsSaveTimer: number | null = null;
+let nameplatePreviewResizeObserver: ResizeObserver | null = null;
 
 const { routeMeetingId, syncMeetingFromRoute } = useRouteMeeting({ autoSync: false, loadWorkspace: false });
 
@@ -327,6 +556,70 @@ const seatOptions = [
   { label: "已排座", value: true },
   { label: "未排座", value: false }
 ];
+
+type NameplateFieldKey =
+  | "name"
+  | "company"
+  | "title"
+  | "phone"
+  | "attendeeType"
+  | "seatLabel"
+  | "roomNo"
+  | "dinnerTableNo"
+  | "attendeeCode"
+  | "tags";
+
+type NameplateFontKey = "hei" | "sourceHan" | "fzLantingHei" | "yaheiBold" | "song" | "kai" | "fangsong" | "system";
+
+interface NameplateFieldSetting {
+  fieldKey: NameplateFieldKey;
+  fontSizePt: number | null;
+  color: string | null;
+  letterSpacingEm: number | null;
+  bold: boolean | null;
+}
+
+const nameplateSizePresets = [
+  { label: "100x200mm", value: "100x200", heightMm: 100, widthMm: 200 },
+  { label: "100x210mm", value: "100x210", heightMm: 100, widthMm: 210 },
+  { label: "60x90mm", value: "60x90", heightMm: 60, widthMm: 90 },
+  { label: "80x120mm", value: "80x120", heightMm: 80, widthMm: 120 },
+  { label: "80x150mm", value: "80x150", heightMm: 80, widthMm: 150 },
+  { label: "80x180mm", value: "80x180", heightMm: 80, widthMm: 180 },
+  { label: "80x200mm", value: "80x200", heightMm: 80, widthMm: 200 },
+  { label: "100x150mm", value: "100x150", heightMm: 100, widthMm: 150 },
+  { label: "100x180mm", value: "100x180", heightMm: 100, widthMm: 180 },
+  { label: "100x220mm", value: "100x220", heightMm: 100, widthMm: 220 }
+] as const;
+
+const nameplateFieldOptions: Array<{ label: string; value: NameplateFieldKey }> = [
+  { label: "姓名", value: "name" },
+  { label: "单位", value: "company" },
+  { label: "职务", value: "title" },
+  { label: "手机号", value: "phone" },
+  { label: "参会类型", value: "attendeeType" },
+  { label: "座位号", value: "seatLabel" },
+  { label: "房间号", value: "roomNo" },
+  { label: "晚宴桌号", value: "dinnerTableNo" },
+  { label: "参会码", value: "attendeeCode" },
+  { label: "标签", value: "tags" }
+];
+
+const nameplateFontOptions: Array<{ label: string; value: NameplateFontKey; css: string; defaultBold?: boolean }> = [
+  { label: "黑体", value: "hei", css: '"SimHei", "Microsoft YaHei", "PingFang SC", "Noto Sans CJK SC", Arial, sans-serif' },
+  { label: "思源黑体", value: "sourceHan", css: '"Source Han Sans SC", "Source Han Sans CN", "Noto Sans CJK SC", "Noto Sans SC", "Microsoft YaHei", sans-serif' },
+  { label: "方正兰亭黑", value: "fzLantingHei", css: '"FZLanTingHeiS", "FZLanTingHei-R-GBK", "方正兰亭黑", "Microsoft YaHei", "SimHei", sans-serif' },
+  { label: "微软雅黑粗体", value: "yaheiBold", css: '"Microsoft YaHei UI", "Microsoft YaHei", "PingFang SC", "Noto Sans CJK SC", sans-serif', defaultBold: true },
+  { label: "宋体", value: "song", css: '"SimSun", "Songti SC", "Noto Serif CJK SC", serif' },
+  { label: "楷体", value: "kai", css: '"KaiTi", "Kaiti SC", "STKaiti", serif' },
+  { label: "仿宋", value: "fangsong", css: '"FangSong", "FangSong_GB2312", "STFangsong", serif' },
+  { label: "苹方/系统默认", value: "system", css: '"PingFang SC", "Microsoft YaHei", "Noto Sans CJK SC", Arial, sans-serif' }
+];
+
+const a4PortraitPaper = { label: "A4 纵向", widthMm: 210, heightMm: 297, orientation: "portrait" as const };
+const a4LandscapePaper = { label: "A4 横向", widthMm: 297, heightMm: 210, orientation: "landscape" as const };
+const cssPxPerMm = 96 / 25.4;
+const cssPxPerPt = 96 / 72;
 
 const tagOptions = computed(() =>
   Array.from(new Set(store.currentAttendees.flatMap((item) => item.tags)))
@@ -354,6 +647,110 @@ const localFilteredAttendees = computed(() =>
 );
 
 const filteredAttendees = computed(() => remoteFilteredAttendees.value || localFilteredAttendees.value);
+
+const defaultNameplateSizePreset = nameplateSizePresets.find((size) => size.value === "100x220") || nameplateSizePresets[0];
+
+const selectedNameplateSize = computed(() =>
+  nameplateSizePresets.find((size) => size.value === nameplateSizeValue.value) || defaultNameplateSizePreset
+);
+
+const selectedNameplateFont = computed(() =>
+  nameplateFontOptions.find((font) => font.value === nameplateFontValue.value) || nameplateFontOptions[0]
+);
+
+const safeNameplateTemplateUrl = computed(() => sanitizeImageUrl(nameplateTemplateUrl.value));
+
+const nameplateFaceBackgroundStyle = computed(() => {
+  const url = safeNameplateTemplateUrl.value;
+  if (!url) return {};
+  return {
+    backgroundImage: `url("${cssUrlEscape(url)}")`
+  };
+});
+
+const selectedNameplateFieldKeys = computed(() => selectedNameplateFieldSettings.value.map((field) => field.fieldKey));
+
+const availableNameplateFieldOptions = computed(() => {
+  const selected = new Set(selectedNameplateFieldKeys.value);
+  return nameplateFieldOptions.filter((option) => !selected.has(option.value));
+});
+
+const selectedNameplateAttendees = computed(() => {
+  const selected = checkedKeys.value.map(String);
+  const attendeeById = new Map([...store.currentAttendees, ...filteredAttendees.value].map((attendee) => [attendee.id, attendee]));
+  return selected.map((id) => attendeeById.get(id)).filter(isAttendee);
+});
+
+const nameplatePreviewAttendee = computed(() => selectedNameplateAttendees.value[0] || filteredAttendees.value[0] || null);
+
+const nameplatePreviewLayout = computed(() => resolveNameplateA4Layout(
+  selectedNameplateSize.value.widthMm,
+  selectedNameplateSize.value.heightMm * 2
+));
+
+const nameplatePreviewPaper = computed(() => nameplatePreviewLayout.value.paper);
+
+const nameplatePreviewPaperHint = computed(() =>
+  `${nameplatePreviewPaper.value.label}，每页最多 ${nameplatePreviewLayout.value.capacity} 个`
+);
+
+const nameplatePreviewViewportStyle = computed(() => {
+  const paper = nameplatePreviewPaper.value;
+  /*
+   * 预览必须和实际打印窗口同方向，否则管理员会误判折线和文字朝向。
+   * 纸张方向由 resolveNameplateA4Layout 决定，A4 横向就直接横向展示。
+   */
+  return {
+    aspectRatio: `${paper.widthMm} / ${paper.heightMm}`
+  };
+});
+
+const nameplatePreviewPaperStyle = computed(() => ({
+  aspectRatio: `${nameplatePreviewPaper.value.widthMm} / ${nameplatePreviewPaper.value.heightMm}`,
+  width: "100%"
+}));
+
+const nameplatePreviewScale = computed(() => {
+  const paperWidthPx = nameplatePreviewPaper.value.widthMm * cssPxPerMm;
+  return Math.max(0.1, nameplatePreviewViewportWidth.value / paperWidthPx);
+});
+
+const nameplatePreviewLayoutClass = computed(() => `is-${nameplatePreviewLayout.value.arrangement}`);
+
+const nameplatePreviewSheetAttendees = computed<Array<Attendee | null>>(() => {
+  const previewAttendees = selectedNameplateAttendees.value.length
+    ? selectedNameplateAttendees.value
+    : nameplatePreviewAttendee.value
+      ? [nameplatePreviewAttendee.value]
+      : [null];
+  return previewAttendees.slice(0, nameplatePreviewLayout.value.capacity);
+});
+
+const nameplatePreviewSheetStyle = computed(() => {
+  const size = selectedNameplateSize.value;
+  const paper = nameplatePreviewPaper.value;
+  const sheetHeightMm = size.heightMm * 2;
+  return {
+    width: `${(size.widthMm / paper.widthMm) * 100}%`,
+    height: `${(sheetHeightMm / paper.heightMm) * 100}%`,
+    color: "#000000",
+    fontFamily: selectedNameplateFont.value.css
+  };
+});
+
+const nameplatePreviewContentStyle = computed(() => ({
+  gap: `${nameplatePreviewMmToPx(nameplateLineGapMm(selectedNameplateSize.value.heightMm, selectedNameplateFieldSettings.value.length))}px`
+}));
+
+const nameplatePreviewFaceStyle = computed(() => {
+  const size = selectedNameplateSize.value;
+  const paddingInlineMm = Math.max(8, Math.round(size.widthMm * 0.08));
+  const paddingBlockMm = Math.max(6, Math.round(size.heightMm * 0.12));
+  return {
+    ...nameplateFaceBackgroundStyle.value,
+    padding: `${nameplatePreviewMmToPx(paddingBlockMm)}px ${nameplatePreviewMmToPx(paddingInlineMm)}px`
+  };
+});
 
 watch([keyword, auditStatus, attendeeType, hasSeat, selectedTags], () => {
   remoteFilteredAttendees.value = null;
@@ -544,10 +941,27 @@ onMounted(() => {
   void loadAttendeePageData();
 });
 
+onBeforeUnmount(() => {
+  if (nameplateSettingsSaveTimer) {
+    window.clearTimeout(nameplateSettingsSaveTimer);
+    nameplateSettingsSaveTimer = null;
+  }
+  disconnectNameplatePreviewResizeObserver();
+});
+
+watch(nameplateModalVisible, (visible) => {
+  if (!visible) return;
+  void nextTick(() => {
+    setupNameplatePreviewResizeObserver();
+  });
+});
+
 watch(routeMeetingId, (meetingId, previousMeetingId) => {
   if (meetingId && meetingId !== previousMeetingId) {
     remoteFilteredAttendees.value = null;
     checkedKeys.value = [];
+    nameplateTemplateUrl.value = "";
+    selectedNameplateFieldSettings.value = [defaultNameplateFieldSetting("name")];
     void loadAttendeePageData();
   }
 });
@@ -1097,6 +1511,700 @@ function exportAttendees() {
   });
 }
 
+function openNameplatePrint() {
+  if (!selectedNameplateAttendees.value.length) {
+    message.warning("请先勾选要打印席签的参会人");
+    return;
+  }
+  nameplateModalVisible.value = true;
+  void loadNameplatePrintSettings();
+}
+
+async function loadNameplatePrintSettings() {
+  const meetingId = routeMeetingId.value || store.currentMeetingId;
+  if (!meetingId || loadingNameplateTemplate.value) return;
+  loadingNameplateTemplate.value = true;
+  try {
+    const settings = await store.loadMeetingPrintSettings(meetingId);
+    nameplateTemplateUrl.value = settings.nameplateTemplateUrl || "";
+    selectedNameplateFieldSettings.value = normalizeNameplateFieldSettings(settings.nameplateFields);
+  } catch (error) {
+    message.warning(error instanceof Error ? error.message : "席签模板设置加载失败");
+  } finally {
+    loadingNameplateTemplate.value = false;
+  }
+}
+
+function uploadNameplateTemplate(options: UploadCustomRequestOptions) {
+  const file = options.file.file;
+  if (!file) {
+    options.onError();
+    message.error("请选择要上传的模板图片");
+    return;
+  }
+  if (!isAllowedUploadImage(file)) {
+    options.onError();
+    message.warning("仅支持 JPG、PNG、WebP 或 GIF 图片");
+    return;
+  }
+
+  uploadingNameplateTemplate.value = true;
+  void store.uploadImageAsset(file)
+    .then(async (result) => {
+      await saveNameplateTemplateUrl(result.url);
+      options.onFinish();
+      message.success("席签模板已上传并保存");
+    })
+    .catch((error) => {
+      options.onError();
+      message.error(error instanceof Error ? error.message : "席签模板上传失败");
+    })
+    .finally(() => {
+      uploadingNameplateTemplate.value = false;
+    });
+}
+
+function clearNameplateTemplate() {
+  void saveNameplateTemplateUrl("").then(() => {
+    message.success("席签模板已清空，打印将使用白底");
+  }).catch((error) => {
+    message.error(error instanceof Error ? error.message : "席签模板清空失败");
+  });
+}
+
+async function saveNameplateTemplateUrl(url: string) {
+  const meetingId = routeMeetingId.value || store.currentMeetingId;
+  if (!meetingId) throw new Error("请先选择会议");
+  savingNameplateTemplate.value = true;
+  try {
+    const saved = await store.saveMeetingPrintSettings(meetingId, {
+      nameplateTemplateUrl: url || null,
+      nameplateFields: serializeNameplateFieldSettings()
+    });
+    nameplateTemplateUrl.value = saved.nameplateTemplateUrl || "";
+    selectedNameplateFieldSettings.value = normalizeNameplateFieldSettings(saved.nameplateFields);
+  } finally {
+    savingNameplateTemplate.value = false;
+  }
+}
+
+function handleNameplateFieldSelect(value: string | null) {
+  if (isNameplateFieldKey(value) && !selectedNameplateFieldKeys.value.includes(value)) {
+    selectedNameplateFieldSettings.value = [
+      ...selectedNameplateFieldSettings.value,
+      defaultNameplateFieldSetting(value)
+    ];
+    scheduleSaveNameplatePrintSettings();
+  }
+  pendingNameplateField.value = null;
+}
+
+function moveNameplateField(index: number, direction: -1 | 1) {
+  const targetIndex = index + direction;
+  if (targetIndex < 0 || targetIndex >= selectedNameplateFieldSettings.value.length) return;
+  const next = [...selectedNameplateFieldSettings.value];
+  const [field] = next.splice(index, 1);
+  next.splice(targetIndex, 0, field);
+  selectedNameplateFieldSettings.value = next;
+  scheduleSaveNameplatePrintSettings();
+}
+
+function removeNameplateField(index: number) {
+  if (selectedNameplateFieldSettings.value.length <= 1) {
+    message.warning("席签至少保留一个展示字段");
+    return;
+  }
+  selectedNameplateFieldSettings.value = selectedNameplateFieldSettings.value.filter((_, currentIndex) => currentIndex !== index);
+  scheduleSaveNameplatePrintSettings();
+}
+
+function resetNameplateFields() {
+  selectedNameplateFieldSettings.value = [defaultNameplateFieldSetting("name")];
+  scheduleSaveNameplatePrintSettings();
+}
+
+function updateNameplateFieldFontSize(index: number, value: number | null) {
+  const nextValue = Number.isFinite(value) && value != null ? clampNumber(Math.round(value), 10, 120) : null;
+  selectedNameplateFieldSettings.value = selectedNameplateFieldSettings.value.map((field, currentIndex) =>
+    currentIndex === index ? { ...field, fontSizePt: nextValue } : field
+  );
+  scheduleSaveNameplatePrintSettings();
+}
+
+function updateNameplateFieldColor(index: number, value: string | null) {
+  selectedNameplateFieldSettings.value = selectedNameplateFieldSettings.value.map((field, currentIndex) =>
+    currentIndex === index ? { ...field, color: safeNameplateColorOrNull(value) } : field
+  );
+  scheduleSaveNameplatePrintSettings();
+}
+
+function updateNameplateFieldLetterSpacing(index: number, value: number | null) {
+  const nextValue = Number.isFinite(value) && value != null
+    ? Math.round(clampNumber(value, 0, 1) * 100) / 100
+    : null;
+  selectedNameplateFieldSettings.value = selectedNameplateFieldSettings.value.map((field, currentIndex) =>
+    currentIndex === index ? { ...field, letterSpacingEm: nextValue } : field
+  );
+  scheduleSaveNameplatePrintSettings();
+}
+
+function updateNameplateFieldBold(index: number, value: boolean) {
+  selectedNameplateFieldSettings.value = selectedNameplateFieldSettings.value.map((field, currentIndex) =>
+    currentIndex === index ? { ...field, bold: value } : field
+  );
+  scheduleSaveNameplatePrintSettings();
+}
+
+function scheduleSaveNameplatePrintSettings() {
+  if (nameplateSettingsSaveTimer) {
+    window.clearTimeout(nameplateSettingsSaveTimer);
+  }
+  nameplateSettingsSaveTimer = window.setTimeout(() => {
+    nameplateSettingsSaveTimer = null;
+    void saveNameplatePrintSettingsSilently();
+  }, 500);
+}
+
+async function saveNameplatePrintSettingsSilently() {
+  const meetingId = routeMeetingId.value || store.currentMeetingId;
+  if (!meetingId) return;
+  try {
+    const saved = await store.saveMeetingPrintSettings(meetingId, {
+      nameplateTemplateUrl: nameplateTemplateUrl.value || null,
+      nameplateFields: serializeNameplateFieldSettings()
+    });
+    nameplateTemplateUrl.value = saved.nameplateTemplateUrl || "";
+    selectedNameplateFieldSettings.value = normalizeNameplateFieldSettings(saved.nameplateFields);
+  } catch (error) {
+    message.warning(error instanceof Error ? error.message : "席签字段设置保存失败");
+  }
+}
+
+function nameplateFieldLabel(fieldKey: NameplateFieldKey) {
+  return nameplateFieldOptions.find((option) => option.value === fieldKey)?.label || fieldKey;
+}
+
+function previewNameplateFieldValue(fieldKey: NameplateFieldKey, attendee: Attendee | null) {
+  if (!attendee) return nameplateFieldLabel(fieldKey);
+  return nameplateFieldValue(attendee, fieldKey) || "-";
+}
+
+function nameplateFieldClass(fieldKey: NameplateFieldKey, index: number) {
+  return isPrimaryNameplateField(fieldKey, index) ? "is-primary" : "is-secondary";
+}
+
+function displayNameplateFieldFontSize(field: NameplateFieldSetting, index: number) {
+  return effectiveNameplateFontPt(field, index);
+}
+
+function displayNameplateFieldLetterSpacing(field: NameplateFieldSetting, index: number) {
+  return effectiveNameplateLetterSpacingEm(field, index);
+}
+
+function displayNameplateFieldBold(field: NameplateFieldSetting, index: number) {
+  return effectiveNameplateBold(field, index);
+}
+
+function nameplatePreviewLineStyle(field: NameplateFieldSetting, index: number) {
+  const boldStroke = nameplateFieldBoldStroke(field, index);
+  return {
+    color: nameplateFieldColor(field),
+    fontSize: `${nameplatePreviewPtToPx(effectiveNameplateFontPt(field, index))}px`,
+    letterSpacing: `${effectiveNameplateLetterSpacingEm(field, index)}em`,
+    fontWeight: String(nameplateFieldFontWeight(field, index)),
+    WebkitTextStroke: boldStroke ? `${boldStroke}px currentColor` : undefined,
+    textShadow: boldStroke ? nameplateFieldBoldTextShadow(boldStroke) : undefined
+  };
+}
+
+function setupNameplatePreviewResizeObserver() {
+  disconnectNameplatePreviewResizeObserver();
+  const element = nameplatePreviewViewportRef.value;
+  if (!element) return;
+
+  const updateWidth = () => {
+    const width = element.getBoundingClientRect().width;
+    if (width > 0) {
+      nameplatePreviewViewportWidth.value = width;
+    }
+  };
+  updateWidth();
+
+  if (typeof ResizeObserver === "undefined") return;
+  nameplatePreviewResizeObserver = new ResizeObserver(updateWidth);
+  nameplatePreviewResizeObserver.observe(element);
+}
+
+function disconnectNameplatePreviewResizeObserver() {
+  nameplatePreviewResizeObserver?.disconnect();
+  nameplatePreviewResizeObserver = null;
+}
+
+function nameplatePreviewPtToPx(pt: number) {
+  return pt * cssPxPerPt * nameplatePreviewScale.value;
+}
+
+function nameplatePreviewMmToPx(mm: number) {
+  return mm * cssPxPerMm * nameplatePreviewScale.value;
+}
+
+async function printNameplates() {
+  const attendees = selectedNameplateAttendees.value;
+  if (!attendees.length) {
+    message.warning("请先勾选要打印席签的参会人");
+    return;
+  }
+  if (!selectedNameplateFieldKeys.value.length) {
+    message.warning("请至少选择一个展示字段");
+    return;
+  }
+
+  printingNameplates.value = true;
+  try {
+    await ensureNameplateAuxiliaryData();
+    const printWindow = window.open("", "_blank", "width=1024,height=768");
+    if (!printWindow) {
+      message.error("打印窗口被浏览器拦截，请允许弹出窗口后重试");
+      return;
+    }
+
+    printWindow.opener = null;
+    printWindow.document.open("text/html", "replace");
+    printWindow.document.write(buildNameplatePrintHtml(attendees));
+    printWindow.document.close();
+    window.setTimeout(() => {
+      printWindow.focus();
+      printWindow.print();
+    }, 300);
+    message.success("已打开席签打印窗口");
+  } catch (error) {
+    message.error(error instanceof Error ? error.message : "席签打印失败");
+  } finally {
+    printingNameplates.value = false;
+  }
+}
+
+async function ensureNameplateAuxiliaryData() {
+  /*
+   * 参会人列表接口只返回“是否分配晚宴”，不包含具体桌号。
+   * 只有管理员把晚宴桌号加入席签字段时才额外拉取分配表，避免默认打印姓名时增加页面负担。
+   */
+  if (!selectedNameplateFieldKeys.value.includes("dinnerTableNo")) return;
+  const meetingId = routeMeetingId.value || store.currentMeetingId;
+  if (!meetingId) return;
+  try {
+    await store.loadDinnerAssignments(meetingId);
+  } catch {
+    message.warning("晚宴桌号加载失败，将按当前已缓存数据打印");
+  }
+}
+
+function buildNameplatePrintHtml(attendees: Attendee[]) {
+  const size = selectedNameplateSize.value;
+  const meetingName = store.currentMeeting?.name || "会议";
+  const title = `${meetingName}席签`;
+  const fields = selectedNameplateFieldSettings.value;
+  const layout = resolveNameplateA4Layout(size.widthMm, size.heightMm * 2);
+  const pages = chunkNameplateAttendees(attendees, layout.capacity)
+    .map((pageAttendees) => {
+      const sheets = pageAttendees
+        .map((attendee) => {
+          const lines = fields
+            .map((field, index) => buildNameplateFieldHtml(attendee, field, index))
+            .filter(Boolean)
+            .join("");
+          return buildNameplateSheetHtml(lines);
+        })
+        .join("");
+      return `<section class="nameplate-page"><div class="nameplate-page-layout nameplate-page-layout--${layout.arrangement}">${sheets}</div></section>`;
+    })
+    .join("");
+
+  return `<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>${escapeHtml(title)}</title>
+  <style>${buildNameplatePrintCss(size.widthMm, size.heightMm)}</style>
+</head>
+<body>
+  ${pages}
+</body>
+</html>`;
+}
+
+function buildNameplateSheetHtml(lines: string) {
+  return `<div class="nameplate-sheet">${buildNameplateFaceHtml(lines, true)}<div class="nameplate-fold-line"></div>${buildNameplateFaceHtml(lines, false)}</div>`;
+}
+
+function buildNameplateFaceHtml(lines: string, rotated: boolean) {
+  const templateUrl = safeNameplateTemplateUrl.value;
+  const style = templateUrl ? ` style="background-image: url('${cssUrlEscape(templateUrl)}')"` : "";
+  return `<div class="nameplate-face${rotated ? " nameplate-face--top" : ""}"${style}><div class="nameplate__content">${lines}</div></div>`;
+}
+
+function buildNameplateFieldHtml(attendee: Attendee, field: NameplateFieldSetting, index: number) {
+  const value = nameplateFieldValue(attendee, field.fieldKey).trim();
+  if (!value) return "";
+  const className = isPrimaryNameplateField(field.fieldKey, index) ? "nameplate__line--primary" : "nameplate__line--secondary";
+  const boldStroke = nameplateFieldBoldStroke(field, index);
+  const strongBoldStyle = boldStroke
+    ? ` -webkit-text-stroke: ${boldStroke}px currentColor; text-shadow: ${nameplateFieldBoldTextShadow(boldStroke)};`
+    : "";
+  const style = `font-size: ${effectiveNameplateFontPt(field, index)}pt; color: ${nameplateFieldColor(field)}; letter-spacing: ${effectiveNameplateLetterSpacingEm(field, index)}em; font-weight: ${nameplateFieldFontWeight(field, index)};${strongBoldStyle}`;
+  return `<div class="nameplate__line ${className}" style="${style}">${escapeHtml(value)}</div>`;
+}
+
+function buildNameplatePrintCss(widthMm: number, heightMm: number) {
+  const fieldCount = selectedNameplateFieldKeys.value.length;
+  const gapMm = nameplateLineGapMm(heightMm, fieldCount);
+  const paddingInlineMm = Math.max(8, Math.round(widthMm * 0.08));
+  const paddingBlockMm = Math.max(6, Math.round(heightMm * 0.12));
+  const fontFamily = selectedNameplateFont.value.css;
+  const sheetHeightMm = heightMm * 2;
+  const layout = resolveNameplateA4Layout(widthMm, sheetHeightMm);
+  const paper = layout.paper;
+
+  return `
+@page {
+  size: ${paper.widthMm}mm ${paper.heightMm}mm;
+  margin: 0;
+}
+* {
+  box-sizing: border-box;
+}
+html,
+body {
+  margin: 0;
+  padding: 0;
+  color: #000000;
+  background: #ffffff;
+  font-family: ${fontFamily};
+}
+.nameplate-page {
+  width: ${paper.widthMm}mm;
+  height: ${paper.heightMm}mm;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  overflow: hidden;
+  background: #ffffff;
+  break-after: page;
+  page-break-after: always;
+}
+.nameplate-page:last-child {
+  break-after: auto;
+  page-break-after: auto;
+}
+.nameplate-page-layout {
+  width: 100%;
+  height: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0;
+}
+.nameplate-page-layout--row,
+.nameplate-page-layout--single {
+  flex-direction: row;
+}
+.nameplate-page-layout--column {
+  flex-direction: column;
+}
+.nameplate-sheet {
+  width: ${widthMm}mm;
+  height: ${sheetHeightMm}mm;
+  flex: 0 0 auto;
+  display: flex;
+  flex-direction: column;
+  position: relative;
+  overflow: hidden;
+  color: #000000;
+  background: #ffffff;
+  border: 0.35mm dashed rgba(0, 0, 0, 0.35);
+}
+.nameplate-face {
+  width: ${widthMm}mm;
+  height: ${heightMm}mm;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  overflow: hidden;
+  padding: ${paddingBlockMm}mm ${paddingInlineMm}mm;
+  color: #000000;
+  background: #ffffff;
+  background-position: center;
+  background-size: cover;
+  background-repeat: no-repeat;
+}
+.nameplate-face--top .nameplate__content {
+  transform: rotate(180deg);
+}
+.nameplate-fold-line {
+  position: absolute;
+  left: 0;
+  top: ${heightMm}mm;
+  width: 100%;
+  border-top: 0.35mm dashed rgba(0, 0, 0, 0.32);
+}
+.nameplate__content {
+  width: 100%;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: ${gapMm}mm;
+  text-align: center;
+}
+.nameplate__line {
+  max-width: 100%;
+  overflow-wrap: anywhere;
+  word-break: break-word;
+  white-space: pre-wrap;
+  letter-spacing: 0;
+}
+.nameplate__line--primary {
+  line-height: 1.05;
+  font-weight: 800;
+  overflow-wrap: normal;
+  word-break: keep-all;
+  white-space: nowrap;
+}
+.nameplate__line--secondary {
+  line-height: 1.18;
+  font-weight: 520;
+}
+@media screen {
+  body {
+    padding: 24px;
+    background: #f3f4f6;
+    display: grid;
+    gap: 18px;
+    justify-items: center;
+  }
+  .nameplate-page {
+    border: 1px solid #d9d9d9;
+    box-shadow: 0 12px 30px rgba(15, 23, 42, 0.12);
+  }
+}
+@media print {
+  body {
+    background: #ffffff;
+    -webkit-print-color-adjust: exact;
+    print-color-adjust: exact;
+  }
+  .nameplate-page {
+    margin: 0;
+    border: 0;
+    box-shadow: none;
+  }
+}`;
+}
+
+function nameplatePrimaryFontPt(heightMm: number, fieldCount: number) {
+  if (fieldCount <= 1) return clampNumber(Math.round(heightMm * 0.68), 44, 82);
+  if (fieldCount === 2) return clampNumber(Math.round(heightMm * 0.48), 34, 66);
+  return clampNumber(Math.round(heightMm * 0.36), 28, 52);
+}
+
+function nameplateSecondaryFontPt(heightMm: number, fieldCount: number) {
+  if (fieldCount <= 2) return clampNumber(Math.round(heightMm * 0.22), 15, 32);
+  return clampNumber(Math.round(heightMm * 0.17), 13, 26);
+}
+
+function nameplateLineGapMm(heightMm: number, fieldCount: number) {
+  if (fieldCount <= 1) return 0;
+  return clampNumber(Math.round(heightMm * 0.045), 3, 8);
+}
+
+function clampNumber(value: number, min: number, max: number) {
+  return Math.min(max, Math.max(min, value));
+}
+
+type NameplateA4Paper = typeof a4PortraitPaper | typeof a4LandscapePaper;
+type NameplatePageArrangement = "single" | "row" | "column";
+
+interface NameplateA4Layout {
+  paper: NameplateA4Paper;
+  capacity: 1 | 2;
+  arrangement: NameplatePageArrangement;
+}
+
+function resolveNameplateA4Layout(widthMm: number, sheetHeightMm: number): NameplateA4Layout {
+  /*
+   * 席签尺寸必须按原尺寸放入 A4，不再自动缩小。
+   * 先判断同一张 A4 是否能容纳两个席签；能放两个就两两分页，不能则单个居中。
+   */
+  const twoPerPageCandidates: NameplateA4Layout[] = [
+    { paper: a4PortraitPaper, capacity: 2, arrangement: "row" },
+    { paper: a4PortraitPaper, capacity: 2, arrangement: "column" },
+    { paper: a4LandscapePaper, capacity: 2, arrangement: "row" },
+    { paper: a4LandscapePaper, capacity: 2, arrangement: "column" }
+  ];
+  const twoPerPageLayout = twoPerPageCandidates.find((layout) => nameplateLayoutFits(widthMm, sheetHeightMm, layout));
+  if (twoPerPageLayout) return twoPerPageLayout;
+
+  const onePerPageCandidates: NameplateA4Layout[] = [
+    { paper: a4PortraitPaper, capacity: 1, arrangement: "single" },
+    { paper: a4LandscapePaper, capacity: 1, arrangement: "single" }
+  ];
+  return onePerPageCandidates.find((layout) => nameplateLayoutFits(widthMm, sheetHeightMm, layout)) || onePerPageCandidates[0];
+}
+
+function nameplateLayoutFits(widthMm: number, sheetHeightMm: number, layout: NameplateA4Layout) {
+  const { paper, arrangement } = layout;
+  if (arrangement === "row") {
+    return widthMm * layout.capacity <= paper.widthMm && sheetHeightMm <= paper.heightMm;
+  }
+  if (arrangement === "column") {
+    return widthMm <= paper.widthMm && sheetHeightMm * layout.capacity <= paper.heightMm;
+  }
+  return widthMm <= paper.widthMm && sheetHeightMm <= paper.heightMm;
+}
+
+function chunkNameplateAttendees(attendees: Attendee[], capacity: 1 | 2) {
+  const pages: Attendee[][] = [];
+  for (let index = 0; index < attendees.length; index += capacity) {
+    pages.push(attendees.slice(index, index + capacity));
+  }
+  return pages;
+}
+
+function isPrimaryNameplateField(fieldKey: NameplateFieldKey, index: number) {
+  return fieldKey === "name" || index === 0;
+}
+
+function defaultNameplateFieldSetting(fieldKey: NameplateFieldKey): NameplateFieldSetting {
+  return { fieldKey, fontSizePt: null, color: null, letterSpacingEm: null, bold: null };
+}
+
+function normalizeNameplateFieldSettings(fields?: MeetingPrintFieldSettingsDto[] | null): NameplateFieldSetting[] {
+  const seen = new Set<NameplateFieldKey>();
+  const normalized: NameplateFieldSetting[] = [];
+  for (const item of fields || []) {
+    if (!isNameplateFieldKey(item.fieldKey) || seen.has(item.fieldKey)) continue;
+    seen.add(item.fieldKey);
+    const numericSize = typeof item.fontSizePt === "number" && Number.isFinite(item.fontSizePt)
+      ? Math.round(item.fontSizePt)
+      : null;
+    normalized.push({
+      fieldKey: item.fieldKey,
+      fontSizePt: numericSize == null ? null : clampNumber(numericSize, 10, 120),
+      color: safeNameplateColorOrNull(item.color),
+      letterSpacingEm: normalizeNameplateLetterSpacing(item.letterSpacingEm),
+      bold: typeof item.bold === "boolean" ? item.bold : null
+    });
+  }
+  return normalized.length ? normalized : [defaultNameplateFieldSetting("name")];
+}
+
+function serializeNameplateFieldSettings(): MeetingPrintFieldSettingsDto[] {
+  return normalizeNameplateFieldSettings(selectedNameplateFieldSettings.value).map((field) => ({
+    fieldKey: field.fieldKey,
+    fontSizePt: field.fontSizePt,
+    color: safeNameplateColorOrNull(field.color),
+    letterSpacingEm: field.letterSpacingEm,
+    bold: field.bold
+  }));
+}
+
+function effectiveNameplateFontPt(field: NameplateFieldSetting, index: number) {
+  if (field.fontSizePt != null) {
+    return clampNumber(Math.round(field.fontSizePt), 10, 120);
+  }
+  const size = selectedNameplateSize.value;
+  const fieldCount = selectedNameplateFieldSettings.value.length;
+  return isPrimaryNameplateField(field.fieldKey, index)
+    ? nameplatePrimaryFontPt(size.heightMm, fieldCount)
+    : nameplateSecondaryFontPt(size.heightMm, fieldCount);
+}
+
+function nameplateFieldColor(field: NameplateFieldSetting) {
+  return safeNameplateColorOrNull(field.color) || "#000000";
+}
+
+function effectiveNameplateLetterSpacingEm(field: NameplateFieldSetting, index: number) {
+  if (field.letterSpacingEm != null) {
+    return normalizeNameplateLetterSpacing(field.letterSpacingEm) ?? 0;
+  }
+  return isPrimaryNameplateField(field.fieldKey, index) ? 0.08 : 0.03;
+}
+
+function effectiveNameplateBold(field: NameplateFieldSetting, index: number) {
+  if (typeof field.bold === "boolean") return field.bold;
+  if (selectedNameplateFont.value.defaultBold) return true;
+  return isPrimaryNameplateField(field.fieldKey, index);
+}
+
+function nameplateFieldFontWeight(field: NameplateFieldSetting, index: number) {
+  return effectiveNameplateBold(field, index) ? 900 : 500;
+}
+
+function nameplateFieldBoldStroke(field: NameplateFieldSetting, index: number) {
+  if (!effectiveNameplateBold(field, index)) return 0;
+  /*
+   * 很多中文字体在浏览器里没有完整的 800/900 字重文件，打印时只靠
+   * font-weight 会显得“没加粗”。这里用极细同色描边补强视觉重量，
+   * 字号越大描边略增，避免 100pt 以上大字仍然显瘦。
+   */
+  const fontSizePt = effectiveNameplateFontPt(field, index);
+  return Math.round(clampNumber(fontSizePt * 0.006, 0.35, 0.85) * 100) / 100;
+}
+
+function nameplateFieldBoldTextShadow(strokePx: number) {
+  const offset = Math.round(Math.max(0.2, strokePx * 0.45) * 100) / 100;
+  return `${offset}px 0 0 currentColor, -${offset}px 0 0 currentColor`;
+}
+
+function normalizeNameplateLetterSpacing(value?: number | null) {
+  if (typeof value !== "number" || !Number.isFinite(value)) return null;
+  return Math.round(clampNumber(value, 0, 1) * 100) / 100;
+}
+
+function nameplateFieldValue(attendee: Attendee, fieldKey: NameplateFieldKey) {
+  const values: Record<NameplateFieldKey, string> = {
+    name: attendee.name || "",
+    company: attendee.company || "",
+    title: attendee.title || "",
+    phone: attendee.phone || "",
+    attendeeType: attendeeTypeLabel(attendee.attendeeType),
+    seatLabel: attendee.seatLabel || "",
+    roomNo: attendee.roomNo || "",
+    dinnerTableNo: currentDinnerTableNo(attendee) || "",
+    attendeeCode: attendee.attendeeCode || "",
+    tags: attendee.tags.join("、")
+  };
+  return values[fieldKey] || "";
+}
+
+function isAttendee(value: Attendee | undefined): value is Attendee {
+  return Boolean(value);
+}
+
+function isNameplateFieldKey(value: string | null): value is NameplateFieldKey {
+  return Boolean(value && nameplateFieldOptions.some((option) => option.value === value));
+}
+
+function safeNameplateColorOrNull(value?: string | null) {
+  const text = value?.trim() || "";
+  return /^#[0-9a-fA-F]{3}(?:[0-9a-fA-F]{3})?$/.test(text) ? text : null;
+}
+
+function escapeHtml(value: string) {
+  return value
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;")
+    .replace(/'/g, "&#39;");
+}
+
+function cssUrlEscape(value: string) {
+  return value.replace(/\\/g, "\\\\").replace(/"/g, '\\"').replace(/'/g, "\\'");
+}
+
 function showImportResult(result: ImportResultDto) {
   const failures = result.failedRows?.slice(0, 3).map((row) => `${row.rowNumber}行：${row.reason}`).join("；");
   const summary = failures ? `${result.message}；${failures}` : result.message;
@@ -1249,6 +2357,285 @@ function reconcileVisibleFields(mappings: TduckFieldMappingDto[]) {
   max-width: 520px;
 }
 
+.nameplate-modal :deep(.n-card__content) {
+  padding-top: 8px;
+}
+
+.nameplate-modal-body {
+  display: grid;
+  grid-template-columns: minmax(0, 1.08fr) minmax(300px, 0.92fr);
+  gap: 24px;
+}
+
+.nameplate-settings,
+.nameplate-preview-panel {
+  min-width: 0;
+  display: grid;
+  align-content: start;
+  gap: 20px;
+}
+
+.nameplate-section {
+  min-width: 0;
+  display: grid;
+  gap: 12px;
+}
+
+.nameplate-section-head {
+  min-width: 0;
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.nameplate-section-head strong {
+  color: var(--text-primary);
+  font-size: 14px;
+}
+
+.nameplate-section-head span {
+  color: var(--text-secondary);
+  font-size: 12px;
+}
+
+.nameplate-size-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.nameplate-size-option {
+  min-width: 0;
+  height: 44px;
+  border: 1px solid var(--border-color);
+  border-radius: 8px;
+  color: var(--text-primary);
+  background: var(--surface-bg);
+  font-size: 16px;
+  line-height: 1;
+  cursor: pointer;
+  transition: border-color 0.18s ease, color 0.18s ease, background-color 0.18s ease;
+}
+
+.nameplate-size-option:hover {
+  border-color: var(--accent-color);
+  color: var(--accent-color);
+}
+
+.nameplate-size-option.active {
+  border-color: var(--accent-color);
+  color: var(--accent-color);
+  background: color-mix(in srgb, var(--accent-color) 8%, transparent);
+}
+
+.nameplate-font-grid {
+  display: grid;
+  grid-template-columns: minmax(180px, 1fr);
+  gap: 12px;
+}
+
+.nameplate-template-control {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto auto;
+  gap: 10px;
+  align-items: center;
+}
+
+.nameplate-field-list {
+  display: grid;
+  gap: 8px;
+}
+
+.nameplate-field-row {
+  min-width: 0;
+  min-height: 66px;
+  display: grid;
+  grid-template-columns: minmax(72px, auto) minmax(0, 1fr);
+  grid-template-areas:
+    "label controls"
+    "label actions";
+  align-items: center;
+  gap: 8px 12px;
+  padding: 8px 10px;
+  border: 1px solid var(--border-color);
+  border-radius: 8px;
+  background: var(--surface-muted);
+}
+
+.nameplate-field-row > span {
+  grid-area: label;
+  min-width: 0;
+  color: var(--text-primary);
+  font-weight: 650;
+}
+
+.nameplate-field-style-controls {
+  grid-area: controls;
+  min-width: 0;
+  display: grid;
+  grid-template-columns: minmax(104px, 0.9fr) minmax(116px, 1fr) minmax(104px, 0.9fr) minmax(72px, 0.52fr);
+  gap: 10px;
+  align-items: center;
+}
+
+.nameplate-field-style-control {
+  min-width: 0;
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  align-items: center;
+  gap: 6px;
+  color: var(--text-secondary);
+  font-size: 12px;
+  white-space: nowrap;
+}
+
+.nameplate-field-style-control.is-switch-control {
+  grid-template-columns: auto auto;
+  justify-content: start;
+}
+
+.nameplate-font-size-input,
+.nameplate-field-color-picker,
+.nameplate-letter-spacing-input {
+  min-width: 0;
+  width: 100%;
+}
+
+.nameplate-field-actions {
+  grid-area: actions;
+  display: inline-flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 8px;
+  min-width: 0;
+  flex: 0 0 auto;
+}
+
+.nameplate-preview-shell {
+  min-height: 260px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 22px;
+  border-radius: 8px;
+  background: var(--surface-muted);
+  overflow: hidden;
+}
+
+.nameplate-preview-viewport {
+  width: min(100%, 420px);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  position: relative;
+}
+
+.nameplate-preview-a4 {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  position: relative;
+  border: 1px solid #d7e3f1;
+  border-radius: 4px;
+  background: #ffffff;
+  box-shadow: 0 16px 40px rgba(15, 23, 42, 0.14);
+}
+
+.nameplate-preview-page-layout {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0;
+}
+
+.nameplate-preview-page-layout.is-row,
+.nameplate-preview-page-layout.is-single {
+  flex-direction: row;
+}
+
+.nameplate-preview-page-layout.is-column {
+  flex-direction: column;
+}
+
+.nameplate-preview-sheet {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  position: relative;
+  border: 1px dashed rgba(0, 0, 0, 0.35);
+  border-radius: 4px;
+  background: #ffffff;
+  overflow: hidden;
+}
+
+.nameplate-preview-face {
+  width: 100%;
+  height: 50%;
+  min-height: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 22px;
+  background-color: #ffffff;
+  background-position: center;
+  background-size: cover;
+  background-repeat: no-repeat;
+}
+
+.nameplate-preview-face.is-top .nameplate-preview-content {
+  transform: rotate(180deg);
+}
+
+.nameplate-preview-fold-line {
+  position: absolute;
+  top: 50%;
+  left: 0;
+  width: 100%;
+  border-top: 1px dashed rgba(0, 0, 0, 0.35);
+  z-index: 1;
+}
+
+.nameplate-preview-content {
+  min-width: 0;
+  display: grid;
+  gap: 10px;
+  text-align: center;
+}
+
+.nameplate-preview-line {
+  max-width: 100%;
+  overflow-wrap: anywhere;
+  word-break: break-word;
+  white-space: pre-wrap;
+  letter-spacing: 0;
+}
+
+.nameplate-preview-line.is-primary {
+  font-size: 42px;
+  line-height: 1.08;
+  font-weight: 800;
+  overflow-wrap: normal;
+  word-break: keep-all;
+  white-space: nowrap;
+}
+
+.nameplate-preview-line.is-secondary {
+  font-size: 18px;
+  line-height: 1.2;
+  font-weight: 520;
+}
+
+.nameplate-print-hint {
+  margin: 0;
+  color: var(--text-secondary);
+  font-size: 12px;
+  line-height: 1.7;
+}
+
 .action-buttons {
   display: inline-flex;
   align-items: center;
@@ -1342,6 +2729,10 @@ function reconcileVisibleFields(mappings: TduckFieldMappingDto[]) {
     flex-basis: auto;
     align-self: flex-end;
   }
+
+  .nameplate-modal-body {
+    grid-template-columns: 1fr;
+  }
 }
 
 @media (max-width: 640px) {
@@ -1357,6 +2748,45 @@ function reconcileVisibleFields(mappings: TduckFieldMappingDto[]) {
   .field-visibility-select {
     width: 100%;
     flex-basis: auto;
+  }
+
+  .nameplate-size-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .nameplate-font-grid,
+  .nameplate-template-control,
+  .nameplate-field-row,
+  .nameplate-field-style-controls {
+    grid-template-columns: 1fr;
+  }
+
+  .nameplate-font-grid,
+  .nameplate-template-control,
+  .nameplate-field-style-controls,
+  .nameplate-field-row,
+  .nameplate-section-head {
+    align-items: stretch;
+  }
+
+  .nameplate-field-actions {
+    justify-content: flex-start;
+    flex-wrap: wrap;
+  }
+
+  .nameplate-field-row {
+    grid-template-areas:
+      "label"
+      "controls"
+      "actions";
+  }
+
+  .nameplate-preview-face {
+    padding: 18px;
+  }
+
+  .nameplate-preview-line.is-primary {
+    font-size: 32px;
   }
 
   .detail-field-row {

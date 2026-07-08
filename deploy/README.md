@@ -37,8 +37,8 @@ docker compose --env-file ../.env up -d mysql redis minio minio-init meetingos-b
 ### MeetingOS 数据库初始化
 
 - MeetingOS 后端使用 Flyway 自动建表和升级，不需要手工导入 MeetingOS SQL。
-- 全新服务器、全新 MySQL 数据卷第一次启动时，Flyway 会执行 `meetingos-backend/src/main/resources/db/migration/V1__init_schema.sql`，一次性创建包含公开查询、报名开关、`publicQueryToken` 和性能索引的完整结构。
-- 当前仓库仅保留合并后的 `V1` 初始化脚本；已有数据库如果已经执行过旧版 `V1~V7`，不要直接替换迁移文件启动，否则可能因 Flyway 历史不一致无法启动，应重建库或单独处理 `flyway_schema_history`。
+- 全新服务器、全新 MySQL 数据卷第一次启动时，Flyway 会先执行 `V1__init_schema.sql` 创建包含公开查询、报名开关、`publicQueryToken` 和性能索引的基础结构，再继续执行后续增量迁移。
+- 当前仓库以合并后的 `V1` 作为新库基线，并保留 `V2`、`V3` 等后续增量迁移；已有数据库如果已经执行过旧版 `V1~V7`，不要直接替换迁移文件启动，否则可能因 Flyway 历史不一致无法启动，应重建库或单独处理 `flyway_schema_history`。
 - 如果 MySQL volume 已存在，数据库初始化不会重跑；新服务器演练完整初始化时请使用新的空数据卷或新的空数据库。
 
 5. 如需同机部署 TDuck：

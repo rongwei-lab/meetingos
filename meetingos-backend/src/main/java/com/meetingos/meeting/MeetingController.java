@@ -84,6 +84,20 @@ public class MeetingController {
         return ApiResponse.ok(publicQueryService.updateSettings(id, request));
     }
 
+    @GetMapping("/{id}/print-settings")
+    @PreAuthorize("@meetingAccess.canView(#id)")
+    public ApiResponse<MeetingPrintSettingsResponse> printSettings(@PathVariable Long id) {
+        return ApiResponse.ok(meetingService.printSettings(id));
+    }
+
+    @PutMapping("/{id}/print-settings")
+    @PreAuthorize("@meetingAccess.canManage(#id)")
+    @AuditLog(action = "MEETING_PRINT_SETTINGS_UPDATE", targetType = "MEETING")
+    public ApiResponse<MeetingPrintSettingsResponse> updatePrintSettings(@PathVariable Long id,
+                                                                         @Valid @RequestBody MeetingPrintSettingsRequest request) {
+        return ApiResponse.ok(meetingService.updatePrintSettings(id, request));
+    }
+
     @PostMapping("/{id}/queries/seat")
     @PreAuthorize("@meetingAccess.canView(#id)")
     public ApiResponse<java.util.List<AdminQueryCandidate>> querySeatCandidates(@PathVariable Long id,
