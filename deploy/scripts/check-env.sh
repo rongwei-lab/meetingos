@@ -90,6 +90,14 @@ require_matching_values() {
   [ "$left_value" = "$right_value" ] || fail "$left_name and $right_name must match"
 }
 
+require_distinct_values() {
+  left_name="$1"
+  right_name="$2"
+  left_value="$(read_env "$left_name")"
+  right_value="$(read_env "$right_name")"
+  [ "$left_value" != "$right_value" ] || fail "$left_name and $right_name must use different values"
+}
+
 require_secure_file_permissions
 
 require_strong_secret JWT_SECRET 32
@@ -104,9 +112,12 @@ require_strong_secret MINIO_SECRET_KEY 32
 require_strong_secret MEETINGOS_INIT_ADMIN_PASSWORD 32
 require_strong_secret TDUCK_ADMIN_PASSWORD 16
 
-# Compose 同时向基础服务和应用传入这些别名；部署前确保它们没有因手工编辑而漂移。
+# Compose 同时向 MySQL 和应用传入数据库密码别名；部署前确保它们没有因手工编辑而漂移。
 require_matching_values MYSQL_PASSWORD SPRING_DATASOURCE_PASSWORD
-require_matching_values MINIO_ROOT_PASSWORD MINIO_SECRET_KEY
+
+# MinIO root 仅用于初始化，应用账号必须独立，避免应用凭据拥有用户/策略管理权限。
+require_distinct_values MINIO_ROOT_USER MINIO_ACCESS_KEY
+require_distinct_values MINIO_ROOT_PASSWORD MINIO_SECRET_KEY
 
 require_versioned_image MEETINGOS_BACKEND_IMAGE
 require_versioned_image MEETINGOS_FRONTEND_IMAGE
@@ -117,5 +128,8 @@ require_identifier MYSQL_DATABASE
 require_identifier MYSQL_USER
 require_identifier TDUCK_MYSQL_DATABASE
 require_identifier TDUCK_MYSQL_USER
+require_identifier MINIO_ROOT_USER
+require_identifier MINIO_ACCESS_KEY
+require_identifier MINIO_BUCKET
 
 echo "Environment security checks passed: $ENV_FILE"

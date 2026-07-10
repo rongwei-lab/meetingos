@@ -12,6 +12,46 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  database-migrations:
+    name: Flyway migrations (MySQL 8.4)
+    runs-on: ubuntu-latest
+    services:
+      mysql:
+        image: mysql:8.4.10@sha256:d36d39a64cd12a5c1cc9e6aa2bfb5f8d4c81a2f6586e0a04a9ae13939db02209
+        env:
+          MYSQL_DATABASE: meetingos_migration_test
+          MYSQL_USER: meetingos
+          MYSQL_PASSWORD: meetingos-test-password
+          MYSQL_ROOT_PASSWORD: root-test-password
+        ports:
+          - 3306:3306
+        options: >-
+          --health-cmd="mysqladmin ping -h 127.0.0.1 -uroot -proot-test-password --silent"
+          --health-interval=5s
+          --health-timeout=5s
+          --health-retries=20
+    defaults:
+      run:
+        working-directory: meetingos-backend
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Java 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+          cache: maven
+          cache-dependency-path: meetingos-backend/pom.xml
+
+      - name: Migrate empty MySQL database from V1 to latest
+        env:
+          MEETINGOS_MYSQL_MIGRATION_TEST_URL: jdbc:mysql://127.0.0.1:3306/meetingos_migration_test?useSSL=false&allowPublicKeyRetrieval=true&serverTimezone=Asia/Shanghai
+          MEETINGOS_MYSQL_MIGRATION_TEST_USERNAME: meetingos
+          MEETINGOS_MYSQL_MIGRATION_TEST_PASSWORD: meetingos-test-password
+        run: ./mvnw -B -ntp -Dtest=FlywayMySqlMigrationTest test
+
   backend:
     name: Backend tests
     runs-on: ubuntu-latest

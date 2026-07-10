@@ -31,7 +31,6 @@
         <div class="filter-main">
           <n-input v-model:value="keyword" placeholder="姓名/手机号/单位" clearable />
           <n-select v-model:value="auditStatus" :options="auditOptions" placeholder="审核状态" clearable />
-          <n-select v-model:value="attendeeType" :options="typeOptions" placeholder="参会类型" clearable />
           <n-select v-model:value="hasSeat" :options="seatOptions" placeholder="是否已排座" clearable />
           <n-select
             v-model:value="selectedTags"
@@ -70,7 +69,7 @@
               <strong>{{ attendee.name || "-" }}</strong>
               <span>{{ attendee.phone || "-" }}</span>
             </button>
-            <status-tag :value="attendee.auditStatus" />
+            <status-tag v-if="isSystemFieldVisible('auditStatus')" :value="attendee.auditStatus" />
           </div>
 
           <div class="mobile-card-fields">
@@ -82,21 +81,33 @@
               <span>类型</span>
               <strong>{{ attendeeTypeLabel(attendee.attendeeType) }}</strong>
             </div>
-            <div class="mobile-field">
+            <div v-if="isSystemFieldVisible('seatLabel')" class="mobile-field">
               <span>座位</span>
               <strong>{{ attendee.seatLabel || "-" }}</strong>
             </div>
-            <div class="mobile-field">
+            <div v-if="isSystemFieldVisible('roomNo')" class="mobile-field">
               <span>房间</span>
               <strong>{{ attendee.roomNo || "-" }}</strong>
             </div>
-            <div class="mobile-field">
+            <div v-if="isSystemFieldVisible('seatQueried')" class="mobile-field">
+              <span>座位查询</span>
+              <strong>{{ attendee.seatQueried ? "已查询" : "未查询" }}</strong>
+            </div>
+            <div v-if="isSystemFieldVisible('roomQueried')" class="mobile-field">
+              <span>住宿查询</span>
+              <strong>{{ attendee.roomQueried ? "已查询" : "未查询" }}</strong>
+            </div>
+            <div v-if="isSystemFieldVisible('checkinStatus')" class="mobile-field">
               <span>签到</span>
               <status-tag :value="attendee.checkinStatus" />
             </div>
-            <div class="mobile-field">
+            <div v-if="isSystemFieldVisible('tags')" class="mobile-field">
               <span>标签</span>
               <strong>{{ attendee.tags.length ? attendee.tags.join("、") : "-" }}</strong>
+            </div>
+            <div v-if="isSystemFieldVisible('remark')" class="mobile-field">
+              <span>参会人备注</span>
+              <strong>{{ attendee.remark || "-" }}</strong>
             </div>
           </div>
 
@@ -126,6 +137,7 @@
               拒绝
             </n-button>
             <n-button size="small" secondary @click="openTagEditor(attendee)">标签</n-button>
+            <n-button size="small" secondary @click="openRemarkEditor(attendee)">备注</n-button>
           </div>
         </article>
         <n-empty v-if="!filteredAttendees.length" description="没有匹配的参会人" />
@@ -142,6 +154,34 @@
         <n-space justify="end">
           <n-button @click="tagModalVisible = false">取消</n-button>
           <n-button type="primary" :loading="savingTags" @click="saveTags">保存</n-button>
+        </n-space>
+      </template>
+    </n-modal>
+
+    <n-modal
+      v-model:show="remarkModalVisible"
+      preset="card"
+      title="编辑参会人备注"
+      class="remark-modal"
+      :mask-closable="!savingRemark"
+      :closable="!savingRemark"
+    >
+      <n-form label-placement="top">
+        <n-form-item :label="remarkEditingAttendee ? `${remarkEditingAttendee.name} 的备注` : '备注'">
+          <n-input
+            v-model:value="editingRemark"
+            type="textarea"
+            :autosize="{ minRows: 4, maxRows: 8 }"
+            :maxlength="500"
+            show-count
+            placeholder="填写参会人的备注信息"
+          />
+        </n-form-item>
+      </n-form>
+      <template #footer>
+        <n-space justify="end">
+          <n-button :disabled="savingRemark" @click="remarkModalVisible = false">取消</n-button>
+          <n-button type="primary" :loading="savingRemark" @click="saveRemark">保存</n-button>
         </n-space>
       </template>
     </n-modal>
@@ -401,6 +441,13 @@
             </div>
           </div>
           <div class="detail-field-row">
+            <div class="detail-field-label">参会人备注</div>
+            <div class="detail-field-value detail-remark-value">
+              <span>{{ detailAttendee.remark || "-" }}</span>
+              <n-button text type="primary" @click="openRemarkEditor(detailAttendee)">编辑</n-button>
+            </div>
+          </div>
+          <div class="detail-field-row">
             <div class="detail-field-label">座位号</div>
             <div class="detail-field-value">
               <n-select
@@ -498,7 +545,6 @@ const isMobile = useIsMobile();
 const NColorPicker = defineAsyncComponent(() => import("naive-ui/es/color-picker").then((module) => module.NColorPicker));
 const keyword = ref("");
 const auditStatus = ref<AuditStatus | null>(null);
-const attendeeType = ref<Attendee["attendeeType"] | null>(null);
 const hasSeat = ref<boolean | null>(null);
 const selectedTags = ref<string[]>([]);
 const remoteFilteredAttendees = ref<Attendee[] | null>(null);
@@ -508,6 +554,10 @@ const tagModalVisible = ref(false);
 const editingAttendee = ref<Attendee | null>(null);
 const editingTags = ref<string[]>([]);
 const savingTags = ref(false);
+const remarkModalVisible = ref(false);
+const remarkEditingAttendeeId = ref<string | null>(null);
+const editingRemark = ref("");
+const savingRemark = ref(false);
 const fieldMappings = ref<TduckFieldMappingDto[]>([]);
 const visibleFieldKeys = ref<string[]>([]);
 const detailVisible = ref(false);
@@ -540,6 +590,7 @@ let attendeeFilterGeneration = 0;
 let attendeeFilterTimer: number | null = null;
 let nameplateSettingsSaveTimer: number | null = null;
 let nameplatePreviewResizeObserver: ResizeObserver | null = null;
+let fieldVisibilityInitialized = false;
 
 const { routeMeetingId, syncMeetingFromRoute } = useRouteMeeting({ autoSync: false, loadWorkspace: false });
 
@@ -548,17 +599,22 @@ const auditOptions = [
   { label: "已通过", value: "APPROVED" },
   { label: "已拒绝", value: "REJECTED" }
 ];
-const typeOptions = [
-  { label: "VIP", value: "VIP" },
-  { label: "嘉宾", value: "GUEST" },
-  { label: "媒体", value: "MEDIA" },
-  { label: "工作人员", value: "STAFF" },
-  { label: "普通参会人", value: "NORMAL" }
-];
 const seatOptions = [
   { label: "已排座", value: true },
   { label: "未排座", value: false }
 ];
+
+type SystemColumnKey =
+  | "tags"
+  | "auditStatus"
+  | "seatLabel"
+  | "roomNo"
+  | "seatQueried"
+  | "roomQueried"
+  | "checkinStatus"
+  | "remark";
+
+const systemFieldKey = (key: SystemColumnKey) => `SYSTEM:${key}`;
 
 type NameplateFieldKey =
   | "name"
@@ -634,6 +690,12 @@ const detailAttendee = computed(() =>
   detailAttendeeId.value ? store.currentAttendees.find((attendee) => attendee.id === detailAttendeeId.value) || null : null
 );
 
+const remarkEditingAttendee = computed(() =>
+  remarkEditingAttendeeId.value
+    ? store.currentAttendees.find((attendee) => attendee.id === remarkEditingAttendeeId.value) || null
+    : null
+);
+
 const localFilteredAttendees = computed(() =>
   store.currentAttendees.filter((item) => {
     const text = `${item.name}${item.phone}${item.company}${Object.values(item.formValues || {}).map(formatFieldValue).join("")}`;
@@ -642,7 +704,6 @@ const localFilteredAttendees = computed(() =>
     return (
       (!keyword.value || text.includes(keyword.value)) &&
       (!auditStatus.value || item.auditStatus === auditStatus.value) &&
-      (!attendeeType.value || item.attendeeType === attendeeType.value) &&
       seatMatched &&
       tagMatched
     );
@@ -755,7 +816,7 @@ const nameplatePreviewFaceStyle = computed(() => {
   };
 });
 
-watch([keyword, auditStatus, attendeeType, hasSeat, selectedTags], () => {
+watch([keyword, auditStatus, hasSeat, selectedTags], () => {
   remoteFilteredAttendees.value = null;
 }, { deep: true });
 
@@ -774,15 +835,20 @@ const fallbackFormMappings = computed<TduckFieldMappingDto[]>(() => [
 const activeFormMappings = computed(() => (fieldMappings.value.length ? fieldMappings.value : fallbackFormMappings.value));
 const visibleFormMappings = computed(() => {
   const selectedKeys = new Set(visibleFieldKeys.value);
-  const selectedMappings = activeFormMappings.value.filter((mapping) => selectedKeys.has(fieldKeyOf(mapping)));
-  return selectedMappings.length ? selectedMappings : defaultVisibleMappings(activeFormMappings.value);
+  return activeFormMappings.value.filter((mapping) => selectedKeys.has(fieldKeyOf(mapping)));
 });
 
 const fieldVisibilityOptions = computed(() =>
-  activeFormMappings.value.map((mapping) => ({
-    label: fieldDisplayLabel(mapping),
-    value: fieldKeyOf(mapping)
-  }))
+  [
+    ...activeFormMappings.value.map((mapping) => ({
+      label: fieldDisplayLabel(mapping),
+      value: fieldKeyOf(mapping)
+    })),
+    ...systemColumnDefinitions.map((column) => ({
+      label: column.title,
+      value: systemFieldKey(column.key)
+    }))
+  ]
 );
 
 const formColumns = computed(() =>
@@ -801,46 +867,68 @@ const formColumns = computed(() =>
   }))
 );
 
-const tableScrollX = computed(() => {
-  const selectionWidth = 56;
-  const formWidth = visibleFormMappings.value.reduce((total, mapping) => total + formColumnWidth(mapping), selectionWidth);
-  const systemWidth = systemColumns.reduce((total, column) => total + column.minWidth, 0);
-  return formWidth + systemWidth;
-});
-
-const systemColumns = [
+const systemColumnDefinitions = [
   {
     title: "标签",
-    key: "tags",
+    key: "tags" as const,
     minWidth: 120,
     render: (row: Attendee) =>
       row.tags.length
         ? h(NSpace, { size: 4 }, { default: () => row.tags.map((tag) => h(NTag, { size: "small" }, { default: () => tag })) })
         : "-"
   },
-  { title: "审核", key: "auditStatus", minWidth: 96, render: (row: Attendee) => h(StatusTag, { value: row.auditStatus }) },
-  { title: "座位", key: "seatLabel", minWidth: 160, render: (row: Attendee) => h("span", seatLabelCellProps(), row.seatLabel || "-") },
-  { title: "房间", key: "roomNo", minWidth: 96, render: (row: Attendee) => row.roomNo || "-" },
-  { title: "座位查询", key: "seatQueried", minWidth: 100, render: (row: Attendee) => renderQueryTag(row.seatQueried) },
-  { title: "住宿查询", key: "roomQueried", minWidth: 100, render: (row: Attendee) => renderQueryTag(row.roomQueried) },
-  { title: "签到", key: "checkinStatus", minWidth: 96, render: (row: Attendee) => h(StatusTag, { value: row.checkinStatus }) },
-  {
-    title: "操作",
-    key: "actions",
-    minWidth: 210,
-    render: (row: Attendee) =>
-      h("div", actionCellProps(), [
-        ...renderAuditActions(row),
-        h(NButton, { text: true, onClick: () => openTagEditor(row) }, { default: () => "标签" })
-      ])
-  }
+  { title: "审核", key: "auditStatus" as const, minWidth: 96, render: (row: Attendee) => h(StatusTag, { value: row.auditStatus }) },
+  { title: "座位", key: "seatLabel" as const, minWidth: 160, render: (row: Attendee) => h("span", seatLabelCellProps(), row.seatLabel || "-") },
+  { title: "房间", key: "roomNo" as const, minWidth: 96, render: (row: Attendee) => row.roomNo || "-" },
+  { title: "座位查询", key: "seatQueried" as const, minWidth: 100, render: (row: Attendee) => renderQueryTag(row.seatQueried) },
+  { title: "住宿查询", key: "roomQueried" as const, minWidth: 100, render: (row: Attendee) => renderQueryTag(row.roomQueried) },
+  { title: "签到", key: "checkinStatus" as const, minWidth: 96, render: (row: Attendee) => h(StatusTag, { value: row.checkinStatus }) },
+  { title: "参会人备注", key: "remark" as const, minWidth: 180, ellipsis: { tooltip: true }, render: (row: Attendee) => row.remark || "-" }
 ];
+
+const defaultSystemFieldKeys = systemColumnDefinitions.map((column) => systemFieldKey(column.key));
+
+const visibleSystemColumns = computed(() => {
+  const selectedKeys = new Set(visibleFieldKeys.value);
+  return systemColumnDefinitions.filter((column) => selectedKeys.has(systemFieldKey(column.key)));
+});
+
+const actionColumn = {
+  title: "操作",
+  key: "actions",
+  /*
+   * Naive UI 的横向滚动表格不会用 minWidth 锁定列宽，字段较多时操作列会被压缩，
+   * 导致末尾“标签/备注”按钮溢出后无法点击。固定明确宽度并吸附右侧，确保所有操作始终可达。
+   */
+  width: 320,
+  fixed: "right" as const,
+  render: (row: Attendee) =>
+    h("div", actionCellProps(), [
+      // 所有报名字段都可隐藏，因此详情入口必须固定保留在操作列。
+      h(NButton, { text: true, type: "primary", onClick: () => openDetail(row) }, { default: () => "详情" }),
+      ...renderAuditActions(row),
+      h(NButton, { text: true, onClick: () => openTagEditor(row) }, { default: () => "标签" }),
+      h(NButton, { text: true, onClick: () => openRemarkEditor(row) }, { default: () => "备注" })
+    ])
+};
+
+const tableScrollX = computed(() => {
+  const selectionWidth = 56;
+  const formWidth = visibleFormMappings.value.reduce((total, mapping) => total + formColumnWidth(mapping), selectionWidth);
+  const systemWidth = visibleSystemColumns.value.reduce((total, column) => total + column.minWidth, actionColumn.width);
+  return formWidth + systemWidth;
+});
 
 const columns = computed(() => [
   { type: "selection" as const, width: 56 },
   ...formColumns.value,
-  ...systemColumns
+  ...visibleSystemColumns.value,
+  actionColumn
 ]);
+
+function isSystemFieldVisible(key: SystemColumnKey) {
+  return visibleFieldKeys.value.includes(systemFieldKey(key));
+}
 
 function renderQueryTag(queried?: boolean) {
   return h(NTag, { size: "small", round: true, type: queried ? "success" : "default" }, { default: () => (queried ? "已查询" : "未查询") });
@@ -975,6 +1063,8 @@ watch(routeMeetingId, (meetingId, previousMeetingId) => {
     store.cancelAttendeeSearch(previousMeetingId);
     remoteFilteredAttendees.value = null;
     checkedKeys.value = [];
+    fieldVisibilityInitialized = false;
+    visibleFieldKeys.value = [];
     nameplateTemplateUrl.value = "";
     selectedNameplateFieldSettings.value = [defaultNameplateFieldSetting("name")];
     void loadAttendeePageData();
@@ -985,7 +1075,7 @@ watch(activeFormMappings, (mappings) => {
   reconcileVisibleFields(mappings);
 }, { immediate: true });
 
-watch([keyword, auditStatus, attendeeType, hasSeat, selectedTags], () => {
+watch([keyword, auditStatus, hasSeat, selectedTags], () => {
   scheduleAttendeeFilter();
 }, { deep: true });
 
@@ -1001,7 +1091,6 @@ function scheduleAttendeeFilter() {
     const filters = {
       keyword: keyword.value,
       auditStatus: auditStatus.value,
-      attendeeType: attendeeType.value,
       hasSeat: hasSeat.value,
       tags: [...selectedTags.value]
     };
@@ -1033,6 +1122,7 @@ async function loadAttendeePageData() {
   const token = ++attendeePageLoadToken;
   if (!meetingId) {
     fieldMappings.value = [];
+    fieldVisibilityInitialized = false;
     visibleFieldKeys.value = [];
     return;
   }
@@ -1322,6 +1412,35 @@ function saveTags() {
     })
     .finally(() => {
       savingTags.value = false;
+    });
+}
+
+function openRemarkEditor(row: Attendee) {
+  remarkEditingAttendeeId.value = row.id;
+  editingRemark.value = row.remark || "";
+  remarkModalVisible.value = true;
+}
+
+function saveRemark() {
+  const attendee = remarkEditingAttendee.value;
+  if (!attendee || savingRemark.value) return;
+
+  savingRemark.value = true;
+  void store.updateAttendeeRemark(attendee.id, editingRemark.value)
+    .then(() => {
+      /*
+       * 远程筛选结果持有保存前的参会人对象。清空该缓存后，列表立即回到
+       * store 中的新对象，备注列和详情弹窗无需额外刷新即可同步回显。
+       */
+      invalidateRemoteAttendeeResults();
+      remarkModalVisible.value = false;
+      message.success("备注已更新");
+    })
+    .catch((error) => {
+      message.error(error instanceof Error ? error.message : "备注保存失败");
+    })
+    .finally(() => {
+      savingRemark.value = false;
     });
 }
 
@@ -2351,18 +2470,30 @@ function defaultVisibleMappings(mappings: TduckFieldMappingDto[]) {
 }
 
 function reconcileVisibleFields(mappings: TduckFieldMappingDto[]) {
-  const availableKeys = new Set(mappings.map(fieldKeyOf));
-  const kept = visibleFieldKeys.value.filter((key) => availableKeys.has(key));
-  if (kept.length) {
-    visibleFieldKeys.value = kept;
+  const availableFormKeys = new Set(mappings.map(fieldKeyOf));
+  if (!fieldVisibilityInitialized) {
+    visibleFieldKeys.value = [
+      ...defaultVisibleMappings(mappings).map(fieldKeyOf),
+      ...defaultSystemFieldKeys
+    ];
+    fieldVisibilityInitialized = true;
     return;
   }
+
+  const systemKeys = new Set(defaultSystemFieldKeys);
+  const selectedFormKeys = visibleFieldKeys.value.filter((key) => !systemKeys.has(key));
+  const keptFormKeys = selectedFormKeys.filter((key) => availableFormKeys.has(key));
+  const nextFormKeys = selectedFormKeys.length > 0 && keptFormKeys.length === 0
+    ? defaultVisibleMappings(mappings).map(fieldKeyOf)
+    : keptFormKeys;
+  const keptSystemKeys = visibleFieldKeys.value.filter((key) => systemKeys.has(key));
+
   /*
    * TDuck 表单常常有十几个字段；默认全展示会把列表撑得很宽。
-   * 这里默认只展示标准映射字段（最多 5 个），管理员仍可通过“显示字段”
-   * 多选把任意 TDuck 报名字段加到列表里，详情抽屉始终展示完整字段。
+   * 首次进入默认展示标准报名字段（最多 5 个）和全部管理字段；之后严格保留
+   * 管理员的选择。TDuck 映射发生变化时，只替换已经失效的报名字段。
    */
-  visibleFieldKeys.value = defaultVisibleMappings(mappings).map(fieldKeyOf);
+  visibleFieldKeys.value = [...nextFormKeys, ...keptSystemKeys];
 }
 </script>
 
@@ -2379,7 +2510,7 @@ function reconcileVisibleFields(mappings: TduckFieldMappingDto[]) {
   min-width: 0;
   flex: 1 1 auto;
   display: grid;
-  grid-template-columns: minmax(220px, 1.2fr) repeat(3, minmax(140px, 0.58fr)) minmax(180px, 0.8fr);
+  grid-template-columns: minmax(220px, 1.2fr) repeat(2, minmax(140px, 0.58fr)) minmax(180px, 0.8fr);
   gap: 12px;
 }
 
@@ -2387,7 +2518,8 @@ function reconcileVisibleFields(mappings: TduckFieldMappingDto[]) {
   flex: 0 0 260px;
 }
 
-.tag-modal {
+.tag-modal,
+.remark-modal {
   max-width: 520px;
 }
 
@@ -2748,6 +2880,16 @@ function reconcileVisibleFields(mappings: TduckFieldMappingDto[]) {
   width: min(420px, 100%);
 }
 
+.detail-remark-value {
+  justify-content: space-between;
+  gap: 16px;
+}
+
+.detail-remark-value > span {
+  min-width: 0;
+  white-space: pre-wrap;
+}
+
 @media (max-width: 1440px) {
   .filters {
     flex-direction: column;
@@ -2755,7 +2897,7 @@ function reconcileVisibleFields(mappings: TduckFieldMappingDto[]) {
 
   .filter-main {
     width: 100%;
-    grid-template-columns: minmax(220px, 1.2fr) repeat(4, minmax(140px, 0.7fr));
+    grid-template-columns: minmax(220px, 1.2fr) repeat(3, minmax(140px, 0.7fr));
   }
 
   .field-visibility-select {

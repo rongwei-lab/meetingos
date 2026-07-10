@@ -119,7 +119,7 @@ interface AttendeeDto {
   roomNo?: string;
   roomRemark?: string;
   seatLabel?: string;
-  remark?: string;
+  remark?: string | null;
   seatAssigned?: boolean;
   roomAssigned?: boolean;
   dinnerAssigned?: boolean;
@@ -1528,7 +1528,7 @@ export const useMeetingStore = defineStore("meeting", {
       if (targetMeetingId) requestRuntime.requests.cancel(`attendee-search:${targetMeetingId}`);
     },
     async searchAttendees(
-      filters: { keyword?: string; auditStatus?: string | null; attendeeType?: string | null; hasSeat?: boolean | null; tags?: string[] },
+      filters: { keyword?: string; auditStatus?: string | null; hasSeat?: boolean | null; tags?: string[] },
       options: { meetingId?: string } = {}
     ) {
       const meetingId = requireMeetingId(options.meetingId || this.currentMeetingId);
@@ -1542,7 +1542,6 @@ export const useMeetingStore = defineStore("meeting", {
               meetingId: backendId(meetingId),
               keyword: keyword || undefined,
               reviewStatus: filters.auditStatus || undefined,
-              attendeeType: filters.attendeeType || undefined,
               hasSeat: filters.hasSeat == null ? undefined : filters.hasSeat,
               tags: tags.length ? tags.join(",") : undefined,
               page: 0,
@@ -2193,6 +2192,43 @@ export const useMeetingStore = defineStore("meeting", {
         this.attendees = this.attendees.map((attendee) => (attendee.id === attendeeId ? { ...attendee, tags: normalizedTags } : attendee));
       }
     },
+    async updateAttendeeRemark(attendeeId: string, remark: string) {
+      const normalizedRemark = remark.trim();
+      try {
+        const updated = unwrapApi(
+          await http.put<AttendeeDto>(`/admin/attendees/${backendId(attendeeId)}/remark`, {
+            remark: normalizedRemark || null
+          })
+        );
+        const attendee = this.attendees.find((item) => item.id === attendeeId);
+        this.attendees = this.attendees.map((item) =>
+          item.id === attendeeId
+            ? {
+                ...item,
+                ...mapAttendee(updated, attendee?.meetingId || this.currentMeetingId),
+                /*
+                 * 专用备注接口只负责 Attendee 实体，不重新聚合排座、住宿、晚宴和查询记录。
+                 * 保留列表已加载的聚合状态，避免保存备注后这些列瞬间变成“未分配/未查询”。
+                 */
+                seatLabel: attendee?.seatLabel,
+                roomId: attendee?.roomId,
+                seatAssigned: attendee?.seatAssigned,
+                roomAssigned: attendee?.roomAssigned,
+                dinnerAssigned: attendee?.dinnerAssigned,
+                seatQueried: attendee?.seatQueried,
+                roomQueried: attendee?.roomQueried,
+                dinnerQueried: attendee?.dinnerQueried
+              }
+            : item
+        );
+      } catch (error) {
+        if (!canUseDemoFallback(error)) throw new Error(extractErrorMessage(error, "备注保存失败"));
+        // 本地演示模式同样支持备注录入和清空，行为与真实接口保持一致。
+        this.attendees = this.attendees.map((attendee) =>
+          attendee.id === attendeeId ? { ...attendee, remark: normalizedRemark || undefined } : attendee
+        );
+      }
+    },
     async autoAssignSeats() {
       const meetingId = requireMeetingId(this.currentMeetingId);
       try {
@@ -2681,7 +2717,7 @@ export const useMeetingStore = defineStore("meeting", {
       return settings;
     },
     filterAttendeesLocally(
-      filters: { keyword?: string; auditStatus?: string | null; attendeeType?: string | null; hasSeat?: boolean | null; tags?: string[] },
+      filters: { keyword?: string; auditStatus?: string | null; hasSeat?: boolean | null; tags?: string[] },
       meetingId?: string
     ) {
       const targetMeetingId = meetingId || this.currentMeetingId;
@@ -2695,7 +2731,6 @@ export const useMeetingStore = defineStore("meeting", {
         return (
           (!keyword || text.includes(keyword)) &&
           (!filters.auditStatus || item.auditStatus === filters.auditStatus) &&
-          (!filters.attendeeType || item.attendeeType === filters.attendeeType) &&
           seatMatched &&
           tagMatched
         );
@@ -3092,7 +3127,7 @@ function mapAttendee(item: AttendeeDto, meetingId: string): Attendee {
     email: item.email,
     attendeeType: item.attendeeType || "NORMAL",
     accommodationRequired: item.accommodationRequired,
-    remark: item.remark,
+    remark: item.remark || undefined,
     tags: splitTags(item.tags),
     auditStatus: item.reviewStatus || "PENDING",
     auditReason: item.reviewReason,

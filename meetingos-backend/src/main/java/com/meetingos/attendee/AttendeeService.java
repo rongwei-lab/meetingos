@@ -180,6 +180,19 @@ public class AttendeeService {
     }
 
     @Transactional
+    public Attendee updateRemark(Long attendeeId, String remark) {
+        /*
+         * 备注与完整资料更新共用 attendees 行。这里使用悲观写锁，避免备注保存与审核、
+         * 分房或完整资料编辑并发时发生后提交事务覆盖先提交结果。
+         */
+        Attendee attendee = attendeeRepository.findByIdForUpdate(attendeeId)
+                .orElseThrow(() -> BusinessException.notFound("参会人不存在"));
+        meetingAccessService.requireManage(attendee.getMeeting().getId());
+        attendee.setRemark(trimToNull(remark));
+        return attendee;
+    }
+
+    @Transactional
     public Attendee cancel(Long attendeeId, String reason) {
         Attendee attendee = attendeeRepository.findByIdForUpdate(attendeeId)
                 .orElseThrow(() -> BusinessException.notFound("参会人不存在"));
@@ -603,5 +616,13 @@ public class AttendeeService {
 
     private String blankToNull(String value) {
         return value == null || value.isBlank() ? null : value;
+    }
+
+    private String trimToNull(String value) {
+        if (value == null) {
+            return null;
+        }
+        String normalized = value.strip();
+        return normalized.isEmpty() ? null : normalized;
     }
 }

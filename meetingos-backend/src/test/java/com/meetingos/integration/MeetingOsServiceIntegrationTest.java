@@ -78,9 +78,11 @@ import org.apache.poi.xssf.usermodel.XSSFWorkbook;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.hamcrest.Matchers.hasItem;
+import static org.hamcrest.Matchers.nullValue;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.delete;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.put;
 import static org.springframework.security.test.web.servlet.request.SecurityMockMvcRequestPostProcessors.authentication;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
@@ -1347,6 +1349,144 @@ class MeetingOsServiceIntegrationTest {
                 .andExpect(jsonPath("$.data.content[*].email", hasItem("v***@example.com")))
                 .andExpect(jsonPath("$.data.content[*].formValues.input_phone_dynamic_key", hasItem("****6617")))
                 .andExpect(jsonPath("$.data.content[*].formValues.input_email_dynamic_key", hasItem("v***@example.com")));
+    }
+
+    @Test
+    @WithMockUser(roles = {"SUPER_ADMIN"})
+    void attendeeRemarkEndpointCreatesEditsAndReturnsRemarkWithoutOverwritingSensitiveFields() throws Exception {
+        var attendee = attendeeRepository.findById(1L).orElseThrow();
+        assertThat(attendee.getRemark()).isNull();
+        String originalPhone = attendee.getPhone();
+
+        mockMvc.perform(put("/api/admin/attendees/1/remark")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("""
+                                {
+                                  "remark": "  首次联系后等待确认  "
+                                }
+                                """))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.data.remark").value("首次联系后等待确认"))
+                // 保存响应继续遵守脱敏开关，不能因编辑备注重新暴露原始手机号。
+                .andExpect(jsonPath("$.data.phone").value("****0001"));
+
+        attendeeRepository.flush();
+        var created = attendeeRepository.findById(1L).orElseThrow();
+        assertThat(created.getRemark()).isEqualTo("首次联系后等待确认");
+        assertThat(created.getPhone()).isEqualTo(originalPhone);
+
+        mockMvc.perform(get("/api/admin/attendees/1"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.data.remark").value("首次联系后等待确认"));
+        mockMvc.perform(get("/api/admin/attendees")
+                        .param("meetingId", "1")
+                        .param("page", "0")
+                        .param("size", "20"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.data.content[*].remark", hasItem("首次联系后等待确认")));
+
+        mockMvc.perform(put("/api/admin/attendees/1/remark")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("""
+                                {
+                                  "remark": "已确认参会，需会前提醒"
+                                }
+                                """))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.data.remark").value("已确认参会，需会前提醒"));
+
+        attendeeRepository.flush();
+        assertThat(attendeeRepository.findById(1L).orElseThrow().getRemark())
+                .isEqualTo("已确认参会，需会前提醒");
+
+        mockMvc.perform(get("/api/admin/attendees/1"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.data.remark").value("已确认参会，需会前提醒"));
+
+        mockMvc.perform(put("/api/admin/attendees/1/remark")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("""
+                                {
+                                  "remark": "   "
+                                }
+                                """))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.data.remark").value(nullValue()));
+        attendeeRepository.flush();
+        assertThat(attendeeRepository.findById(1L).orElseThrow().getRemark()).isNull();
+    }
+
+    @Test
+    @WithMockUser(roles = {"SUPER_ADMIN"})
+    void attendeeRemarkEndpointRejectsValuesLongerThanDatabaseColumn() throws Exception {
+        mockMvc.perform(put("/api/admin/attendees/1/remark")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(OBJECT_MAPPER.writeValueAsString(Map.of("remark", "备".repeat(501)))))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.code").value("VALIDATION_ERROR"));
+
+        assertThat(attendeeRepository.findById(1L).orElseThrow().getRemark()).isNull();
+    }
+
+    @Test
+    void attendeeRemarkEndpointAllowsAssignedManagerAndRejectsUnassignedManager() throws Exception {
+        var assigned = userService.create(new CreateUserRequest(
+                "remark-manager",
+                "备注管理员",
+                STRONG_TEST_PASSWORD,
+                UserStatus.ACTIVE,
+                Set.of(Role.MEETING_ADMIN)
+        ));
+        meetingUserPermissionService.grant(new MeetingUserPermissionRequest(
+                1L,
+                assigned.id(),
+                MeetingPermissionRole.MANAGER
+        ));
+        CurrentUser assignedUser = new CurrentUser(
+                assigned.id(),
+                "remark-manager",
+                "备注管理员",
+                Set.of(Role.MEETING_ADMIN)
+        );
+        var managerAuthorities = Set.of(new SimpleGrantedAuthority("ROLE_" + Role.MEETING_ADMIN.name()));
+
+        mockMvc.perform(put("/api/admin/attendees/1/remark")
+                        .with(authentication(new UsernamePasswordAuthenticationToken(assignedUser, null, managerAuthorities)))
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("""
+                                {
+                                  "remark": "本会议管理员可维护"
+                                }
+                                """))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.data.remark").value("本会议管理员可维护"));
+
+        var unassigned = userService.create(new CreateUserRequest(
+                "remark-outsider",
+                "未授权备注管理员",
+                STRONG_TEST_PASSWORD,
+                UserStatus.ACTIVE,
+                Set.of(Role.MEETING_ADMIN)
+        ));
+        CurrentUser unassignedUser = new CurrentUser(
+                unassigned.id(),
+                "remark-outsider",
+                "未授权备注管理员",
+                Set.of(Role.MEETING_ADMIN)
+        );
+
+        mockMvc.perform(put("/api/admin/attendees/1/remark")
+                        .with(authentication(new UsernamePasswordAuthenticationToken(unassignedUser, null, managerAuthorities)))
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("""
+                                {
+                                  "remark": "越权修改"
+                                }
+                                """))
+                .andExpect(status().isForbidden());
+
+        assertThat(attendeeRepository.findById(1L).orElseThrow().getRemark())
+                .isEqualTo("本会议管理员可维护");
     }
 
     @Test

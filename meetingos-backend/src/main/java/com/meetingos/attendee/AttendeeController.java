@@ -173,6 +173,15 @@ public class AttendeeController {
         return ApiResponse.ok(AttendeeResponse.raw(attendeeService.updateTags(id, request.tags())));
     }
 
+    @PutMapping("/{id}/remark")
+    @PreAuthorize("@meetingAccess.canManageAttendee(#id)")
+    @AuditLog(action = "ATTENDEE_REMARK_UPDATE", targetType = "ATTENDEE")
+    public ApiResponse<AttendeeResponse> updateRemark(@PathVariable Long id,
+                                                      @Valid @RequestBody AttendeeRemarkRequest request) {
+        Attendee attendee = attendeeService.updateRemark(id, request.remark());
+        return ApiResponse.ok(response(attendee, systemSettingsService.maskSensitiveEnabled()));
+    }
+
     @DeleteMapping("/{id}")
     @PreAuthorize("@meetingAccess.canManageAttendee(#id)")
     @AuditLog(action = "ATTENDEE_CANCEL", targetType = "ATTENDEE")
