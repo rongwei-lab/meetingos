@@ -224,10 +224,10 @@
           <n-input v-model:value="editUserForm.displayName" placeholder="请输入后台显示名称" />
         </n-form-item>
         <n-form-item label="账号状态">
-          <n-select v-model:value="editUserForm.status" :options="userStatusOptions" :disabled="isEditingBuiltInAdmin" placeholder="请选择账号状态" />
+          <n-select v-model:value="editUserForm.status" :options="userStatusOptions" :disabled="isEditingLastActiveSuperAdmin" placeholder="请选择账号状态" />
         </n-form-item>
         <n-form-item label="全局角色">
-          <n-select v-model:value="editUserForm.roles" :options="roleOptions" multiple :disabled="isEditingBuiltInAdmin" placeholder="请选择全局角色" />
+          <n-select v-model:value="editUserForm.roles" :options="roleOptions" multiple :disabled="isEditingLastActiveSuperAdmin" placeholder="请选择全局角色" />
         </n-form-item>
       </n-form>
       <template #footer>
@@ -372,7 +372,7 @@ const roleLabelMap = new Map(roleOptions.map((item) => [item.value, item.label])
 const meetingPermissionLabelMap = new Map(meetingPermissionOptions.map((item) => [item.value, item.label]));
 
 const activeUserCount = computed(() => users.value.filter((user) => isActiveStatus(user.status)).length);
-const isEditingBuiltInAdmin = computed(() => isBuiltInAdmin(editingUser.value));
+const isEditingLastActiveSuperAdmin = computed(() => isLastActiveSuperAdmin(editingUser.value));
 
 const authorizedUserCount = computed(() => {
   const userIds = new Set(
@@ -716,10 +716,10 @@ function submitEditUser() {
     message.warning("请至少选择一个全局角色");
     return;
   }
-  if (isBuiltInAdmin(editingUser.value)) {
+  if (isLastActiveSuperAdmin(editingUser.value)) {
     /*
-     * 前端和后端同时保护内置 admin：系统设置权限固定识别该用户名，
-     * 允许改显示名，但不允许停用或移除 SUPER_ADMIN，避免把全局后台入口锁死。
+     * 初始管理员用户名可以自定义。前端与后端都按角色保护最后一个启用的超级管理员，
+     * 允许修改显示名，但禁止停用或移除角色，避免把全局后台入口锁死。
      */
     editUserForm.status = "ACTIVE";
     editUserForm.roles = ensureRole(editUserForm.roles, "SUPER_ADMIN");
@@ -752,8 +752,13 @@ function normalizeUserStatus(status?: string) {
   return isActiveStatus(status) ? "ACTIVE" : "DISABLED";
 }
 
-function isBuiltInAdmin(user?: AdminUserDto | null) {
-  return (user?.username || "").trim().toLocaleLowerCase("en-US") === "admin";
+function isLastActiveSuperAdmin(user?: AdminUserDto | null) {
+  if (!user || !isActiveStatus(user.status) || !user.roles?.includes("SUPER_ADMIN")) {
+    return false;
+  }
+  return users.value.filter((candidate) =>
+    isActiveStatus(candidate.status) && candidate.roles?.includes("SUPER_ADMIN")
+  ).length === 1;
 }
 
 function ensureRole(roles: string[], role: string) {

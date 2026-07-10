@@ -47,9 +47,9 @@
     </div>
 
     <n-card class="surface section-card" :bordered="false" title="签到记录">
-      <n-data-table v-if="!isMobile" :columns="recordColumns" :data="store.checkinRecords" :pagination="{ pageSize: 8 }" />
+      <n-data-table v-if="!isMobile" :columns="recordColumns" :data="store.currentCheckinRecords" :pagination="{ pageSize: 8 }" />
       <div v-else class="mobile-card-list checkin-record-cards">
-        <article v-for="record in store.checkinRecords" :key="`${record.checkinTime}-${record.attendeeName}`" class="mobile-data-card">
+        <article v-for="record in store.currentCheckinRecords" :key="`${record.checkinTime}-${record.attendeeName}`" class="mobile-data-card">
           <div class="mobile-card-head">
             <div class="mobile-card-title">
               <strong>{{ record.attendeeName || "-" }}</strong>
@@ -68,7 +68,7 @@
             </div>
           </div>
         </article>
-        <n-empty v-if="!store.checkinRecords.length" description="暂无签到记录" />
+        <n-empty v-if="!store.currentCheckinRecords.length" description="暂无签到记录" />
       </div>
     </n-card>
   </div>

@@ -1,5 +1,6 @@
 package com.meetingos.operationlog;
 
+import com.meetingos.security.ClientIpResolver;
 import org.junit.jupiter.api.Test;
 import org.mockito.ArgumentCaptor;
 
@@ -14,7 +15,8 @@ class OperationLogServiceTest {
     @Test
     void recordTruncatesMessageBeforeSaving() {
         OperationLogRepository repository = mock(OperationLogRepository.class);
-        OperationLogService service = new OperationLogService(repository);
+        ClientIpResolver clientIpResolver = mock(ClientIpResolver.class);
+        OperationLogService service = new OperationLogService(repository, clientIpResolver);
         String longMessage = "x".repeat(800);
 
         service.record("TDUCK_MAPPING_SAVE", "TDUCK", false, longMessage, null, Map.of());

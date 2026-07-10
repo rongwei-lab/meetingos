@@ -18,6 +18,9 @@ import org.apache.poi.xssf.usermodel.XSSFWorkbook;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.mock.web.MockMultipartFile;
+import org.springframework.transaction.annotation.Isolation;
+import org.springframework.transaction.annotation.Transactional;
+import org.springframework.web.multipart.MultipartFile;
 
 import java.io.ByteArrayOutputStream;
 import java.util.List;
@@ -26,6 +29,7 @@ import java.util.Optional;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.Mockito.inOrder;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
@@ -63,6 +67,9 @@ class DinnerServiceTest {
         meeting.setDinnerVenue("三层宴会厅");
         meeting.setDinnerTime("18:30");
         when(meetingRepository.findById(1L)).thenReturn(Optional.of(meeting));
+        when(dinnerTableRepository.findMeetingByIdForUpdate(1L)).thenReturn(Optional.of(meeting));
+        when(dinnerTableRepository.findMeetingIdById(300L)).thenReturn(Optional.of(1L));
+        when(dinnerAssignmentRepository.findMeetingIdByAttendeeId(11L)).thenReturn(Optional.of(1L));
         when(dinnerAssignmentRepository.save(any(DinnerAssignment.class))).thenAnswer(invocation -> {
             DinnerAssignment assignment = invocation.getArgument(0);
             if (assignment.getId() == null) {
@@ -77,6 +84,13 @@ class DinnerServiceTest {
             }
             return table;
         });
+        when(dinnerTableRepository.saveAndFlush(any(DinnerTable.class))).thenAnswer(invocation -> {
+            DinnerTable table = invocation.getArgument(0);
+            if (table.getId() == null) {
+                table.setId(300L);
+            }
+            return table;
+        });
     }
 
     @Test
@@ -85,7 +99,8 @@ class DinnerServiceTest {
         meeting.setDinnerTime(null);
         Attendee attendee = attendee(11L, "张三", "13800000000", "示例公司", ReviewStatus.APPROVED);
         when(attendeeRepository.findByMeetingIdAndPhone(1L, "13800000000")).thenReturn(Optional.of(attendee));
-        when(dinnerAssignmentRepository.findByMeetingIdAndAttendeeId(1L, 11L)).thenReturn(Optional.empty());
+        when(attendeeRepository.findByIdForUpdate(11L)).thenReturn(Optional.of(attendee));
+        when(dinnerAssignmentRepository.findByAttendeeIdForUpdate(11L)).thenReturn(Optional.empty());
         when(dinnerTableRepository.findByMeetingIdAndTableNo(1L, "3号桌")).thenReturn(Optional.empty());
 
         ImportResult result = dinnerService.importAssignments(1L, workbook(
@@ -142,9 +157,13 @@ class DinnerServiceTest {
     void importAssignmentsUpdatesExistingRecordForSameAttendee() {
         Attendee attendee = attendee(11L, "张三", "13800000000", "示例公司", ReviewStatus.APPROVED);
         DinnerAssignment existing = assignment(200L, attendee, "1号桌", "旧宴会厅", "18:00", "旧备注");
+        DinnerTable targetTable = table(300L, "8号桌", 10);
         when(attendeeRepository.findByMeetingIdAndPhone(1L, "13800000000")).thenReturn(Optional.of(attendee));
-        when(dinnerAssignmentRepository.findByMeetingIdAndAttendeeId(1L, 11L)).thenReturn(Optional.of(existing));
-        when(dinnerTableRepository.findByMeetingIdAndTableNo(1L, "8号桌")).thenReturn(Optional.of(table(300L, "8号桌", 10)));
+        when(attendeeRepository.findByIdForUpdate(11L)).thenReturn(Optional.of(attendee));
+        when(dinnerAssignmentRepository.findByAttendeeIdForUpdate(11L)).thenReturn(Optional.of(existing));
+        when(dinnerTableRepository.findByMeetingIdAndTableNo(1L, "8号桌")).thenReturn(Optional.of(targetTable));
+        when(dinnerTableRepository.findByMeetingIdAndTableNoInForUpdate(1L, List.of("1号桌", "8号桌")))
+                .thenReturn(List.of(targetTable));
 
         ImportResult result = dinnerService.importAssignments(1L, workbook(
                 List.of("手机号", "桌号", "晚宴地点", "晚宴时间", "备注"),
@@ -168,7 +187,7 @@ class DinnerServiceTest {
         attendee.setAttendeeType(AttendeeType.VIP);
         DinnerAssignment assignment = assignment(200L, attendee, "3号桌", null, null, "主桌");
         when(systemSettingsService.maskSensitiveEnabled()).thenReturn(false);
-        when(dinnerAssignmentRepository.findByMeetingIdOrderByTableNoAscIdAsc(1L)).thenReturn(List.of(assignment));
+        when(dinnerAssignmentRepository.findWithAttendeeByMeetingIdOrderByTableNoAscIdAsc(1L)).thenReturn(List.of(assignment));
 
         ExportTable table = dinnerService.exportDinnerTable(1L);
 
@@ -188,7 +207,8 @@ class DinnerServiceTest {
     void listTablesReturnsOccupiedAndRemainingCounts() {
         DinnerTable table = table(300L, "3号桌", 10);
         when(dinnerTableRepository.findByMeetingIdOrderByTableNoAsc(1L)).thenReturn(List.of(table));
-        when(dinnerAssignmentRepository.countByMeetingIdAndTableNo(1L, "3号桌")).thenReturn(7L);
+        when(dinnerAssignmentRepository.countByMeetingIdGroupByTableNo(1L))
+                .thenReturn(List.<Object[]>of(new Object[]{"3号桌", 7L}));
 
         List<DinnerTableResponse> tables = dinnerService.listTables(1L);
 
@@ -204,14 +224,103 @@ class DinnerServiceTest {
     @Test
     void assignRejectsFullDinnerTable() {
         Attendee attendee = attendee(11L, "张三", "13800000000", "示例公司", ReviewStatus.APPROVED);
+        DinnerTable targetTable = table(300L, "3号桌", 1);
         when(attendeeRepository.findById(11L)).thenReturn(Optional.of(attendee));
-        when(dinnerAssignmentRepository.findByMeetingIdAndAttendeeId(1L, 11L)).thenReturn(Optional.empty());
-        when(dinnerTableRepository.findByMeetingIdAndTableNo(1L, "3号桌")).thenReturn(Optional.of(table(300L, "3号桌", 1)));
+        when(attendeeRepository.findByIdForUpdate(11L)).thenReturn(Optional.of(attendee));
+        when(dinnerAssignmentRepository.findByAttendeeIdForUpdate(11L)).thenReturn(Optional.empty());
+        when(dinnerTableRepository.findByMeetingIdAndTableNo(1L, "3号桌")).thenReturn(Optional.of(targetTable));
+        when(dinnerTableRepository.findByMeetingIdAndTableNoInForUpdate(1L, List.of("3号桌")))
+                .thenReturn(List.of(targetTable));
         when(dinnerAssignmentRepository.countByMeetingIdAndTableNo(1L, "3号桌")).thenReturn(1L);
 
         assertThatThrownBy(() -> dinnerService.assign(new DinnerAssignRequest(11L, "3号桌", null)))
                 .isInstanceOf(BusinessException.class)
                 .hasMessageContaining("上限");
+    }
+
+    @Test
+    void assignLocksDinnerTableBeforeCapacityCheckAndWrite() {
+        Attendee attendee = attendee(11L, "张三", "13800000000", "示例公司", ReviewStatus.APPROVED);
+        DinnerTable targetTable = table(300L, "3号桌", 10);
+        when(attendeeRepository.findById(11L)).thenReturn(Optional.of(attendee));
+        when(attendeeRepository.findByIdForUpdate(11L)).thenReturn(Optional.of(attendee));
+        when(dinnerAssignmentRepository.findByAttendeeIdForUpdate(11L)).thenReturn(Optional.empty());
+        when(dinnerTableRepository.findByMeetingIdAndTableNo(1L, "3号桌")).thenReturn(Optional.of(targetTable));
+        when(dinnerTableRepository.findByMeetingIdAndTableNoInForUpdate(1L, List.of("3号桌")))
+                .thenReturn(List.of(targetTable));
+        when(dinnerAssignmentRepository.countByMeetingIdAndTableNo(1L, "3号桌")).thenReturn(0L);
+
+        dinnerService.assign(new DinnerAssignRequest(11L, "3号桌", null));
+
+        var ordered = inOrder(attendeeRepository, dinnerAssignmentRepository, dinnerTableRepository);
+        ordered.verify(dinnerTableRepository).findMeetingByIdForUpdate(1L);
+        ordered.verify(attendeeRepository).findByIdForUpdate(11L);
+        ordered.verify(dinnerTableRepository).findByMeetingIdAndTableNoInForUpdate(1L, List.of("3号桌"));
+        ordered.verify(dinnerAssignmentRepository).countByMeetingIdAndTableNo(1L, "3号桌");
+        ordered.verify(dinnerAssignmentRepository).save(any(DinnerAssignment.class));
+    }
+
+    @Test
+    void updateTableLocksMeetingAndTargetTableBeforeCapacityCheck() {
+        DinnerTable targetTable = table(300L, "3号桌", 10);
+        when(dinnerTableRepository.findById(300L)).thenReturn(Optional.of(targetTable));
+        when(dinnerTableRepository.findByIdForUpdate(300L)).thenReturn(Optional.of(targetTable));
+        when(dinnerTableRepository.findByMeetingIdAndTableNo(1L, "3号桌")).thenReturn(Optional.of(targetTable));
+        when(dinnerAssignmentRepository.countByMeetingIdAndTableNo(1L, "3号桌")).thenReturn(2L);
+
+        dinnerService.updateTable(300L, new DinnerTableRequest(1L, "3号桌", 8, "靠近主舞台"));
+
+        var ordered = inOrder(dinnerTableRepository, dinnerAssignmentRepository);
+        ordered.verify(dinnerTableRepository).findMeetingByIdForUpdate(1L);
+        ordered.verify(dinnerTableRepository).findByIdForUpdate(300L);
+        ordered.verify(dinnerAssignmentRepository).countByMeetingIdAndTableNo(1L, "3号桌");
+        ordered.verify(dinnerTableRepository).save(targetTable);
+    }
+
+    @Test
+    void deleteTableLocksTargetTableBeforeOccupancyCheck() {
+        DinnerTable targetTable = table(300L, "3号桌", 10);
+        when(dinnerTableRepository.findById(300L)).thenReturn(Optional.of(targetTable));
+        when(dinnerTableRepository.findByIdForUpdate(300L)).thenReturn(Optional.of(targetTable));
+        when(dinnerAssignmentRepository.countByMeetingIdAndTableNo(1L, "3号桌")).thenReturn(0L);
+
+        dinnerService.deleteTable(1L, 300L);
+
+        var ordered = inOrder(dinnerTableRepository, dinnerAssignmentRepository);
+        ordered.verify(dinnerTableRepository).findByIdForUpdate(300L);
+        ordered.verify(dinnerAssignmentRepository).countByMeetingIdAndTableNo(1L, "3号桌");
+        ordered.verify(dinnerTableRepository).delete(targetTable);
+    }
+
+    @Test
+    void clearLocksAttendeeAssignmentAndPreviousTableBeforeDelete() {
+        Attendee attendee = attendee(11L, "张三", "13800000000", "示例公司", ReviewStatus.APPROVED);
+        DinnerAssignment assignment = assignment(200L, attendee, "3号桌", null, null, "主桌");
+        DinnerTable previousTable = table(300L, "3号桌", 10);
+        when(attendeeRepository.findById(11L)).thenReturn(Optional.of(attendee));
+        when(attendeeRepository.findByIdForUpdate(11L)).thenReturn(Optional.of(attendee));
+        when(dinnerAssignmentRepository.findByAttendeeIdForUpdate(11L)).thenReturn(Optional.of(assignment));
+        when(dinnerTableRepository.findByMeetingIdAndTableNo(1L, "3号桌")).thenReturn(Optional.of(previousTable));
+        when(dinnerTableRepository.findByIdForUpdate(300L)).thenReturn(Optional.of(previousTable));
+
+        dinnerService.clear(11L);
+
+        var ordered = inOrder(attendeeRepository, dinnerAssignmentRepository, dinnerTableRepository);
+        ordered.verify(dinnerTableRepository).findMeetingByIdForUpdate(1L);
+        ordered.verify(attendeeRepository).findByIdForUpdate(11L);
+        ordered.verify(dinnerAssignmentRepository).findByAttendeeIdForUpdate(11L);
+        ordered.verify(dinnerTableRepository).findByIdForUpdate(300L);
+        ordered.verify(dinnerAssignmentRepository).delete(assignment);
+    }
+
+    @Test
+    void capacityWriteTransactionsUseReadCommittedIsolation() throws NoSuchMethodException {
+        assertReadCommitted("createTable", DinnerTableRequest.class);
+        assertReadCommitted("updateTable", Long.class, DinnerTableRequest.class);
+        assertReadCommitted("deleteTable", Long.class, Long.class);
+        assertReadCommitted("assign", DinnerAssignRequest.class);
+        assertReadCommitted("clear", Long.class);
+        assertReadCommitted("importAssignments", Long.class, MultipartFile.class);
     }
 
     @Test
@@ -249,6 +358,13 @@ class DinnerServiceTest {
         attendee.setAttendeeType(AttendeeType.NORMAL);
         attendee.setReviewStatus(reviewStatus);
         return attendee;
+    }
+
+    private void assertReadCommitted(String methodName, Class<?>... parameterTypes) throws NoSuchMethodException {
+        Transactional transactional = DinnerService.class.getMethod(methodName, parameterTypes)
+                .getAnnotation(Transactional.class);
+        assertThat(transactional).isNotNull();
+        assertThat(transactional.isolation()).isEqualTo(Isolation.READ_COMMITTED);
     }
 
     private DinnerAssignment assignment(Long id,

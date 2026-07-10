@@ -15,7 +15,8 @@
           <n-button
             v-if="currentSection !== 'history'"
             type="primary"
-            :loading="savingQuerySettings"
+            :loading="savingQuerySettings || loadingQuerySettings"
+            :disabled="loadingQuerySettings || loadedQuerySettingsMeetingId !== meetingId"
             @click="saveQuerySettings"
           >
             保存设置
@@ -705,6 +706,8 @@ const NUpload = defineAsyncComponent(() => import("naive-ui/es/upload").then((mo
 const meetingId = computed(() => String(route.params.meetingId || route.params.id || ""));
 const meeting = computed(() => store.meetings.find((item) => item.id === meetingId.value));
 const savingQuerySettings = ref(false);
+const loadingQuerySettings = ref(false);
+const loadedQuerySettingsMeetingId = ref("");
 const testingQuery = ref(false);
 const testQueryType = ref<"seat" | "room">("seat");
 const queryResults = ref<AdminQueryCandidate[]>([]);
@@ -926,6 +929,9 @@ const activeContentPageKey = ref<PublicPageKey>("combined");
 const queryLinkQrcodes = ref<Record<string, string>>({});
 let qrRenderToken = 0;
 let qrIdleHandle: number | undefined;
+let detailLoadGeneration = 0;
+let queryHistoryGeneration = 0;
+let querySummaryGeneration = 0;
 const historyFilters = reactive<{
   type: PublicQueryType | null;
   status: PublicQueryStatus | null;
@@ -1167,6 +1173,15 @@ function loadDetail() {
   // 新路由使用 meetingId；保留 id 兼容旧路由，便于主线程迁移 router 时平滑过渡。
   if (!meetingId.value) return;
   const targetMeetingId = meetingId.value;
+  const generation = ++detailLoadGeneration;
+  queryHistoryGeneration += 1;
+  querySummaryGeneration += 1;
+  queryHistoryRows.value = [];
+  querySummaryRows.value = [];
+  loadingQueryHistory.value = false;
+  loadingQuerySummary.value = false;
+  historyPagination.page = 1;
+  historyPagination.itemCount = 0;
 
   /*
    * 详情页只需要会议基础信息和公开查询配置。默认加载完整工作区会额外请求参会人、
@@ -1174,7 +1189,11 @@ function loadDetail() {
    * 这里显式关闭工作区加载，并让查询设置独立请求，避免无关模块影响详情页首屏。
    */
   void store.loadMeetingDetail(targetMeetingId, { loadWorkspace: false });
-  loadQuerySettings(targetMeetingId);
+  loadQuerySettings(targetMeetingId, generation);
+  if (currentSection.value === "history") {
+    loadQueryHistory(1);
+    loadQuerySummary();
+  }
 }
 
 function goBusinessPage(name: "meeting-registration") {
@@ -1182,9 +1201,13 @@ function goBusinessPage(name: "meeting-registration") {
   void router.push({ name, params: { meetingId: meetingId.value } });
 }
 
-function loadQuerySettings(targetMeetingId = meetingId.value) {
+function loadQuerySettings(targetMeetingId = meetingId.value, generation = detailLoadGeneration) {
   if (!targetMeetingId) return;
+  loadingQuerySettings.value = true;
+  loadedQuerySettingsMeetingId.value = "";
   void store.loadMeetingQuerySettings(targetMeetingId).then((settings) => {
+    // 表单是页面级可变对象，只有当前路由会议发起的最后一次请求才允许回填。
+    if (generation !== detailLoadGeneration || meetingId.value !== targetMeetingId) return;
     queryForm.seatQueryEnabled = settings.seatQueryEnabled;
     queryForm.roomQueryEnabled = settings.roomQueryEnabled;
     queryForm.dinnerQueryEnabled = settings.dinnerQueryEnabled;
@@ -1224,8 +1247,14 @@ function loadQuerySettings(targetMeetingId = meetingId.value) {
     queryForm.dinnerHighlightResultFields = [...settings.dinnerHighlightResultFields];
     fieldOptions.value = settings.fieldOptions;
     resultFieldOptions.value = settings.resultFieldOptions;
+    loadedQuerySettingsMeetingId.value = targetMeetingId;
   }).catch((error) => {
+    if (generation !== detailLoadGeneration || meetingId.value !== targetMeetingId) return;
     message.error(error instanceof Error ? error.message : "查询设置加载失败");
+  }).finally(() => {
+    if (generation === detailLoadGeneration && meetingId.value === targetMeetingId) {
+      loadingQuerySettings.value = false;
+    }
   });
 }
 
@@ -1273,9 +1302,11 @@ function uploadQueryAsset(options: UploadCustomRequestOptions, target: "logo" | 
 
 function loadQueryHistory(page = historyPagination.page) {
   if (!meetingId.value) return;
+  const targetMeetingId = meetingId.value;
+  const generation = ++queryHistoryGeneration;
   loadingQueryHistory.value = true;
   void store
-    .loadPublicQueryHistory(meetingId.value, {
+    .loadPublicQueryHistory(targetMeetingId, {
       page: Math.max(page - 1, 0),
       size: historyPagination.pageSize,
       type: historyFilters.type,
@@ -1283,32 +1314,48 @@ function loadQueryHistory(page = historyPagination.page) {
       keyword: historyFilters.keyword
     })
     .then((result) => {
+      if (generation !== queryHistoryGeneration || meetingId.value !== targetMeetingId) return;
       queryHistoryRows.value = result.content;
       historyPagination.page = result.page + 1;
       historyPagination.pageSize = result.size;
       historyPagination.itemCount = result.totalElements;
     })
-    .catch((error) => message.error(error instanceof Error ? error.message : "查询历史加载失败"))
+    .catch((error) => {
+      if (generation === queryHistoryGeneration && meetingId.value === targetMeetingId) {
+        message.error(error instanceof Error ? error.message : "查询历史加载失败");
+      }
+    })
     .finally(() => {
-      loadingQueryHistory.value = false;
+      if (generation === queryHistoryGeneration) loadingQueryHistory.value = false;
     });
 }
 
 function loadQuerySummary() {
   if (!meetingId.value) return;
+  const targetMeetingId = meetingId.value;
+  const generation = ++querySummaryGeneration;
   loadingQuerySummary.value = true;
   void store
-    .loadPublicQuerySummary(meetingId.value)
+    .loadPublicQuerySummary(targetMeetingId)
     .then((items) => {
+      if (generation !== querySummaryGeneration || meetingId.value !== targetMeetingId) return;
       querySummaryRows.value = items;
     })
-    .catch((error) => message.error(error instanceof Error ? error.message : "查询汇总加载失败"))
+    .catch((error) => {
+      if (generation === querySummaryGeneration && meetingId.value === targetMeetingId) {
+        message.error(error instanceof Error ? error.message : "查询汇总加载失败");
+      }
+    })
     .finally(() => {
-      loadingQuerySummary.value = false;
+      if (generation === querySummaryGeneration) loadingQuerySummary.value = false;
     });
 }
 
 function saveQuerySettings() {
+  if (loadingQuerySettings.value || loadedQuerySettingsMeetingId.value !== meetingId.value) {
+    message.warning("查询设置尚未加载完成，请稍后重试");
+    return;
+  }
   if (!meetingId.value || queryForm.fields.length === 0) {
     message.warning("请至少选择一个查询字段");
     return;
@@ -1603,6 +1650,9 @@ function handleHistoryPageSizeChange(pageSize: number) {
 onMounted(loadDetail);
 onUnmounted(() => {
   qrRenderToken++;
+  detailLoadGeneration += 1;
+  queryHistoryGeneration += 1;
+  querySummaryGeneration += 1;
   if (qrIdleHandle !== undefined) {
     const cancelIdleCallback = window.cancelIdleCallback as ((handle: number) => void) | undefined;
     if (cancelIdleCallback) cancelIdleCallback(qrIdleHandle);

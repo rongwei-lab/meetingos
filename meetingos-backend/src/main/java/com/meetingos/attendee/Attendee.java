@@ -21,7 +21,8 @@ import java.util.Map;
 
 @Entity
 @Table(name = "attendees", uniqueConstraints = {
-        @UniqueConstraint(name = "uk_attendee_meeting_phone", columnNames = {"meeting_id", "phone"})
+        @UniqueConstraint(name = "uk_attendee_meeting_phone", columnNames = {"meeting_id", "phone"}),
+        @UniqueConstraint(name = "uk_attendee_meeting_tduck_data", columnNames = {"meeting_id", "tduck_data_id"})
 })
 public class Attendee extends BaseEntity {
 

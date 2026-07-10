@@ -1,6 +1,8 @@
 package com.meetingos.room;
 
+import jakarta.persistence.LockModeType;
 import org.springframework.data.jpa.repository.JpaRepository;
+import org.springframework.data.jpa.repository.Lock;
 import org.springframework.data.jpa.repository.Query;
 import org.springframework.data.repository.query.Param;
 
@@ -15,6 +17,17 @@ public interface RoomRepository extends JpaRepository<Room, Long> {
     List<Room> findByMeetingIdOrderByRoomNoAsc(Long meetingId);
 
     Optional<Room> findByMeetingIdAndRoomNo(Long meetingId, String roomNo);
+
+    @Lock(LockModeType.PESSIMISTIC_WRITE)
+    @Query("""
+            select room
+            from Room room
+            where room.meeting.id = :meetingId
+              and room.roomNo in :roomNos
+            order by room.roomNo asc
+            """)
+    List<Room> findByMeetingIdAndRoomNoInForUpdate(@Param("meetingId") Long meetingId,
+                                                   @Param("roomNos") Collection<String> roomNos);
 
     List<Room> findByMeetingIdAndRoomNoIn(Long meetingId, Collection<String> roomNos);
 

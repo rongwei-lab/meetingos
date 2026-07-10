@@ -2,6 +2,7 @@ package com.meetingos.publicapi;
 
 import com.meetingos.common.BusinessException;
 import com.meetingos.security.PublicQueryProperties;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Service;
 
 import java.security.SecureRandom;
@@ -15,12 +16,21 @@ import java.util.concurrent.ConcurrentHashMap;
 public class PublicCaptchaService {
 
     private static final SecureRandom RANDOM = new SecureRandom();
+    private static final int MAX_CHALLENGES = 50_000;
 
     private final PublicQueryProperties properties;
     private final Map<String, CaptchaChallenge> challenges = new ConcurrentHashMap<>();
+    private final Object capacityLock = new Object();
+    private final int maxChallenges;
 
+    @Autowired
     public PublicCaptchaService(PublicQueryProperties properties) {
+        this(properties, MAX_CHALLENGES);
+    }
+
+    PublicCaptchaService(PublicQueryProperties properties, int maxChallenges) {
         this.properties = properties;
+        this.maxChallenges = Math.max(1, maxChallenges);
     }
 
     public PublicCaptchaResponse create() {
@@ -32,7 +42,15 @@ public class PublicCaptchaService {
         int right = RANDOM.nextInt(8) + 2;
         String captchaId = UUID.randomUUID().toString();
         long expiresAt = Instant.now().plusSeconds(ttlSeconds()).toEpochMilli();
-        challenges.put(captchaId, new CaptchaChallenge(String.valueOf(left + right), expiresAt, 3, 0));
+        synchronized (capacityLock) {
+            if (challenges.size() >= maxChallenges) {
+                cleanupExpired();
+            }
+            if (challenges.size() >= maxChallenges) {
+                throw BusinessException.badRequest("验证码服务繁忙，请稍后再试");
+            }
+            challenges.put(captchaId, new CaptchaChallenge(String.valueOf(left + right), expiresAt));
+        }
         return new PublicCaptchaResponse(true, captchaId, left + " + " + right + " = ?", ttlSeconds());
     }
 
@@ -49,37 +67,49 @@ public class PublicCaptchaService {
             throw BusinessException.badRequest("请先完成验证码");
         }
         CaptchaChallenge challenge = challenges.get(captchaId);
-        if (challenge == null || challenge.expired()) {
-            challenges.remove(captchaId);
+        if (challenge == null) {
             throw BusinessException.badRequest("验证码已过期，请刷新后重试");
         }
-        if (!challenge.answer().equals(answer.trim())) {
-            CaptchaChallenge failed = challenge.withFailedAttempts(challenge.failedAttempts() + 1);
-            if (failed.failedAttempts() >= 3) {
-                challenges.remove(captchaId);
-                throw BusinessException.badRequest("验证码错误次数过多，请刷新后重试");
-            }
-            challenges.put(captchaId, failed);
-            throw BusinessException.badRequest("验证码不正确");
+        if (challenge.expired()) {
+            challenges.remove(captchaId, challenge);
+            throw BusinessException.badRequest("验证码已过期，请刷新后重试");
         }
-        /*
-         * 综合查询页可能同时发起“座位 + 住宿 + 晚宴”三个查询请求。短时间内允许
-         * 同一个验证码通过最多三次，
-         * 避免用户明明答对却因为并发请求失败；超过三次后删除，防止验证码被长期复用。
-         */
-        if (challenge.remainingSuccessUses() <= 1) {
-            challenges.remove(captchaId);
-        } else {
-            challenges.put(captchaId, challenge.withRemainingSuccessUses(challenge.remainingSuccessUses() - 1));
+        synchronized (challenge) {
+            // 另一个并发请求可能已耗尽并删除当前验证码；不能让等待锁的请求继续复用旧对象。
+            if (challenges.get(captchaId) != challenge || challenge.expired()) {
+                challenges.remove(captchaId, challenge);
+                throw BusinessException.badRequest("验证码已过期，请刷新后重试");
+            }
+            if (!challenge.answer.equals(answer.trim())) {
+                challenge.failedAttempts++;
+                if (challenge.failedAttempts >= 3) {
+                    challenges.remove(captchaId, challenge);
+                    throw BusinessException.badRequest("验证码错误次数过多，请刷新后重试");
+                }
+                throw BusinessException.badRequest("验证码不正确");
+            }
+
+            /*
+             * 综合查询页可能同时发起“座位 + 住宿 + 晚宴”三个查询请求。原子递减保证
+             * 并发请求最多成功三次，避免多个线程读到同一个 remainingSuccessUses 后覆盖更新。
+             */
+            challenge.remainingSuccessUses--;
+            if (challenge.remainingSuccessUses <= 0) {
+                challenges.remove(captchaId, challenge);
+            }
         }
     }
 
     private void cleanupExpired() {
-        long now = Instant.now().toEpochMilli();
+        cleanupExpiredEntries(Instant.now().toEpochMilli());
+    }
+
+    void cleanupExpiredEntries(long now) {
         Iterator<Map.Entry<String, CaptchaChallenge>> iterator = challenges.entrySet().iterator();
         while (iterator.hasNext()) {
-            if (iterator.next().getValue().expiresAt() < now) {
-                iterator.remove();
+            Map.Entry<String, CaptchaChallenge> entry = iterator.next();
+            if (entry.getValue().expiresAt < now) {
+                challenges.remove(entry.getKey(), entry.getValue());
             }
         }
     }
@@ -88,18 +118,23 @@ public class PublicCaptchaService {
         return Math.max(60, properties.getCaptchaTtlSeconds());
     }
 
-    private record CaptchaChallenge(String answer, long expiresAt, int remainingSuccessUses, int failedAttempts) {
+    int challengeCount() {
+        return challenges.size();
+    }
+
+    private static final class CaptchaChallenge {
+        private final String answer;
+        private final long expiresAt;
+        private int remainingSuccessUses = 3;
+        private int failedAttempts;
+
+        private CaptchaChallenge(String answer, long expiresAt) {
+            this.answer = answer;
+            this.expiresAt = expiresAt;
+        }
 
         boolean expired() {
             return expiresAt < Instant.now().toEpochMilli();
-        }
-
-        CaptchaChallenge withRemainingSuccessUses(int nextRemainingSuccessUses) {
-            return new CaptchaChallenge(answer, expiresAt, nextRemainingSuccessUses, failedAttempts);
-        }
-
-        CaptchaChallenge withFailedAttempts(int nextFailedAttempts) {
-            return new CaptchaChallenge(answer, expiresAt, remainingSuccessUses, nextFailedAttempts);
         }
     }
 }

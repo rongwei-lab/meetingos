@@ -4,6 +4,54 @@
 
 本项目遵循语义化版本号：`主版本.次版本.修订版本`。
 
+## [0.10.0] - 2026-07-10
+
+### Added
+
+- 新增 GitHub Actions CI，覆盖后端 `./mvnw verify`、前端 `npm test`、`npm run build` 和生产依赖高危审计。
+- 新增 Maven Wrapper，后端测试和 CI 不再依赖机器预装 Maven。
+- 新增 `deploy/scripts/deploy.sh` 和增强版 `check-env.sh`，生产启动前校验 `.env` 权限、重复变量、弱密钥、镜像 tag、数据库名和密码别名一致性。
+- 新增统一客户端 IP 解析器，公开查询限流和验证码只在可信代理配置开启时读取转发头。
+- 新增 TDuck Webhook JSON 解析组件和独立事务 runner，为验签先行、幂等冲突回收和补偿同步提供清晰边界。
+- 新增前端请求控制和会议计数工具，配套 Vitest 测试覆盖请求取消、会议上下文隔离和计数归零。
+
+### Changed
+
+- 生产 Compose 默认通过内部 Nginx 访问后端，后端不再发布宿主机端口；Nginx 会覆盖客户端伪造的 `X-Forwarded-For`。
+- MeetingOS 后端镜像改为非 root 用户运行，并新增上传卷属主修复的一次性初始化容器。
+- Compose 为 MySQL、Redis、MinIO、MeetingOS、Nginx 和 TDuck 服务补充健康检查、资源上限、PID 上限和日志轮转。
+- 前端系统设置权限改为按 `SUPER_ADMIN` 角色判断，不再依赖固定 `admin` 用户名。
+- 前端登录、登出和会话切换会清空会议工作区缓存，快速切换会议时会取消旧请求，避免旧响应覆盖新页面。
+- 参会人、住宿、晚宴和 TDuck 同步相关写操作增加行锁、固定锁顺序和幂等事务边界，降低并发覆盖和超容量分配风险。
+- 前端依赖更新：`axios` 升级到 `1.18.1`，`vite` 升级到 `6.4.3`，新增 `vitest`。
+
+### Fixed
+
+- 修复公开验证码并发复用可能覆盖剩余次数，以及验证码/限流内存 map 可被大量不同客户端撑大的问题。
+- 修复公开限流在可信代理关闭时仍可能受伪造转发头影响的问题。
+- 修复 TDuck Webhook 在鉴权前解析 JSON、失败日志保存未认证载荷、token 比较非恒定时间的问题。
+- 修复 TDuck 重推或补偿同步中 `dataId`、手机号和成功日志幂等键竞争可能导致重复报名或串改参会人的问题。
+- 修复房间分配、参会人导入、晚宴桌号分配在并发下可能绕过容量校验或刷新旧房态/桌态的问题。
+- 修复系统管理员初始账号判断依赖固定用户名，导致自定义超级管理员访问系统设置不稳定的问题。
+
+### Security
+
+- Webhook 现在先验证 HMAC/header/query token，再解析可信请求体；未鉴权载荷不会进入业务解析和原始数据日志。
+- `X-Forwarded-For` 由边界 Nginx 统一覆盖为真实 TCP 对端，防止客户端自带转发链污染限流、审计和查询历史。
+- `.env` 生产启动前要求 `0600` 或 `0400` 权限，并拒绝占位密钥、短密钥、`:latest` 镜像和不一致的密码别名。
+- 后端容器使用固定 UID/GID `10001:10001` 运行，减少上传目录和应用进程 root 权限暴露面。
+
+### Tests
+
+- 新增后端测试覆盖登录限流、Client IP 解析、验证码/限流容量、TDuck Webhook 安全、TDuck 幂等事务、住宿/晚宴并发容量和系统管理员初始化。
+- 新增前端 Vitest 测试覆盖认证角色判断、会议 store 隔离、请求取消和会议计数更新。
+
+### Notes
+
+- 新增迁移 `V4__add_tduck_idempotency_constraints.sql`，会为 `attendees(meeting_id, tduck_data_id)` 和 `tduck_sync_logs(success_event_id)` 增加唯一约束。升级前请先排查重复 TDuck dataId；迁移会保留重复历史成功日志，但重复参会主数据需要人工核对。
+- 正式部署建议使用 `deploy/scripts/deploy.sh`，不要绕过环境安全检查直接执行 `docker compose up`。
+- 若后端被改为公网直连或绕过本仓库 Nginx，必须把 `PUBLIC_QUERY_TRUST_FORWARD_HEADERS=false`。
+
 ## [0.9.0] - 2026-07-08
 
 ### Added

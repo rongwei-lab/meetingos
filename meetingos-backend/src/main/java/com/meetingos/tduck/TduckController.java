@@ -1,6 +1,5 @@
 package com.meetingos.tduck;
 
-import com.fasterxml.jackson.databind.ObjectMapper;
 import com.meetingos.common.ApiResponse;
 import com.meetingos.common.PageResponse;
 import com.meetingos.operationlog.AuditLog;
@@ -19,19 +18,15 @@ import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
 
 import java.io.IOException;
-import java.util.LinkedHashMap;
 import java.util.List;
-import java.util.Map;
 
 @RestController
 public class TduckController {
 
     private final TduckService tduckService;
-    private final ObjectMapper objectMapper;
 
-    public TduckController(TduckService tduckService, ObjectMapper objectMapper) {
+    public TduckController(TduckService tduckService) {
         this.tduckService = tduckService;
-        this.objectMapper = objectMapper;
     }
 
     @PostMapping({"/api/tduck/bindings", "/api/admin/tduck/bindings"})
@@ -141,74 +136,14 @@ public class TduckController {
     public ApiResponse<TduckWebhookResult> webhook(@RequestHeader(name = "X-TDuck-Signature", required = false) String signature,
                                                    @RequestHeader(name = "X-MeetingOS-Webhook-Token", required = false) String headerToken,
                                                    @RequestParam(name = "token", required = false) String queryToken,
-                                                   @RequestBody String rawBody) throws IOException {
-        Map<String, Object> payload = objectMapper.readValue(rawBody, new com.fasterxml.jackson.core.type.TypeReference<>() {
-        });
-        TduckWebhookRequest request = toWebhookRequest(payload);
-        return ApiResponse.ok(tduckService.handleWebhook(request, signature, firstNonBlank(headerToken, queryToken), rawBody));
+                                                   @RequestBody String rawBody) {
+        return ApiResponse.ok(tduckService.handleWebhook(rawBody, signature, firstNonBlank(headerToken, queryToken)));
     }
 
     @GetMapping("/r/{meetingCode}")
     public void redirectToTduck(@PathVariable String meetingCode, HttpServletResponse response) throws IOException {
         response.setHeader(HttpHeaders.CACHE_CONTROL, "no-store");
         response.sendRedirect(tduckService.resolveRedirectUrl(meetingCode));
-    }
-
-    @SuppressWarnings("unchecked")
-    private TduckWebhookRequest toWebhookRequest(Map<String, Object> payload) {
-        Map<String, Object> data = extractSubmissionData(payload);
-        Object nestedData = payload.get("data");
-        Map<String, Object> dataContainer = nestedData instanceof Map<?, ?> map ? (Map<String, Object>) map : Map.of();
-        return new TduckWebhookRequest(
-                firstNonBlank(asString(payload.get("eventId")), asString(dataContainer.get("eventId"))),
-                firstNonBlank(
-                        asString(payload.getOrDefault("eventType", payload.get("type"))),
-                        asString(dataContainer.getOrDefault("eventType", dataContainer.get("type")))
-                ),
-                firstNonBlank(asString(payload.get("formKey")), asString(dataContainer.get("formKey"))),
-                firstNonBlank(
-                        asString(payload.get("dataId")),
-                        firstNonBlank(
-                                asString(payload.get("id")),
-                                firstNonBlank(asString(dataContainer.get("dataId")), asString(dataContainer.get("id")))
-                        )
-                ),
-                data,
-                payload
-        );
-    }
-
-    @SuppressWarnings("unchecked")
-    private Map<String, Object> extractSubmissionData(Map<String, Object> payload) {
-        Object nestedData = payload.get("data");
-        if (nestedData instanceof Map<?, ?> nestedMap) {
-            Object originalData = nestedMap.get("originalData");
-            if (originalData instanceof Map<?, ?> originalMap) {
-                return (Map<String, Object>) originalMap;
-            }
-            return withoutMetaFields((Map<String, Object>) nestedMap);
-        }
-
-        Object originalData = payload.get("originalData");
-        if (originalData instanceof Map<?, ?> originalMap) {
-            return (Map<String, Object>) originalMap;
-        }
-
-        return withoutMetaFields(payload);
-    }
-
-    private Map<String, Object> withoutMetaFields(Map<String, Object> source) {
-        Map<String, Object> data = new LinkedHashMap<>();
-        source.forEach((key, value) -> {
-            if (!TduckSubmissionFields.isMetaField(key)) {
-                data.put(key, value);
-            }
-        });
-        return data;
-    }
-
-    private String asString(Object value) {
-        return value == null ? null : String.valueOf(value);
     }
 
     private String firstNonBlank(String first, String second) {

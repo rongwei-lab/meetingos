@@ -1,7 +1,9 @@
 import { defineStore } from "pinia";
-import { canUseDemoFallback, extractErrorMessage, http, type PagePayload, isAuthFailure, unwrapApi } from "@/api/http";
+import { canUseDemoFallback, extractErrorMessage, http, type PagePayload, isAuthFailure, isRequestCanceled, unwrapApi } from "@/api/http";
 import { mockAttendees, mockDinnerAssignments, mockMeetings, mockRooms, mockSeats, mockSyncLogs } from "@/utils/mockData";
+import { updateMeetingCounters } from "@/utils/meetingCounters";
 import { formatDateTimeLabel } from "@/utils/meetingDisplay";
+import { RequestRuntime, type LatestRequestToken } from "@/utils/requestControl";
 import { sanitizeImageUrl } from "@/utils/safeUrl";
 import type {
   AdminQueryCandidate,
@@ -773,14 +775,15 @@ const defaultSeatNotice = "请按会议通知时间到达会场，凭会议证�
 const defaultRoomNotice = "凭会议证件及身份证办理入住，接待台位于酒店大堂。";
 const defaultDinnerNotice = "请按现场指引前往晚宴区域入座，如有调整请以会务组通知为准。";
 
+const requestRuntime = new RequestRuntime();
 let bootstrapPromise: Promise<void> | null = null;
-const workspaceLoadPromises = new Map<string, Promise<void>>();
-const attendeesLoadPromises = new Map<string, Promise<void>>();
-const seatsLoadPromises = new Map<string, Promise<void>>();
-const roomsLoadPromises = new Map<string, Promise<void>>();
-const dinnerLoadPromises = new Map<string, Promise<void>>();
-const dinnerTablesLoadPromises = new Map<string, Promise<void>>();
-const statisticsLoadPromises = new Map<string, Promise<void>>();
+const workspaceLoadPromises = requestRuntime.createPromiseCache<string, Promise<void>>();
+const attendeesLoadPromises = requestRuntime.createPromiseCache<string, Promise<void>>();
+const seatsLoadPromises = requestRuntime.createPromiseCache<string, Promise<void>>();
+const roomsLoadPromises = requestRuntime.createPromiseCache<string, Promise<void>>();
+const dinnerLoadPromises = requestRuntime.createPromiseCache<string, Promise<void>>();
+const dinnerTablesLoadPromises = requestRuntime.createPromiseCache<string, Promise<void>>();
+const latestStatisticsRequests = new Map<string, LatestRequestToken>();
 const ADMIN_PAGE_SIZE = 200;
 
 function singleFlight<T>(promises: Map<string, Promise<T>>, key: string, loader: () => Promise<T>) {
@@ -791,11 +794,34 @@ function singleFlight<T>(promises: Map<string, Promise<T>>, key: string, loader:
    * 快速切换侧边栏时，旧页面的 onMounted 请求和新页面的按需请求可能同时命中同一资源。
    * 这里把同会议同资源的并发加载合并成一次，避免重复解析大列表并多次触发响应式重绘。
    */
-  const promise = loader().finally(() => {
-    promises.delete(key);
+  let promise: Promise<T>;
+  promise = loader().finally(() => {
+    // reset 后新账号可能已经为同一个 key 建立了新 Promise，旧 finally 不能误删它。
+    if (promises.get(key) === promise) promises.delete(key);
   });
   promises.set(key, promise);
   return promise;
+}
+
+function statisticsRequestKey(meetingId: string, filters: { startDate?: string; endDate?: string } = {}) {
+  return [meetingId, filters.startDate || "", filters.endDate || ""].join(":");
+}
+
+function publicQueryHistoryRequestKey(meetingId: string, filters: PublicQueryHistoryFilters) {
+  return [
+    meetingId,
+    filters.page ?? 0,
+    filters.size ?? 20,
+    filters.type || "",
+    filters.status || "",
+    filters.keyword?.trim() || ""
+  ].join(":");
+}
+
+export function clearMeetingRuntimeCaches() {
+  bootstrapPromise = null;
+  latestStatisticsRequests.clear();
+  requestRuntime.reset();
 }
 
 function groupByMeetingId<T extends { meetingId: string }>(items: T[]): Map<string, T[]> {
@@ -818,7 +844,12 @@ export const useMeetingStore = defineStore("meeting", {
     dinnerTables: [] as DinnerTable[],
     syncLogs: [] as SyncLog[],
     checkinRecords: [] as CheckinRecord[],
-    overview: null as StatisticsOverviewDto | null,
+    loadedAttendeeMeetingIds: [] as string[],
+    statisticsByRequestKey: {} as Record<string, StatisticsOverviewDto>,
+    activeStatisticsRequestKeyByMeetingId: {} as Record<string, string>,
+    publicQueryHistoryByRequestKey: {} as Record<string, PagePayload<PublicQueryHistory>>,
+    activePublicQueryHistoryKeyByMeetingId: {} as Record<string, string>,
+    publicQuerySummaryByMeetingId: {} as Record<string, PublicQuerySummary[]>,
     apiAvailable: false,
     loading: false,
     currentMeetingId: savedMeetingId(),
@@ -843,6 +874,9 @@ export const useMeetingStore = defineStore("meeting", {
     dinnerTablesByMeetingId(state): Map<string, DinnerTable[]> {
       return groupByMeetingId(state.dinnerTables);
     },
+    checkinRecordsByMeetingId(state): Map<string, CheckinRecord[]> {
+      return groupByMeetingId(state.checkinRecords);
+    },
     currentMeeting(): Meeting | null {
       return this.meetingById.get(this.currentMeetingId) || null;
     },
@@ -860,6 +894,20 @@ export const useMeetingStore = defineStore("meeting", {
     },
     currentDinnerTables(): DinnerTable[] {
       return this.dinnerTablesByMeetingId.get(this.currentMeetingId) || [];
+    },
+    currentCheckinRecords(): CheckinRecord[] {
+      return this.checkinRecordsByMeetingId.get(this.currentMeetingId) || [];
+    },
+    overview(state): StatisticsOverviewDto | null {
+      const requestKey = state.activeStatisticsRequestKeyByMeetingId[state.currentMeetingId];
+      return requestKey ? state.statisticsByRequestKey[requestKey] || null : null;
+    },
+    currentPublicQueryHistory(state): PagePayload<PublicQueryHistory> | null {
+      const requestKey = state.activePublicQueryHistoryKeyByMeetingId[state.currentMeetingId];
+      return requestKey ? state.publicQueryHistoryByRequestKey[requestKey] || null : null;
+    },
+    currentPublicQuerySummary(state): PublicQuerySummary[] {
+      return state.publicQuerySummaryByMeetingId[state.currentMeetingId] || [];
     },
     currentAttendeeById(): Map<string, Attendee> {
       return new Map(this.currentAttendees.map((attendee) => [attendee.id, attendee]));
@@ -904,38 +952,63 @@ export const useMeetingStore = defineStore("meeting", {
     }
   },
   actions: {
+    resetForAuthChange() {
+      /*
+       * Pinia 的 $reset 只重建响应式 state，不会触及模块级 Promise Map。
+       * 账号退出或主体变化时两者必须一起清理，避免新账号复用旧账号尚未完成的请求。
+       */
+      clearMeetingRuntimeCaches();
+      localStorage.removeItem(CURRENT_MEETING_KEY);
+      this.$reset();
+    },
     async bootstrap() {
       // 多个页面可能同时触发初始化，复用同一个请求，避免座位页先渲染 mock 数据再被真实数据替换。
       if (!bootstrapPromise) {
-        bootstrapPromise = (async () => {
+        let promise: Promise<void>;
+        promise = (async () => {
           await this.loadBranding();
           await this.loadMeetings();
         })().finally(() => {
-            bootstrapPromise = null;
-          });
+          if (bootstrapPromise === promise) bootstrapPromise = null;
+        });
+        bootstrapPromise = promise;
       }
       await bootstrapPromise;
     },
     async loadBranding() {
+      const request = requestRuntime.requests.begin("branding");
       try {
-        this.branding = normalizeBranding(unwrapApi(await http.get<BrandingDto>("/public/branding")));
-      } catch {
+        const branding = normalizeBranding(unwrapApi(await http.get<BrandingDto>("/public/branding", { signal: request.signal })));
+        if (!requestRuntime.requests.isCurrent(request)) return this.branding;
+        this.branding = branding;
+      } catch (error) {
+        if (isRequestCanceled(error) || !requestRuntime.requests.isCurrent(request)) return this.branding;
         // 品牌配置属于装饰信息，后端不可用时使用内置默认值，不影响登录和业务流程。
         this.branding = defaultBranding();
+      } finally {
+        requestRuntime.requests.finish(request);
       }
       applyDocumentBranding(this.branding);
       return this.branding;
     },
     async loadMeetings() {
+      const request = requestRuntime.requests.begin("meeting-list");
       this.loading = true;
       try {
-        const page = unwrapApi(await http.get<PagePayload<MeetingSummaryDto>>("/admin/meetings", { params: { page: 0, size: 100 } }));
+        const page = unwrapApi(
+          await http.get<PagePayload<MeetingSummaryDto>>("/admin/meetings", {
+            params: { page: 0, size: 100 },
+            signal: request.signal
+          })
+        );
+        if (!requestRuntime.requests.isCurrent(request)) return;
         this.meetings = page.content.map(mapMeetingSummary);
         if (!this.meetings.some((meeting) => meeting.id === this.currentMeetingId)) {
           this.setCurrentMeetingId(this.meetings[0]?.id || "");
         }
         this.apiAvailable = true;
       } catch (error) {
+        if (isRequestCanceled(error) || !requestRuntime.requests.isCurrent(request)) return;
         // 认证失败时 HTTP 拦截器会跳回登录页，这里不要再刷新 mock 计数，
         // 避免后台页面在跳转前短暂展示本地演示数据。
         if (isAuthFailure(error)) {
@@ -952,7 +1025,8 @@ export const useMeetingStore = defineStore("meeting", {
         }
         throw error;
       } finally {
-        this.loading = false;
+        if (requestRuntime.requests.isCurrent(request)) this.loading = false;
+        requestRuntime.requests.finish(request);
       }
     },
     setCurrentMeetingId(meetingId: string) {
@@ -971,43 +1045,55 @@ export const useMeetingStore = defineStore("meeting", {
       this.rooms = [...mockRooms];
       this.dinnerAssignments = [...mockDinnerAssignments];
       this.syncLogs = [...mockSyncLogs];
+      this.loadedAttendeeMeetingIds = this.meetings.map((meeting) => meeting.id);
       const fallbackMeetingId = this.meetings.some((meeting) => meeting.id === preferredMeetingId)
         ? preferredMeetingId
         : this.meetings[0]?.id || "";
       this.setCurrentMeetingId(fallbackMeetingId);
     },
     async selectMeeting(meetingId: string, options: { loadWorkspace?: boolean } = {}) {
+      const selection = requestRuntime.requests.begin("meeting-selection");
       const targetMeetingId = idOf(meetingId);
-      if (!targetMeetingId) {
-        this.setCurrentMeetingId("");
-        return null;
-      }
-      const loadWorkspace = options.loadWorkspace !== false;
+      try {
+        if (!targetMeetingId) {
+          if (requestRuntime.requests.isCurrent(selection)) this.setCurrentMeetingId("");
+          return null;
+        }
+        const loadWorkspace = options.loadWorkspace !== false;
 
-      /*
-       * Store 初始化时会先放一份 mock 会议，直接刷新 /meetings/:id/* 时不能把它当成真实列表。
-       * 数字 ID 来自后端路由，优先读取详情；失败后再回退本地演示数据，避免页面显示“未选择会议”。
-       */
-      if (isBackendMeetingId(targetMeetingId)) {
-        const remote = await this.loadMeetingDetail(targetMeetingId, { loadWorkspace });
-        if (remote) return remote;
-      }
+        /*
+         * Store 初始化时会先放一份 mock 会议，直接刷新 /meetings/:id/* 时不能把它当成真实列表。
+         * 数字 ID 来自后端路由，优先读取详情；失败后再回退本地演示数据，避免页面显示“未选择会议”。
+         */
+        if (isBackendMeetingId(targetMeetingId)) {
+          const remote = await this.loadMeetingDetail(targetMeetingId, { loadWorkspace });
+          if (!requestRuntime.requests.isCurrent(selection)) return null;
+          if (remote) return remote;
+        }
 
-      if (!this.meetings.length) {
-        await this.bootstrap();
-      }
+        if (!this.meetings.length) {
+          await this.bootstrap();
+        }
+        if (!requestRuntime.requests.isCurrent(selection)) return null;
 
-      const local = this.meetings.find((meeting) => meeting.id === targetMeetingId);
-      if (!local) return null;
-      this.setCurrentMeetingId(local.id);
-      if (loadWorkspace) {
-        await this.loadMeetingWorkspace(local.id);
+        const local = this.meetings.find((meeting) => meeting.id === targetMeetingId);
+        if (!local) return null;
+        this.setCurrentMeetingId(local.id);
+        if (loadWorkspace) {
+          await this.loadMeetingWorkspace(local.id);
+        }
+        return requestRuntime.requests.isCurrent(selection) ? local : null;
+      } finally {
+        requestRuntime.requests.finish(selection);
       }
-      return local;
     },
     async loadMeetingDetail(meetingId: string, options: { loadWorkspace?: boolean } = {}) {
+      const request = requestRuntime.requests.begin("meeting-detail");
       try {
-        const detail = unwrapApi(await http.get<MeetingDetailDto>(`/admin/meetings/${backendId(meetingId)}`));
+        const detail = unwrapApi(
+          await http.get<MeetingDetailDto>(`/admin/meetings/${backendId(meetingId)}`, { signal: request.signal })
+        );
+        if (!requestRuntime.requests.isCurrent(request)) return null;
         const mapped = mapMeetingDetail(detail);
         this.upsertMeeting(mapped);
         this.setCurrentMeetingId(mapped.id);
@@ -1015,27 +1101,43 @@ export const useMeetingStore = defineStore("meeting", {
           await this.loadMeetingWorkspace(mapped.id);
         }
         return mapped;
-      } catch {
+      } catch (error) {
+        if (isRequestCanceled(error) || !requestRuntime.requests.isCurrent(request)) return null;
         const local = this.meetings.find((meeting) => meeting.id === meetingId);
         if (local) {
           this.setCurrentMeetingId(local.id);
           return local;
         }
         return null;
+      } finally {
+        requestRuntime.requests.finish(request);
       }
     },
     async loadMeetingQuerySettings(meetingId?: string) {
       const targetMeetingId = requireMeetingId(meetingId || this.currentMeetingId);
+      const request = requestRuntime.requests.begin("meeting-query-settings");
       try {
         const settings = mapQuerySettings(
-          unwrapApi(await http.get<MeetingQuerySettingsDto>(`/admin/meetings/${backendId(targetMeetingId)}/query-settings`))
+          unwrapApi(
+            await http.get<MeetingQuerySettingsDto>(`/admin/meetings/${backendId(targetMeetingId)}/query-settings`, {
+              signal: request.signal
+            })
+          )
         );
+        if (!requestRuntime.requests.isCurrent(request)) {
+          return meetingToQuerySettings(this.meetings.find((item) => item.id === targetMeetingId));
+        }
         this.applyMeetingQuerySettings(settings);
         return settings;
       } catch (error) {
+        if (isRequestCanceled(error) || !requestRuntime.requests.isCurrent(request)) {
+          return meetingToQuerySettings(this.meetings.find((item) => item.id === targetMeetingId));
+        }
         if (this.apiAvailable && !canUseDemoFallback(error)) throw new Error(extractErrorMessage(error, "查询设置加载失败"));
         const meeting = this.meetings.find((item) => item.id === targetMeetingId);
         return meetingToQuerySettings(meeting);
+      } finally {
+        requestRuntime.requests.finish(request);
       }
     },
     async saveMeetingQuerySettings(
@@ -1276,6 +1378,8 @@ export const useMeetingStore = defineStore("meeting", {
     },
     async loadPublicQueryHistory(meetingId: string, filters: PublicQueryHistoryFilters = {}) {
       const targetMeetingId = requireMeetingId(meetingId);
+      const cacheKey = publicQueryHistoryRequestKey(targetMeetingId, filters);
+      const request = requestRuntime.requests.begin(`public-query-history:${targetMeetingId}`);
       try {
         const keyword = filters.keyword?.trim();
         const page = unwrapApi(
@@ -1286,27 +1390,50 @@ export const useMeetingStore = defineStore("meeting", {
               type: filters.type || undefined,
               status: filters.status || undefined,
               keyword: keyword || undefined
-            }
+            },
+            signal: request.signal
           })
         );
-        return {
+        const result = {
           ...page,
           content: page.content.map(mapPublicQueryHistory)
         };
+        if (requestRuntime.requests.isCurrent(request)) {
+          this.publicQueryHistoryByRequestKey[cacheKey] = result;
+          this.activePublicQueryHistoryKeyByMeetingId[targetMeetingId] = cacheKey;
+        }
+        return result;
       } catch (error) {
+        if (isRequestCanceled(error) || !requestRuntime.requests.isCurrent(request)) {
+          return this.publicQueryHistoryByRequestKey[cacheKey] || emptyPage<PublicQueryHistory>(filters.page ?? 0, filters.size ?? 20);
+        }
         if (this.apiAvailable && !canUseDemoFallback(error)) throw new Error(extractErrorMessage(error, "查询历史加载失败"));
         return emptyPage<PublicQueryHistory>(filters.page ?? 0, filters.size ?? 20);
+      } finally {
+        requestRuntime.requests.finish(request);
       }
     },
     async loadPublicQuerySummary(meetingId: string) {
       const targetMeetingId = requireMeetingId(meetingId);
+      const request = requestRuntime.requests.begin(`public-query-summary:${targetMeetingId}`);
       try {
-        return unwrapApi(
-          await http.get<PublicQuerySummaryDto[]>(`/admin/meetings/${backendId(targetMeetingId)}/query-history/summary`)
+        const summary = unwrapApi(
+          await http.get<PublicQuerySummaryDto[]>(`/admin/meetings/${backendId(targetMeetingId)}/query-history/summary`, {
+            signal: request.signal
+          })
         ).map(mapPublicQuerySummary);
+        if (requestRuntime.requests.isCurrent(request)) {
+          this.publicQuerySummaryByMeetingId[targetMeetingId] = summary;
+        }
+        return summary;
       } catch (error) {
+        if (isRequestCanceled(error) || !requestRuntime.requests.isCurrent(request)) {
+          return this.publicQuerySummaryByMeetingId[targetMeetingId] || [];
+        }
         if (this.apiAvailable && !canUseDemoFallback(error)) throw new Error(extractErrorMessage(error, "查询汇总加载失败"));
         return [] as PublicQuerySummary[];
+      } finally {
+        requestRuntime.requests.finish(request);
       }
     },
     applyMeetingQuerySettings(settings: MeetingQuerySettings) {
@@ -1324,7 +1451,6 @@ export const useMeetingStore = defineStore("meeting", {
     },
     async loadMeetingWorkspace(meetingId?: string) {
       meetingId = requireMeetingId(meetingId || this.currentMeetingId);
-      this.setCurrentMeetingId(meetingId);
       const existing = workspaceLoadPromises.get(meetingId);
       if (existing) {
         await existing;
@@ -1335,7 +1461,9 @@ export const useMeetingStore = defineStore("meeting", {
        * 进入工作区、路由同步和侧边栏切换可能在同一时间请求完整工作区。
        * 复用同会议的加载 Promise，避免多轮参会人/座位/住宿/签到/统计请求堆叠拖死浏览器主线程。
        */
-      const promise = (async () => {
+      const request = requestRuntime.requests.begin(`workspace:${meetingId}`);
+      let promise: Promise<void>;
+      promise = (async () => {
         await Promise.allSettled([
           this.loadAttendees(meetingId),
           this.loadSeats(meetingId),
@@ -1347,10 +1475,14 @@ export const useMeetingStore = defineStore("meeting", {
           this.loadCheckinRecords(meetingId),
           this.loadStatistics(meetingId)
         ]);
-        this.reconcileAssignments();
-        this.refreshMeetingCounters();
+        if (requestRuntime.requests.isCurrent(request)) {
+          // 工作区数据可以跨会议预取，但只允许当前路由会议执行依赖 current* getter 的归并。
+          if (this.currentMeetingId === meetingId) this.reconcileAssignments();
+          this.refreshMeetingCounters();
+        }
       })().finally(() => {
-        workspaceLoadPromises.delete(meetingId);
+        requestRuntime.requests.finish(request);
+        if (workspaceLoadPromises.get(meetingId) === promise) workspaceLoadPromises.delete(meetingId);
       });
       workspaceLoadPromises.set(meetingId, promise);
       await promise;
@@ -1358,30 +1490,49 @@ export const useMeetingStore = defineStore("meeting", {
     async loadAttendees(meetingId?: string) {
       meetingId = requireMeetingId(meetingId || this.currentMeetingId);
       return singleFlight(attendeesLoadPromises, meetingId, async () => {
-        const firstPage = unwrapApi(
-          await http.get<PagePayload<AttendeeDto>>("/admin/attendees", {
-            params: { meetingId: backendId(meetingId), page: 0, size: ADMIN_PAGE_SIZE }
-          })
-        );
-        const remainingPages = Array.from({ length: Math.max(0, firstPage.totalPages - 1) }, (_, index) => index + 1);
-        const extraPages = await Promise.all(
-          remainingPages.map(async (page) =>
-            unwrapApi(
-              await http.get<PagePayload<AttendeeDto>>("/admin/attendees", {
-                params: { meetingId: backendId(meetingId), page, size: ADMIN_PAGE_SIZE }
-              })
+        const request = requestRuntime.requests.begin(`attendees:${meetingId}`);
+        try {
+          const firstPage = unwrapApi(
+            await http.get<PagePayload<AttendeeDto>>("/admin/attendees", {
+              params: { meetingId: backendId(meetingId), page: 0, size: ADMIN_PAGE_SIZE },
+              signal: request.signal
+            })
+          );
+          const remainingPages = Array.from({ length: Math.max(0, firstPage.totalPages - 1) }, (_, index) => index + 1);
+          const extraPages = await Promise.all(
+            remainingPages.map(async (page) =>
+              unwrapApi(
+                await http.get<PagePayload<AttendeeDto>>("/admin/attendees", {
+                  params: { meetingId: backendId(meetingId), page, size: ADMIN_PAGE_SIZE },
+                  signal: request.signal
+                })
+              )
             )
-          )
-        );
-        const content = [firstPage, ...extraPages].flatMap((page) => page.content);
-        this.attendees = [
-          ...this.attendees.filter((attendee) => attendee.meetingId !== meetingId),
-          ...content.map((item) => mapAttendee(item, meetingId))
-        ];
+          );
+          if (!requestRuntime.requests.isCurrent(request)) return;
+          const content = [firstPage, ...extraPages].flatMap((page) => page.content);
+          this.attendees = [
+            ...this.attendees.filter((attendee) => attendee.meetingId !== meetingId),
+            ...content.map((item) => mapAttendee(item, meetingId))
+          ];
+          if (!this.loadedAttendeeMeetingIds.includes(meetingId)) {
+            this.loadedAttendeeMeetingIds.push(meetingId);
+          }
+        } finally {
+          requestRuntime.requests.finish(request);
+        }
       });
     },
-    async searchAttendees(filters: { keyword?: string; auditStatus?: string | null; attendeeType?: string | null; hasSeat?: boolean | null; tags?: string[] }) {
-      const meetingId = requireMeetingId(this.currentMeetingId);
+    cancelAttendeeSearch(meetingId?: string) {
+      const targetMeetingId = meetingId || this.currentMeetingId;
+      if (targetMeetingId) requestRuntime.requests.cancel(`attendee-search:${targetMeetingId}`);
+    },
+    async searchAttendees(
+      filters: { keyword?: string; auditStatus?: string | null; attendeeType?: string | null; hasSeat?: boolean | null; tags?: string[] },
+      options: { meetingId?: string } = {}
+    ) {
+      const meetingId = requireMeetingId(options.meetingId || this.currentMeetingId);
+      const request = requestRuntime.requests.begin(`attendee-search:${meetingId}`);
       const keyword = filters.keyword?.trim();
       const tags = filters.tags?.filter(Boolean) || [];
       try {
@@ -1396,28 +1547,41 @@ export const useMeetingStore = defineStore("meeting", {
               tags: tags.length ? tags.join(",") : undefined,
               page: 0,
               size: ADMIN_PAGE_SIZE
-            }
+            },
+            signal: request.signal
           })
         );
+        if (!requestRuntime.requests.isCurrent(request)) return [] as Attendee[];
         const mapped = page.content.map((item) => mapAttendee(item, meetingId));
         for (const attendee of mapped) {
           const index = this.attendees.findIndex((item) => item.id === attendee.id);
           if (index >= 0) this.attendees[index] = { ...this.attendees[index], ...attendee };
           else this.attendees.push(attendee);
         }
-        this.reconcileAssignments();
+        if (this.currentMeetingId === meetingId) this.reconcileAssignments();
         const resultIds = new Set(mapped.map((item) => item.id));
-        return this.currentAttendees.filter((item) => resultIds.has(item.id));
-      } catch {
+        return this.attendees.filter((item) => item.meetingId === meetingId && resultIds.has(item.id));
+      } catch (error) {
+        if (isRequestCanceled(error) || !requestRuntime.requests.isCurrent(request)) throw error;
         // 后端筛选接口不可用时不打断页面操作，改走与后端参数语义一致的本地筛选。
-        return this.filterAttendeesLocally(filters);
+        return this.filterAttendeesLocally(filters, meetingId);
+      } finally {
+        requestRuntime.requests.finish(request);
       }
     },
     async loadSeats(meetingId?: string) {
       meetingId = requireMeetingId(meetingId || this.currentMeetingId);
       return singleFlight(seatsLoadPromises, meetingId, async () => {
-        const seats = unwrapApi(await http.get<SeatViewDto[]>(`/admin/seating/map/${backendId(meetingId)}`));
-        this.seats = [...this.seats.filter((seat) => seat.meetingId !== meetingId), ...seats.map((item) => mapSeat(item, meetingId))];
+        const request = requestRuntime.requests.begin(`seats:${meetingId}`);
+        try {
+          const seats = unwrapApi(
+            await http.get<SeatViewDto[]>(`/admin/seating/map/${backendId(meetingId)}`, { signal: request.signal })
+          );
+          if (!requestRuntime.requests.isCurrent(request)) return;
+          this.seats = [...this.seats.filter((seat) => seat.meetingId !== meetingId), ...seats.map((item) => mapSeat(item, meetingId))];
+        } finally {
+          requestRuntime.requests.finish(request);
+        }
       });
     },
     async saveSeatLayout(payload: SeatLayoutPayload) {
@@ -1471,28 +1635,61 @@ export const useMeetingStore = defineStore("meeting", {
     async loadRooms(meetingId?: string) {
       meetingId = requireMeetingId(meetingId || this.currentMeetingId);
       return singleFlight(roomsLoadPromises, meetingId, async () => {
-        const rooms = unwrapApi(await http.get<RoomDto[]>("/admin/rooms", { params: { meetingId: backendId(meetingId) } }));
-        this.rooms = [...this.rooms.filter((room) => room.meetingId !== meetingId), ...rooms.map((item) => mapRoom(item, meetingId))];
+        const request = requestRuntime.requests.begin(`rooms:${meetingId}`);
+        try {
+          const rooms = unwrapApi(
+            await http.get<RoomDto[]>("/admin/rooms", {
+              params: { meetingId: backendId(meetingId) },
+              signal: request.signal
+            })
+          );
+          if (!requestRuntime.requests.isCurrent(request)) return;
+          this.rooms = [...this.rooms.filter((room) => room.meetingId !== meetingId), ...rooms.map((item) => mapRoom(item, meetingId))];
+        } finally {
+          requestRuntime.requests.finish(request);
+        }
       });
     },
     async loadDinnerAssignments(meetingId?: string) {
       meetingId = requireMeetingId(meetingId || this.currentMeetingId);
       return singleFlight(dinnerLoadPromises, meetingId, async () => {
-        const assignments = unwrapApi(await http.get<DinnerAssignmentDto[]>("/admin/dinner", { params: { meetingId: backendId(meetingId) } }));
-        this.dinnerAssignments = [
-          ...this.dinnerAssignments.filter((assignment) => assignment.meetingId !== meetingId),
-          ...assignments.map(mapDinnerAssignment)
-        ];
+        const request = requestRuntime.requests.begin(`dinner-assignments:${meetingId}`);
+        try {
+          const assignments = unwrapApi(
+            await http.get<DinnerAssignmentDto[]>("/admin/dinner", {
+              params: { meetingId: backendId(meetingId) },
+              signal: request.signal
+            })
+          );
+          if (!requestRuntime.requests.isCurrent(request)) return;
+          this.dinnerAssignments = [
+            ...this.dinnerAssignments.filter((assignment) => assignment.meetingId !== meetingId),
+            ...assignments.map(mapDinnerAssignment)
+          ];
+        } finally {
+          requestRuntime.requests.finish(request);
+        }
       });
     },
     async loadDinnerTables(meetingId?: string) {
       meetingId = requireMeetingId(meetingId || this.currentMeetingId);
       return singleFlight(dinnerTablesLoadPromises, meetingId, async () => {
-        const tables = unwrapApi(await http.get<DinnerTableDto[]>("/admin/dinner/tables", { params: { meetingId: backendId(meetingId) } }));
-        this.dinnerTables = [
-          ...this.dinnerTables.filter((table) => table.meetingId !== meetingId),
-          ...tables.map(mapDinnerTable)
-        ];
+        const request = requestRuntime.requests.begin(`dinner-tables:${meetingId}`);
+        try {
+          const tables = unwrapApi(
+            await http.get<DinnerTableDto[]>("/admin/dinner/tables", {
+              params: { meetingId: backendId(meetingId) },
+              signal: request.signal
+            })
+          );
+          if (!requestRuntime.requests.isCurrent(request)) return;
+          this.dinnerTables = [
+            ...this.dinnerTables.filter((table) => table.meetingId !== meetingId),
+            ...tables.map(mapDinnerTable)
+          ];
+        } finally {
+          requestRuntime.requests.finish(request);
+        }
       });
     },
     async loadDinnerSettings(meetingId?: string) {
@@ -1607,45 +1804,79 @@ export const useMeetingStore = defineStore("meeting", {
     },
     async loadSyncLogs(meetingId?: string) {
       meetingId = requireMeetingId(meetingId || this.currentMeetingId);
-      const page = unwrapApi(
-        await http.get<PagePayload<SyncLogDto>>("/admin/tduck/sync-logs", {
-          params: { meetingId: backendId(meetingId), page: 0, size: 50 }
-        })
-      );
-      this.syncLogs = [...this.syncLogs.filter((log) => log.meetingId !== meetingId), ...page.content.map((item) => mapSyncLog(item, meetingId))];
+      const request = requestRuntime.requests.begin(`sync-logs:${meetingId}`);
+      try {
+        const page = unwrapApi(
+          await http.get<PagePayload<SyncLogDto>>("/admin/tduck/sync-logs", {
+            params: { meetingId: backendId(meetingId), page: 0, size: 50 },
+            signal: request.signal
+          })
+        );
+        if (!requestRuntime.requests.isCurrent(request)) return;
+        this.syncLogs = [...this.syncLogs.filter((log) => log.meetingId !== meetingId), ...page.content.map((item) => mapSyncLog(item, meetingId))];
+      } finally {
+        requestRuntime.requests.finish(request);
+      }
     },
     async loadCheckinRecords(meetingId?: string) {
       meetingId = requireMeetingId(meetingId || this.currentMeetingId);
-      const page = unwrapApi(
-        await http.get<PagePayload<CheckinRecordDto>>("/admin/checkin/records", {
-          params: { meetingId: backendId(meetingId), page: 0, size: 50 }
-        })
-      );
-      this.checkinRecords = [
-        ...this.checkinRecords.filter((record) => record.meetingId !== meetingId),
-        ...page.content.map((item) => mapCheckinRecord(item, meetingId, this.attendees))
-      ];
+      const request = requestRuntime.requests.begin(`checkin-records:${meetingId}`);
+      try {
+        const page = unwrapApi(
+          await http.get<PagePayload<CheckinRecordDto>>("/admin/checkin/records", {
+            params: { meetingId: backendId(meetingId), page: 0, size: 50 },
+            signal: request.signal
+          })
+        );
+        if (!requestRuntime.requests.isCurrent(request)) return;
+        this.checkinRecords = [
+          ...this.checkinRecords.filter((record) => record.meetingId !== meetingId),
+          ...page.content.map((item) => mapCheckinRecord(item, meetingId, this.attendees))
+        ];
+      } finally {
+        requestRuntime.requests.finish(request);
+      }
     },
     async loadStatistics(meetingId?: string) {
       meetingId = requireMeetingId(meetingId || this.currentMeetingId);
-      return singleFlight(statisticsLoadPromises, meetingId, async () => {
-        this.overview = unwrapApi(await http.get<StatisticsOverviewDto>("/admin/statistics/overview", { params: { meetingId: backendId(meetingId) } }));
-      });
+      return this.loadStatisticsWithRange(meetingId, {});
     },
     async loadStatisticsWithRange(meetingId: string | undefined, filters: { startDate?: string; endDate?: string }) {
       meetingId = requireMeetingId(meetingId || this.currentMeetingId);
-      const requestKey = [meetingId, filters.startDate || "", filters.endDate || ""].join(":");
-      return singleFlight(statisticsLoadPromises, requestKey, async () => {
-        this.overview = unwrapApi(
+      const requestKey = statisticsRequestKey(meetingId, filters);
+      /*
+       * 完整 key 同时包含会议和日期范围；latestStatisticsRequests 再记录该会议当前真正期待的 token。
+       * 因此 A 范围 -> B 范围 -> A 范围时，第一个 A 即使最后返回，也不能覆盖第三个 A。
+       */
+      const request = requestRuntime.requests.begin(`statistics:${requestKey}`);
+      latestStatisticsRequests.set(meetingId, request);
+      // 先切换当前范围指针；若该范围尚无缓存，getter 返回 null，避免新日期标签短暂搭配旧范围数据。
+      this.activeStatisticsRequestKeyByMeetingId[meetingId] = requestKey;
+      try {
+        const overview = unwrapApi(
           await http.get<StatisticsOverviewDto>("/admin/statistics/overview", {
             params: {
               meetingId: backendId(meetingId),
               startDate: filters.startDate || undefined,
               endDate: filters.endDate || undefined
-            }
+            },
+            signal: request.signal
           })
         );
-      });
+        if (requestRuntime.requests.isCurrent(request) && latestStatisticsRequests.get(meetingId) === request) {
+          this.statisticsByRequestKey[requestKey] = overview;
+          this.activeStatisticsRequestKeyByMeetingId[meetingId] = requestKey;
+        }
+        return overview;
+      } catch (error) {
+        if (isRequestCanceled(error) || !requestRuntime.requests.isCurrent(request)) {
+          return this.statisticsByRequestKey[requestKey] || null;
+        }
+        throw error;
+      } finally {
+        if (latestStatisticsRequests.get(meetingId) === request) latestStatisticsRequests.delete(meetingId);
+        requestRuntime.requests.finish(request);
+      }
     },
     async createMeeting(payload: Partial<Meeting>) {
       const request = meetingRequestFrom(payload);
@@ -2355,7 +2586,11 @@ export const useMeetingStore = defineStore("meeting", {
         if (response.status !== "SUCCESS") {
           throw new Error(response.message || "签到失败");
         }
-        const attendee = this.attendees.find((item) => item.id === idOf(response.attendeeId)) || this.attendees.find((item) => item.phone === response.phone);
+        const attendee =
+          this.attendees.find((item) => item.meetingId === meetingId && item.id === idOf(response.attendeeId)) ||
+          (response.phone
+            ? this.attendees.find((item) => item.meetingId === meetingId && item.phone === response.phone)
+            : undefined);
         if (attendee) {
           attendee.checkinStatus = "CHECKED_IN";
           attendee.checkinTime = response.checkedInAt || nowIso();
@@ -2373,7 +2608,13 @@ export const useMeetingStore = defineStore("meeting", {
           return attendee;
         }
         await this.loadMeetingWorkspace(meetingId);
-        return this.attendees.find((item) => item.id === idOf(response.attendeeId)) || this.currentAttendees[0];
+        const loadedAttendee =
+          this.attendees.find((item) => item.meetingId === meetingId && item.id === idOf(response.attendeeId)) ||
+          (response.phone
+            ? this.attendees.find((item) => item.meetingId === meetingId && item.phone === response.phone)
+            : undefined);
+        if (!loadedAttendee) throw new Error("签到成功，但参会人数据刷新失败，请重新加载页面");
+        return loadedAttendee;
       } catch (error) {
         if (!canUseDemoFallback(error)) throw new Error(extractErrorMessage(error, "签到失败"));
         return this.checkinByCodeLocally(input, entrance, error, options);
@@ -2381,7 +2622,10 @@ export const useMeetingStore = defineStore("meeting", {
     },
     async loadAdminUsers() {
       try {
-        const users = unwrapApi(await http.get<AdminUserDto[] | PagePayload<AdminUserDto>>("/admin/users"));
+        // 系统设置页需要完整判断“最后一个启用的超级管理员”，不能只读取后端默认的前 20 条。
+        const users = unwrapApi(await http.get<AdminUserDto[] | PagePayload<AdminUserDto>>("/admin/users", {
+          params: { page: 0, size: 200 }
+        }));
         return Array.isArray(users) ? users : users.content;
       } catch {
         // 用户/权限模块属于 MVP 后续增强；接口不可用时展示占位数据，不影响系统设置页进入。
@@ -2436,10 +2680,15 @@ export const useMeetingStore = defineStore("meeting", {
       applyDocumentBranding(this.branding);
       return settings;
     },
-    filterAttendeesLocally(filters: { keyword?: string; auditStatus?: string | null; attendeeType?: string | null; hasSeat?: boolean | null; tags?: string[] }) {
+    filterAttendeesLocally(
+      filters: { keyword?: string; auditStatus?: string | null; attendeeType?: string | null; hasSeat?: boolean | null; tags?: string[] },
+      meetingId?: string
+    ) {
+      const targetMeetingId = meetingId || this.currentMeetingId;
       const keyword = filters.keyword?.trim();
       const tags = filters.tags?.filter(Boolean) || [];
-      return this.currentAttendees.filter((item) => {
+      return this.attendees.filter((item) => {
+        if (item.meetingId !== targetMeetingId) return false;
         const text = `${item.name}${item.phone}${item.company}`;
         const tagMatched = !tags.length || tags.every((tag) => item.tags.includes(tag));
         const seatMatched = filters.hasSeat == null || Boolean(item.seatLabel) === filters.hasSeat;
@@ -2484,23 +2733,10 @@ export const useMeetingStore = defineStore("meeting", {
     },
     refreshMeetingCounters() {
       const attendeesByMeetingId = this.attendeesByMeetingId;
+      const loadedMeetingIds = new Set(this.loadedAttendeeMeetingIds);
       for (const meeting of this.meetings) {
         const attendees = attendeesByMeetingId.get(meeting.id) || [];
-        let approvedCount = 0;
-        let seatedCount = 0;
-        let roomedCount = 0;
-        let checkedInCount = 0;
-        for (const attendee of attendees) {
-          if (attendee.auditStatus === "APPROVED") approvedCount += 1;
-          if (attendee.seatLabel) seatedCount += 1;
-          if (attendee.roomNo) roomedCount += 1;
-          if (attendee.checkinStatus === "CHECKED_IN") checkedInCount += 1;
-        }
-        meeting.registeredCount = attendees.length || meeting.registeredCount || 0;
-        meeting.approvedCount = approvedCount || meeting.approvedCount || 0;
-        meeting.seatedCount = seatedCount || meeting.seatedCount || 0;
-        meeting.roomedCount = roomedCount || meeting.roomedCount || 0;
-        meeting.checkedInCount = checkedInCount || meeting.checkedInCount || 0;
+        updateMeetingCounters(meeting, attendees, loadedMeetingIds.has(meeting.id));
       }
     },
     upsertMeeting(meeting: Meeting) {
@@ -2722,11 +2958,12 @@ export const useMeetingStore = defineStore("meeting", {
       if (options.checkinType === "SUPPLEMENT" && !options.remark?.trim()) {
         throw new Error("补签必须填写原因");
       }
+      const targetMeetingId = requireMeetingId(this.currentMeetingId);
       const parsed = parseCheckinCode(input);
       const attendee =
-        this.attendees.find((item) => item.attendeeCode === parsed.attendeeCode && item.meetingId === parsed.meetingId) ||
-        this.attendees.find((item) => item.id === parsed.attendeeCode && item.meetingId === parsed.meetingId) ||
-        this.attendees.find((item) => item.phone === input || item.name.includes(input));
+        this.attendees.find((item) => item.attendeeCode === parsed.attendeeCode && item.meetingId === targetMeetingId) ||
+        this.attendees.find((item) => item.id === parsed.attendeeCode && item.meetingId === targetMeetingId) ||
+        this.attendees.find((item) => item.meetingId === targetMeetingId && (item.phone === input || item.name.includes(input)));
       if (!attendee) {
         if (originalError instanceof Error && this.apiAvailable) throw originalError;
         throw new Error("未找到参会人");

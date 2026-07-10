@@ -1,5 +1,11 @@
 name: meetingos
 
+x-logging: &default-logging
+  driver: json-file
+  options:
+    max-size: ${DOCKER_LOG_MAX_SIZE:-10m}
+    max-file: ${DOCKER_LOG_MAX_FILES:-5}
+
 services:
   mysql:
     image: mysql:8.4
@@ -30,6 +36,10 @@ services:
       timeout: 5s
       retries: 12
       start_period: 30s
+    mem_limit: ${MYSQL_MEMORY_LIMIT:-2g}
+    cpus: ${MYSQL_CPU_LIMIT:-2.0}
+    pids_limit: ${MYSQL_PIDS_LIMIT:-512}
+    logging: *default-logging
 
   redis:
     image: redis:7.2-alpine
@@ -48,6 +58,11 @@ services:
       interval: 10s
       timeout: 5s
       retries: 12
+      start_period: 10s
+    mem_limit: ${REDIS_MEMORY_LIMIT:-512m}
+    cpus: ${REDIS_CPU_LIMIT:-0.75}
+    pids_limit: ${REDIS_PIDS_LIMIT:-256}
+    logging: *default-logging
 
   minio:
     image: minio/minio:RELEASE.2025-04-22T22-12-26Z
@@ -68,6 +83,11 @@ services:
       interval: 10s
       timeout: 5s
       retries: 12
+      start_period: 10s
+    mem_limit: ${MINIO_MEMORY_LIMIT:-1g}
+    cpus: ${MINIO_CPU_LIMIT:-1.0}
+    pids_limit: ${MINIO_PIDS_LIMIT:-256}
+    logging: *default-logging
 
   minio-init:
     image: minio/mc:RELEASE.2025-04-16T18-13-26Z
@@ -85,6 +105,39 @@ services:
       MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD}
       MINIO_BUCKET: ${MINIO_BUCKET:-meetingos}
     restart: "no"
+    mem_limit: ${INIT_MEMORY_LIMIT:-256m}
+    cpus: ${INIT_CPU_LIMIT:-0.5}
+    pids_limit: ${INIT_PIDS_LIMIT:-128}
+    logging: *default-logging
+
+  # 旧版本后端以 root 运行，已有上传卷可能仍由 root 持有。该一次性任务只修复卷属主，
+  # 随后真正承载业务流量的 meetingos-backend 始终以 UID/GID 10001 运行。
+  meetingos-upload-init:
+    image: ${MEETINGOS_BACKEND_IMAGE:?Set MEETINGOS_BACKEND_IMAGE to a versioned tag or digest}
+    container_name: meetingos-upload-init
+    user: "0:0"
+    entrypoint: ["/bin/sh", "-c"]
+    command:
+      - >-
+        if [ ! -f /app/uploads/.meetingos-owned-by-10001 ]; then
+          chown -R 10001:10001 /app/uploads &&
+          touch /app/uploads/.meetingos-owned-by-10001 &&
+          chown 10001:10001 /app/uploads/.meetingos-owned-by-10001;
+        fi
+    volumes:
+      - meetingos-upload-data:/app/uploads
+    restart: "no"
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    cap_add:
+      - CHOWN
+      - DAC_OVERRIDE
+    mem_limit: ${INIT_MEMORY_LIMIT:-256m}
+    cpus: ${INIT_CPU_LIMIT:-0.5}
+    pids_limit: ${INIT_PIDS_LIMIT:-128}
+    logging: *default-logging
 
   meetingos-backend:
     image: ${MEETINGOS_BACKEND_IMAGE:?Set MEETINGOS_BACKEND_IMAGE to a versioned tag or digest}
@@ -97,6 +150,8 @@ services:
         condition: service_healthy
       minio:
         condition: service_healthy
+      meetingos-upload-init:
+        condition: service_completed_successfully
     environment:
       TZ: ${TZ:-Asia/Shanghai}
       SERVER_PORT: ${BACKEND_SERVER_PORT:-8080}
@@ -129,7 +184,8 @@ services:
       PUBLIC_QUERY_RATE_LIMIT_PER_MINUTE: ${PUBLIC_QUERY_RATE_LIMIT_PER_MINUTE:-30}
       PUBLIC_QUERY_CAPTCHA_ENABLED: ${PUBLIC_QUERY_CAPTCHA_ENABLED:-false}
       PUBLIC_QUERY_CAPTCHA_TTL_SECONDS: ${PUBLIC_QUERY_CAPTCHA_TTL_SECONDS:-300}
-      PUBLIC_QUERY_TRUST_FORWARD_HEADERS: ${PUBLIC_QUERY_TRUST_FORWARD_HEADERS:-false}
+      # 后端不发布宿主机端口，只接受内部边界 Nginx 的流量；Nginx 会覆盖客户端伪造的转发头。
+      PUBLIC_QUERY_TRUST_FORWARD_HEADERS: ${PUBLIC_QUERY_TRUST_FORWARD_HEADERS:-true}
     expose:
       - "8080"
     volumes:
@@ -144,6 +200,10 @@ services:
       timeout: 5s
       retries: 12
       start_period: 60s
+    mem_limit: ${MEETINGOS_BACKEND_MEMORY_LIMIT:-1536m}
+    cpus: ${MEETINGOS_BACKEND_CPU_LIMIT:-2.0}
+    pids_limit: ${MEETINGOS_BACKEND_PIDS_LIMIT:-256}
+    logging: *default-logging
 
   meetingos-frontend:
     image: ${MEETINGOS_FRONTEND_IMAGE:?Set MEETINGOS_FRONTEND_IMAGE to a versioned tag or digest}
@@ -151,7 +211,7 @@ services:
     restart: unless-stopped
     depends_on:
       meetingos-backend:
-        condition: service_started
+        condition: service_healthy
     expose:
       - "80"
     security_opt:
@@ -165,6 +225,16 @@ services:
       - SETGID
       - SETUID
       - NET_BIND_SERVICE
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q -T 5 -O /dev/null http://127.0.0.1/"]
+      interval: 15s
+      timeout: 5s
+      retries: 6
+      start_period: 10s
+    mem_limit: ${MEETINGOS_FRONTEND_MEMORY_LIMIT:-256m}
+    cpus: ${MEETINGOS_FRONTEND_CPU_LIMIT:-0.5}
+    pids_limit: ${MEETINGOS_FRONTEND_PIDS_LIMIT:-128}
+    logging: *default-logging
 
   nginx:
     image: nginx:1.27-alpine
@@ -172,9 +242,9 @@ services:
     restart: unless-stopped
     depends_on:
       meetingos-frontend:
-        condition: service_started
+        condition: service_healthy
       meetingos-backend:
-        condition: service_started
+        condition: service_healthy
     environment:
       TZ: ${TZ:-Asia/Shanghai}
     ports:
@@ -192,12 +262,22 @@ services:
       - SETGID
       - SETUID
       - NET_BIND_SERVICE
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q -T 5 -O /dev/null http://127.0.0.1/actuator/health"]
+      interval: 15s
+      timeout: 5s
+      retries: 6
+      start_period: 10s
+    mem_limit: ${NGINX_MEMORY_LIMIT:-256m}
+    cpus: ${NGINX_CPU_LIMIT:-1.0}
+    pids_limit: ${NGINX_PIDS_LIMIT:-256}
+    logging: *default-logging
 
   # ---------------------------------------------------------------------------
   # TDuck optional profile
   # ---------------------------------------------------------------------------
   # 启动方式：
-  #   docker compose --profile tduck up -d
+  #   ./scripts/deploy.sh ../.env --profile tduck up -d
   #
   # 重要：TDuck 社区版默认管理员账号/密码通常是：
   #   admin@tduckcloud.com / 123456
@@ -232,6 +312,17 @@ services:
       - no-new-privileges:true
     cap_drop:
       - ALL
+    healthcheck:
+      # 当前官方镜像的根路径返回 200；doc.html 和 actuator 均未开放，不能用于健康判定。
+      test: ["CMD-SHELL", "wget -q -T 5 -O /dev/null http://127.0.0.1:8999/"]
+      interval: 15s
+      timeout: 5s
+      retries: 12
+      start_period: 60s
+    mem_limit: ${TDUCK_BACKEND_MEMORY_LIMIT:-1280m}
+    cpus: ${TDUCK_BACKEND_CPU_LIMIT:-1.5}
+    pids_limit: ${TDUCK_BACKEND_PIDS_LIMIT:-256}
+    logging: *default-logging
 
   tduck-frontend:
     profiles: ["tduck"]
@@ -240,7 +331,7 @@ services:
     restart: unless-stopped
     depends_on:
       tduck-backend:
-        condition: service_started
+        condition: service_healthy
     expose:
       - "80"
     security_opt:
@@ -254,6 +345,16 @@ services:
       - SETGID
       - SETUID
       - NET_BIND_SERVICE
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q -T 5 -O /dev/null http://127.0.0.1/"]
+      interval: 15s
+      timeout: 5s
+      retries: 6
+      start_period: 10s
+    mem_limit: ${TDUCK_FRONTEND_MEMORY_LIMIT:-256m}
+    cpus: ${TDUCK_FRONTEND_CPU_LIMIT:-0.5}
+    pids_limit: ${TDUCK_FRONTEND_PIDS_LIMIT:-128}
+    logging: *default-logging
 
 volumes:
   mysql-data:

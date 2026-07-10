@@ -14,6 +14,7 @@ import com.meetingos.meeting.MeetingStatus;
 import com.meetingos.publicapi.RegistrationInfo;
 import com.meetingos.settings.SystemSettingsService;
 import org.springframework.data.domain.Sort;
+import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.util.DigestUtils;
@@ -22,6 +23,7 @@ import org.springframework.util.StringUtils;
 import javax.crypto.Mac;
 import javax.crypto.spec.SecretKeySpec;
 import java.nio.charset.StandardCharsets;
+import java.security.MessageDigest;
 import java.time.LocalDateTime;
 import java.util.ArrayList;
 import java.util.Comparator;
@@ -29,8 +31,10 @@ import java.util.HexFormat;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Locale;
 import java.util.Optional;
 import java.util.UUID;
+import java.util.function.Supplier;
 
 @Service
 public class TduckService {
@@ -38,6 +42,8 @@ public class TduckService {
     private static final String HMAC_ALGORITHM = "HmacSHA256";
     private static final String REBINDING_DISABLED_REASON = "当前会议已绑定 TDuck 表单，不能选择其他表单";
     private static final String TDUCK_CANCEL_REASON = "TDuck 报名删除或撤回";
+    private static final int MAX_EVENT_ID_LENGTH = 120;
+    private static final int MAX_TDUCK_DATA_ID_LENGTH = 80;
 
     private final MeetingRepository meetingRepository;
     private final TduckFormBindingRepository bindingRepository;
@@ -48,6 +54,8 @@ public class TduckService {
     private final SystemSettingsService settingsService;
     private final TduckClient tduckClient;
     private final TduckSyncLogService syncLogService;
+    private final TduckWebhookParser webhookParser;
+    private final TduckTransactionRunner transactionRunner;
 
     public TduckService(MeetingRepository meetingRepository,
                         TduckFormBindingRepository bindingRepository,
@@ -57,7 +65,9 @@ public class TduckService {
                         TduckFieldMapper fieldMapper,
                         SystemSettingsService settingsService,
                         TduckClient tduckClient,
-                        TduckSyncLogService syncLogService) {
+                        TduckSyncLogService syncLogService,
+                        TduckWebhookParser webhookParser,
+                        TduckTransactionRunner transactionRunner) {
         this.meetingRepository = meetingRepository;
         this.bindingRepository = bindingRepository;
         this.mappingRepository = mappingRepository;
@@ -67,6 +77,8 @@ public class TduckService {
         this.settingsService = settingsService;
         this.tduckClient = tduckClient;
         this.syncLogService = syncLogService;
+        this.webhookParser = webhookParser;
+        this.transactionRunner = transactionRunner;
     }
 
     @Transactional
@@ -409,16 +421,46 @@ public class TduckService {
         );
     }
 
-    @Transactional
-    public TduckWebhookResult handleWebhook(TduckWebhookRequest request, String signature, String token, String rawBody) {
+    public TduckWebhookResult handleWebhook(String rawBody, String signature, String token) {
         if (!verifyWebhookCredential(signature, token, rawBody)) {
-            TduckSyncLog log = failedLog(request, null, "Webhook 签名校验失败");
+            // 未通过鉴权的数据既不解析也不进入同步日志，避免把攻击载荷当成可信业务数据持久化。
+            TduckSyncLog log = failedLog(null, null, "Webhook 签名校验失败");
             throw new BusinessException(ErrorCode.WEBHOOK_SIGNATURE_INVALID, "Webhook 签名校验失败，已记录同步日志: " + log.getId());
         }
+        TduckWebhookRequest request;
+        try {
+            request = webhookParser.parse(rawBody);
+        } catch (BusinessException ex) {
+            // 已通过鉴权但解析失败时只记录固定摘要，不保存无法确认结构与敏感字段范围的原始数据。
+            failedLog(null, null, "Webhook 请求体解析失败");
+            throw ex;
+        }
+        return runVerifiedWebhook(request, rawBody);
+    }
 
+    /**
+     * 兼容内部调用和既有测试。对外 HTTP 入口必须使用原始请求体重载，以保证验签先于 JSON 解析。
+     */
+    public TduckWebhookResult handleWebhook(TduckWebhookRequest request, String signature, String token, String rawBody) {
+        if (!verifyWebhookCredential(signature, token, rawBody)) {
+            TduckSyncLog log = failedLog(null, null, "Webhook 签名校验失败");
+            throw new BusinessException(ErrorCode.WEBHOOK_SIGNATURE_INVALID, "Webhook 签名校验失败，已记录同步日志: " + log.getId());
+        }
+        return runVerifiedWebhook(request, rawBody);
+    }
+
+    private TduckWebhookResult runVerifiedWebhook(TduckWebhookRequest request, String rawBody) {
         String eventId = normalizeEventId(request, rawBody);
+        return runIdempotentTransaction(
+                eventId,
+                "重复 Webhook 已忽略",
+                () -> handleVerifiedWebhook(request, eventId)
+        );
+    }
+
+    private TduckWebhookResult handleVerifiedWebhook(TduckWebhookRequest request, String eventId) {
         if (eventId != null) {
-            var existing = syncLogRepository.findTopByEventIdAndStatusOrderByIdDesc(eventId, SyncStatus.SUCCESS);
+            var existing = syncLogRepository.findBySuccessEventId(eventId);
             if (existing.isPresent()) {
                 TduckSyncLog log = existing.get();
                 return new TduckWebhookResult(SyncStatus.DUPLICATE_IGNORED, log.getId(), log.getAttendeeId(), "重复 Webhook 已忽略");
@@ -443,13 +485,14 @@ public class TduckService {
         } catch (BusinessException ex) {
             TduckSyncLog log = failedLog(request, meeting, ex.getMessage());
             return new TduckWebhookResult(SyncStatus.FAILED, log.getId(), null, ex.getMessage());
+        } catch (DataIntegrityViolationException ex) {
+            throw ex;
         } catch (RuntimeException ex) {
             TduckSyncLog log = failedLog(request, meeting, "数据格式异常: " + ex.getMessage());
             return new TduckWebhookResult(SyncStatus.FAILED, log.getId(), null, log.getMessage());
         }
     }
 
-    @Transactional
     public TduckWebhookResult manualSync(TduckManualSyncRequest request) {
         TduckFormBinding binding = bindingRepository.findByMeetingId(request.meetingId())
                 .orElseThrow(() -> BusinessException.notFound("会议未绑定 TDuck 表单"));
@@ -465,10 +508,9 @@ public class TduckService {
                 data,
                 Map.of("source", "manual-sync", "dataId", request.dataId(), "data", data)
         );
-        return syncTrusted(webhookRequest, "manual-sync");
+        return runTrustedSync(webhookRequest, "manual-sync");
     }
 
-    @Transactional
     public TduckWebhookResult pullSync(TduckPullSyncRequest request) {
         TduckFormBinding binding = bindingRepository.findByMeetingId(request.meetingId())
                 .orElseThrow(() -> BusinessException.notFound("会议未绑定 TDuck 表单"));
@@ -481,10 +523,9 @@ public class TduckService {
                 details.formData(),
                 Map.of("source", "pull-sync", "dataId", details.dataId(), "data", details.formData(), "raw", details.raw())
         );
-        return syncTrusted(webhookRequest, "pull-sync");
+        return runTrustedSync(webhookRequest, "pull-sync");
     }
 
-    @Transactional
     public TduckBatchPullSyncResponse batchPullSync(TduckBatchPullSyncRequest request) {
         TduckFormBinding binding = bindingRepository.findByMeetingId(request.meetingId())
                 .orElseThrow(() -> BusinessException.notFound("会议未绑定 TDuck 表单"));
@@ -512,7 +553,8 @@ public class TduckService {
                         details.formData(),
                         Map.of("source", "batch-pull-sync", "dataId", details.dataId(), "data", details.formData(), "raw", details.raw())
                 );
-                TduckWebhookResult result = syncTrusted(webhookRequest, "pull-sync");
+                // 每条报名独立提交，既能捕获并发幂等竞争，也避免一条异常把整批已成功数据回滚。
+                TduckWebhookResult result = runTrustedSync(webhookRequest, "pull-sync");
                 if (result.status() == SyncStatus.SUCCESS) {
                     success++;
                 } else if (result.status() == SyncStatus.DUPLICATE_IGNORED) {
@@ -538,20 +580,43 @@ public class TduckService {
     }
 
     private Attendee upsertAttendee(Meeting meeting, MappedAttendeeData mapped, TduckWebhookRequest request) {
-        // 同一会议手机号唯一：TDuck 重推或用户修改报名时更新原记录，而不是生成第二条业务主数据。
-        Attendee attendee = attendeeRepository.findByMeetingAndPhone(meeting, mapped.phone())
-                .orElseGet(() -> {
-                    Attendee created = new Attendee();
-                    created.setMeeting(meeting);
-                    created.setRegisteredAt(LocalDateTime.now());
-                    created.setAttendeeCode(meeting.getCode() + "-" + UUID.randomUUID().toString().substring(0, 8).toUpperCase());
-                    // TDuck 报名数据进入 MeetingOS 后默认视为有效报名；后续由管理员在参会人列表中按需拒绝。
-                    created.setReviewStatus(ReviewStatus.APPROVED);
-                    created.setReviewedAt(LocalDateTime.now());
-                    created.setReviewedBy("system");
-                    created.setCheckinStatus(CheckinStatus.NOT_CHECKED_IN);
-                    return created;
-                });
+        String dataId = normalizeTduckDataId(request.dataId());
+        Optional<Attendee> attendeeByDataId = dataId == null
+                ? Optional.empty()
+                : attendeeRepository.findByMeetingIdAndTduckDataIdForUpdate(meeting.getId(), dataId);
+        Optional<Attendee> attendeeByPhone = attendeeRepository.findByMeetingIdAndPhoneForUpdate(meeting.getId(), mapped.phone());
+
+        Attendee attendee;
+        if (attendeeByDataId.isPresent()) {
+            attendee = attendeeByDataId.get();
+            if (attendeeByPhone.isPresent() && !sameAttendee(attendee, attendeeByPhone.get())) {
+                /*
+                 * dataId 表示 TDuck 的业务主键，手机号则受本地会议唯一约束保护。
+                 * 两者命中不同记录时不能猜测该合并哪一条，否则会串改两个真实参会人的资料。
+                 */
+                throw BusinessException.conflict("TDuck dataId 与手机号分别属于不同参会人，请人工核对");
+            }
+        } else if (attendeeByPhone.isPresent()) {
+            attendee = attendeeByPhone.get();
+            if (StringUtils.hasText(attendee.getTduckDataId())) {
+                if (dataId == null) {
+                    throw BusinessException.conflict("该手机号已有 TDuck dataId 绑定，本次请求缺少 dataId，不能按手机号覆盖");
+                }
+                if (!dataId.equals(attendee.getTduckDataId().trim())) {
+                    throw BusinessException.conflict("该手机号已绑定其他 TDuck dataId，请人工核对");
+                }
+            }
+        } else {
+            attendee = new Attendee();
+            attendee.setMeeting(meeting);
+            attendee.setRegisteredAt(LocalDateTime.now());
+            attendee.setAttendeeCode(meeting.getCode() + "-" + UUID.randomUUID().toString().substring(0, 8).toUpperCase());
+            // TDuck 报名数据进入 MeetingOS 后默认视为有效报名；后续由管理员在参会人列表中按需拒绝。
+            attendee.setReviewStatus(ReviewStatus.APPROVED);
+            attendee.setReviewedAt(LocalDateTime.now());
+            attendee.setReviewedBy("system");
+            attendee.setCheckinStatus(CheckinStatus.NOT_CHECKED_IN);
+        }
         attendee.setName(mapped.name());
         attendee.setPhone(mapped.phone());
         attendee.setOrganization(mapped.organization());
@@ -561,7 +626,10 @@ public class TduckService {
         attendee.setAttendeeType(mapped.attendeeType());
         attendee.setAccommodationRequired(mapped.accommodationRequired());
         attendee.setRemark(mapped.remark());
-        attendee.setTduckDataId(request.dataId());
+        // 缺失 dataId 的旧版本 payload 仅允许回退到尚未绑定的手机号，且绝不能清空既有主键绑定。
+        if (dataId != null) {
+            attendee.setTduckDataId(dataId);
+        }
         attendee.setRawDataSnapshot(new LinkedHashMap<>(request.data() == null ? Map.of() : request.data()));
         if (attendee.getReviewStatus() == ReviewStatus.CANCELLED && TDUCK_CANCEL_REASON.equals(attendee.getReviewReason())) {
             /*
@@ -575,6 +643,13 @@ public class TduckService {
             attendee.setReviewedBy("tduck-webhook");
         }
         return attendeeRepository.save(attendee);
+    }
+
+    private boolean sameAttendee(Attendee first, Attendee second) {
+        if (first == second) {
+            return true;
+        }
+        return first.getId() != null && first.getId().equals(second.getId());
     }
 
     private Attendee cancelAttendeeByWebhook(Meeting meeting, TduckWebhookRequest request) {
@@ -600,8 +675,9 @@ public class TduckService {
     }
 
     private Optional<Attendee> findAttendeeForCancellation(Meeting meeting, TduckWebhookRequest request) {
-        if (StringUtils.hasText(request.dataId())) {
-            Optional<Attendee> byDataId = attendeeRepository.findByMeetingIdAndTduckDataId(meeting.getId(), request.dataId().trim());
+        String dataId = normalizeTduckDataId(request.dataId());
+        if (dataId != null) {
+            Optional<Attendee> byDataId = attendeeRepository.findByMeetingIdAndTduckDataIdForUpdate(meeting.getId(), dataId);
             if (byDataId.isPresent()) {
                 return byDataId;
             }
@@ -613,8 +689,8 @@ public class TduckService {
         if (request.data() != null && !request.data().isEmpty()) {
             List<TduckFieldMapping> mappings = mappingRepository.findByMeetingId(meeting.getId());
             MappedAttendeeData mapped = fieldMapper.map(mappings, request.data());
-            return attendeeRepository.findByMeetingAndPhone(meeting, mapped.phone())
-                    .filter(attendee -> !StringUtils.hasText(request.dataId()));
+            return attendeeRepository.findByMeetingIdAndPhoneForUpdate(meeting.getId(), mapped.phone())
+                    .filter(attendee -> dataId == null);
         }
         return Optional.empty();
     }
@@ -654,9 +730,45 @@ public class TduckService {
          * 只有历史成功日志才视为幂等命中。失败日志要允许再次补偿，否则管理员修好字段映射或
          * Webhook 配置后，使用同一个 dataId 仍会被“重复补偿同步”挡住，数据永远进不来。
          */
-        return syncLogRepository.findTopByEventIdAndStatusOrderByIdDesc(eventId, SyncStatus.SUCCESS)
+        return syncLogRepository.findBySuccessEventId(eventId)
                 .map(log -> new TduckWebhookResult(SyncStatus.DUPLICATE_IGNORED, log.getId(), log.getAttendeeId(), "重复补偿同步已忽略"))
                 .orElseGet(() -> syncMappedData(request, eventId));
+    }
+
+    private TduckWebhookResult runTrustedSync(TduckWebhookRequest request, String source) {
+        String eventId = normalizeEventId(request, source + ":" + request.formKey() + ":" + request.dataId());
+        return runIdempotentTransaction(
+                eventId,
+                "重复补偿同步已忽略",
+                () -> syncTrusted(request, source)
+        );
+    }
+
+    private TduckWebhookResult runIdempotentTransaction(String eventId,
+                                                         String duplicateMessage,
+                                                         Supplier<TduckWebhookResult> action) {
+        try {
+            return transactionRunner.requiresNew(action);
+        } catch (DataIntegrityViolationException ex) {
+            /*
+             * 两个相同事件可能同时通过“尚无成功日志”的检查。唯一键会让后提交者完整回滚；
+             * 必须等该事务退出后再查询胜出日志，不能在 rollback-only 事务中尝试恢复。
+             */
+            Optional<TduckSyncLog> existing = transactionRunner.requiresNew(
+                    () -> syncLogRepository.findBySuccessEventId(eventId)
+            );
+            if (existing.isPresent()) {
+                TduckSyncLog log = existing.get();
+                return new TduckWebhookResult(
+                        SyncStatus.DUPLICATE_IGNORED,
+                        log.getId(),
+                        log.getAttendeeId(),
+                        duplicateMessage
+                );
+            }
+            // dataId、手机号等其他唯一键冲突不能伪装成幂等命中，应交由统一异常处理暴露。
+            throw ex;
+        }
     }
 
     private TduckWebhookResult syncMappedData(TduckWebhookRequest request, String eventId) {
@@ -678,6 +790,8 @@ public class TduckService {
         } catch (BusinessException ex) {
             TduckSyncLog log = failedLog(request, meeting, ex.getMessage());
             return new TduckWebhookResult(SyncStatus.FAILED, log.getId(), null, ex.getMessage());
+        } catch (DataIntegrityViolationException ex) {
+            throw ex;
         } catch (RuntimeException ex) {
             TduckSyncLog log = failedLog(request, meeting, "数据格式异常: " + ex.getMessage());
             return new TduckWebhookResult(SyncStatus.FAILED, log.getId(), null, log.getMessage());
@@ -742,32 +856,62 @@ public class TduckService {
         // 1. TDuck 只支持静态 token 时，使用 query/header token。
         // 2. 接入网关可计算 HMAC 时，使用 X-TDuck-Signature。
         String webhookSecret = settingsService.webhookToken();
-        if (token != null && !token.isBlank() && token.equals(webhookSecret)) {
+        if (StringUtils.hasText(token) && StringUtils.hasText(webhookSecret)
+                && constantTimeEquals(token, webhookSecret)) {
             return true;
         }
         return verifySignature(signature, rawBody, webhookSecret);
     }
 
     private boolean verifySignature(String signature, String rawBody, String webhookSecret) {
-        if (signature == null || signature.isBlank()) {
+        if (!StringUtils.hasText(signature) || !StringUtils.hasText(rawBody) || !StringUtils.hasText(webhookSecret)) {
             return false;
         }
         try {
             Mac mac = Mac.getInstance(HMAC_ALGORITHM);
             mac.init(new SecretKeySpec(webhookSecret.getBytes(StandardCharsets.UTF_8), HMAC_ALGORITHM));
             String expected = HexFormat.of().formatHex(mac.doFinal(rawBody.getBytes(StandardCharsets.UTF_8)));
-            return expected.equalsIgnoreCase(signature.replace("sha256=", ""));
+            String normalizedSignature = signature.trim();
+            if (normalizedSignature.regionMatches(true, 0, "sha256=", 0, "sha256=".length())) {
+                normalizedSignature = normalizedSignature.substring("sha256=".length());
+            }
+            return constantTimeEquals(
+                    expected.toLowerCase(Locale.ROOT),
+                    normalizedSignature.toLowerCase(Locale.ROOT)
+            );
         } catch (Exception ex) {
             return false;
         }
     }
 
+    private boolean constantTimeEquals(String first, String second) {
+        return MessageDigest.isEqual(
+                first.getBytes(StandardCharsets.UTF_8),
+                second.getBytes(StandardCharsets.UTF_8)
+        );
+    }
+
     private String normalizeEventId(TduckWebhookRequest request, String rawBody) {
         if (request.eventId() != null && !request.eventId().isBlank()) {
-            return request.eventId();
+            String eventId = request.eventId().trim();
+            if (eventId.length() > MAX_EVENT_ID_LENGTH) {
+                throw BusinessException.badRequest("Webhook eventId 长度不能超过 " + MAX_EVENT_ID_LENGTH + " 个字符");
+            }
+            return eventId;
         }
         // TDuck 社区版 Webhook 字段可能随版本略有差异；缺少事件 ID 时使用 payload hash 兜底，保证幂等性。
         return DigestUtils.md5DigestAsHex(rawBody.getBytes(StandardCharsets.UTF_8));
+    }
+
+    private String normalizeTduckDataId(String dataId) {
+        if (!StringUtils.hasText(dataId)) {
+            return null;
+        }
+        String normalized = dataId.trim();
+        if (normalized.length() > MAX_TDUCK_DATA_ID_LENGTH) {
+            throw BusinessException.badRequest("TDuck dataId 长度不能超过 " + MAX_TDUCK_DATA_ID_LENGTH + " 个字符");
+        }
+        return normalized;
     }
 
     private void ensureRequiredMapping(List<FieldMappingItem> mappings, AttendeeField field) {

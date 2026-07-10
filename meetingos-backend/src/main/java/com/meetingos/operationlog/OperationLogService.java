@@ -3,6 +3,7 @@ package com.meetingos.operationlog;
 import com.meetingos.common.PageRequests;
 import com.meetingos.common.PageResponse;
 import com.meetingos.common.SensitiveDataMasker;
+import com.meetingos.security.ClientIpResolver;
 import com.meetingos.security.SecurityUtils;
 import jakarta.servlet.http.HttpServletRequest;
 import org.springframework.stereotype.Service;
@@ -18,9 +19,12 @@ public class OperationLogService {
     private static final int MAX_MESSAGE_LENGTH = 500;
 
     private final OperationLogRepository operationLogRepository;
+    private final ClientIpResolver clientIpResolver;
 
-    public OperationLogService(OperationLogRepository operationLogRepository) {
+    public OperationLogService(OperationLogRepository operationLogRepository,
+                               ClientIpResolver clientIpResolver) {
         this.operationLogRepository = operationLogRepository;
+        this.clientIpResolver = clientIpResolver;
     }
 
     @Transactional(propagation = Propagation.REQUIRES_NEW)
@@ -37,7 +41,7 @@ public class OperationLogService {
         log.setAction(action);
         log.setTargetType(targetType);
         log.setTargetId(targetId);
-        log.setClientIp(resolveClientIp(request));
+        log.setClientIp(request == null ? null : clientIpResolver.resolve(request));
         log.setSuccess(success);
         log.setMessage(truncate(message, MAX_MESSAGE_LENGTH));
         log.setDetails(details == null ? new LinkedHashMap<>() : SensitiveDataMasker.maskMap(details));
@@ -51,17 +55,6 @@ public class OperationLogService {
             return PageResponse.from(operationLogRepository.findAll(pageRequest));
         }
         return PageResponse.from(operationLogRepository.findByActionContainingIgnoreCase(action, pageRequest));
-    }
-
-    private String resolveClientIp(HttpServletRequest request) {
-        if (request == null) {
-            return null;
-        }
-        String forwarded = request.getHeader("X-Forwarded-For");
-        if (forwarded != null && !forwarded.isBlank()) {
-            return forwarded.split(",")[0].trim();
-        }
-        return request.getRemoteAddr();
     }
 
     private String truncate(String value, int maxLength) {

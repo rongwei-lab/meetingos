@@ -478,6 +478,7 @@ import type { SelectOption, UploadCustomRequestOptions } from "naive-ui";
 import { NButton, NDataTable, NDynamicTags, NForm, NFormItem, NModal, NSpace, NTag, NUpload, useDialog, useMessage } from "naive-ui";
 import { computed, defineAsyncComponent, h, nextTick, onBeforeUnmount, onMounted, ref, watch } from "vue";
 import { useRoute } from "vue-router";
+import { isRequestCanceled } from "@/api/http";
 import PageHeader from "@/components/PageHeader.vue";
 import StatusTag from "@/components/StatusTag.vue";
 import { useRouteMeeting } from "@/composables/useRouteMeeting";
@@ -535,6 +536,8 @@ const nameplatePreviewViewportRef = ref<HTMLElement | null>(null);
 const nameplatePreviewViewportWidth = ref(420);
 const auditStatusValues = new Set<AuditStatus>(["PENDING", "APPROVED", "REJECTED", "CANCELLED"]);
 let attendeePageLoadToken = 0;
+let attendeeFilterGeneration = 0;
+let attendeeFilterTimer: number | null = null;
 let nameplateSettingsSaveTimer: number | null = null;
 let nameplatePreviewResizeObserver: ResizeObserver | null = null;
 
@@ -942,6 +945,12 @@ onMounted(() => {
 });
 
 onBeforeUnmount(() => {
+  attendeeFilterGeneration += 1;
+  if (attendeeFilterTimer !== null) {
+    window.clearTimeout(attendeeFilterTimer);
+    attendeeFilterTimer = null;
+  }
+  store.cancelAttendeeSearch(routeMeetingId.value || store.currentMeetingId);
   if (nameplateSettingsSaveTimer) {
     window.clearTimeout(nameplateSettingsSaveTimer);
     nameplateSettingsSaveTimer = null;
@@ -958,6 +967,12 @@ watch(nameplateModalVisible, (visible) => {
 
 watch(routeMeetingId, (meetingId, previousMeetingId) => {
   if (meetingId && meetingId !== previousMeetingId) {
+    attendeeFilterGeneration += 1;
+    if (attendeeFilterTimer !== null) {
+      window.clearTimeout(attendeeFilterTimer);
+      attendeeFilterTimer = null;
+    }
+    store.cancelAttendeeSearch(previousMeetingId);
     remoteFilteredAttendees.value = null;
     checkedKeys.value = [];
     nameplateTemplateUrl.value = "";
@@ -971,17 +986,36 @@ watch(activeFormMappings, (mappings) => {
 }, { immediate: true });
 
 watch([keyword, auditStatus, attendeeType, hasSeat, selectedTags], () => {
-  if (attendeePageLoading.value) return;
-  void store.searchAttendees({
-    keyword: keyword.value,
-    auditStatus: auditStatus.value,
-    attendeeType: attendeeType.value,
-    hasSeat: hasSeat.value,
-    tags: selectedTags.value
-  }).then((items) => {
-    remoteFilteredAttendees.value = items;
-  });
+  scheduleAttendeeFilter();
 }, { deep: true });
+
+function scheduleAttendeeFilter() {
+  const targetMeetingId = routeMeetingId.value || store.currentMeetingId;
+  const generation = ++attendeeFilterGeneration;
+  if (attendeeFilterTimer !== null) window.clearTimeout(attendeeFilterTimer);
+  store.cancelAttendeeSearch(targetMeetingId);
+  if (!targetMeetingId) return;
+
+  attendeeFilterTimer = window.setTimeout(() => {
+    attendeeFilterTimer = null;
+    const filters = {
+      keyword: keyword.value,
+      auditStatus: auditStatus.value,
+      attendeeType: attendeeType.value,
+      hasSeat: hasSeat.value,
+      tags: [...selectedTags.value]
+    };
+    void store.searchAttendees(filters, { meetingId: targetMeetingId }).then((items) => {
+      // 网络响应必须同时匹配筛选代际和路由会议，避免慢响应覆盖用户刚输入的新条件。
+      if (generation !== attendeeFilterGeneration || routeMeetingId.value !== targetMeetingId) return;
+      remoteFilteredAttendees.value = items;
+    }).catch((error) => {
+      if (!isRequestCanceled(error) && generation === attendeeFilterGeneration && routeMeetingId.value === targetMeetingId) {
+        message.error(error instanceof Error ? error.message : "参会人筛选失败");
+      }
+    });
+  }, 250);
+}
 
 watch(
   () => route.query,

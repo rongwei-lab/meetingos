@@ -16,6 +16,7 @@ import com.meetingos.operationlog.OperationLogService;
 import com.meetingos.security.SecurityUtils;
 import com.meetingos.settings.SystemSettingsService;
 import org.springframework.stereotype.Service;
+import org.springframework.transaction.annotation.Isolation;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.web.multipart.MultipartFile;
 
@@ -89,10 +90,10 @@ public class DinnerService {
                 .toList();
     }
 
-    @Transactional
+    @Transactional(isolation = Isolation.READ_COMMITTED)
     public DinnerTableResponse createTable(DinnerTableRequest request) {
-        Meeting meeting = meetingRepository.findById(request.meetingId())
-                .orElseThrow(() -> BusinessException.notFound("会议不存在"));
+        // 新桌尚无可锁餐桌行，统一锁会议父行后再检查并创建，避免把“空查询”误当成互斥锁。
+        Meeting meeting = lockMeetingForDinnerChange(request.meetingId());
         String tableNo = requiredText(request.tableNo(), "桌号不能为空", 80);
         if (dinnerTableRepository.existsByMeetingIdAndTableNo(meeting.getId(), tableNo)) {
             throw BusinessException.conflict("桌号已存在: " + tableNo);
@@ -109,13 +110,16 @@ public class DinnerService {
         return toTableResponse(dinnerTableRepository.save(table));
     }
 
-    @Transactional
+    @Transactional(isolation = Isolation.READ_COMMITTED)
     public DinnerTableResponse updateTable(Long tableId, DinnerTableRequest request) {
-        DinnerTable table = dinnerTableRepository.findById(tableId)
+        Long meetingId = dinnerTableRepository.findMeetingIdById(tableId)
                 .orElseThrow(() -> BusinessException.notFound("桌号不存在"));
-        if (!table.getMeeting().getId().equals(request.meetingId())) {
+        if (!meetingId.equals(request.meetingId())) {
             throw BusinessException.badRequest("桌号不属于当前会议");
         }
+        // 先按 meeting -> table 的固定顺序加锁，既保护容量调整，也与缺桌创建/重命名保持一致锁序。
+        lockMeetingForDinnerChange(request.meetingId());
+        DinnerTable table = lockDinnerTable(tableId);
         String oldTableNo = table.getTableNo();
         String newTableNo = requiredText(request.tableNo(), "桌号不能为空", 80);
         dinnerTableRepository.findByMeetingIdAndTableNo(request.meetingId(), newTableNo)
@@ -144,13 +148,15 @@ public class DinnerService {
         return toTableResponse(saved);
     }
 
-    @Transactional
+    @Transactional(isolation = Isolation.READ_COMMITTED)
     public void deleteTable(Long meetingId, Long tableId) {
-        DinnerTable table = dinnerTableRepository.findById(tableId)
+        Long actualMeetingId = dinnerTableRepository.findMeetingIdById(tableId)
                 .orElseThrow(() -> BusinessException.notFound("桌号不存在"));
-        if (!table.getMeeting().getId().equals(meetingId)) {
+        if (!actualMeetingId.equals(meetingId)) {
             throw BusinessException.badRequest("桌号不属于当前会议");
         }
+        lockMeetingForDinnerChange(meetingId);
+        DinnerTable table = lockDinnerTable(tableId);
         long occupied = dinnerAssignmentRepository.countByMeetingIdAndTableNo(meetingId, table.getTableNo());
         if (occupied > 0) {
             throw BusinessException.badRequest("该桌已有就餐人员，不能删除");
@@ -158,28 +164,34 @@ public class DinnerService {
         dinnerTableRepository.delete(table);
     }
 
-    @Transactional
+    @Transactional(isolation = Isolation.READ_COMMITTED)
     public DinnerAssignmentResponse assign(DinnerAssignRequest request) {
-        Attendee attendee = attendeeRepository.findById(request.attendeeId())
+        Long meetingId = dinnerAssignmentRepository.findMeetingIdByAttendeeId(request.attendeeId())
                 .orElseThrow(() -> BusinessException.notFound("参会人不存在"));
+        lockMeetingForDinnerChange(meetingId);
+        Attendee attendee = lockAttendeeForDinnerChange(request.attendeeId());
         DinnerAssignment assignment = upsertAssignment(attendee, request.tableNo(), request.remark(), "MANUAL");
         return toResponse(assignment, attendee.getMeeting());
     }
 
-    @Transactional
+    @Transactional(isolation = Isolation.READ_COMMITTED)
     public void clear(Long attendeeId) {
-        DinnerAssignment assignment = dinnerAssignmentRepository.findByAttendeeId(attendeeId)
+        Long meetingId = dinnerAssignmentRepository.findMeetingIdByAttendeeId(attendeeId)
+                .orElseThrow(() -> BusinessException.notFound("参会人不存在"));
+        lockMeetingForDinnerChange(meetingId);
+        Attendee attendee = lockAttendeeForDinnerChange(attendeeId);
+        DinnerAssignment assignment = dinnerAssignmentRepository.findByAttendeeIdForUpdate(attendeeId)
                 .orElseThrow(() -> BusinessException.notFound("该参会人尚未安排晚宴桌号"));
-        Attendee attendee = assignment.getAttendee();
         String oldTableNo = assignment.getTableNo();
+        lockExistingTableForClear(attendee.getMeeting().getId(), oldTableNo);
         dinnerAssignmentRepository.delete(assignment);
         recordDinnerChange(attendee, oldTableNo, null, "MANUAL_CLEAR", null);
     }
 
-    @Transactional
+    @Transactional(isolation = Isolation.READ_COMMITTED)
     public ImportResult importAssignments(Long meetingId, MultipartFile file) {
-        Meeting meeting = meetingRepository.findById(meetingId)
-                .orElseThrow(() -> BusinessException.notFound("会议不存在"));
+        // 整批导入持有会议锁，避免按文件行顺序累计多张桌锁时与另一批导入形成反向锁序。
+        Meeting meeting = lockMeetingForDinnerChange(meetingId);
         List<TableRow> rows = TableFileReader.read(file);
         List<ImportFailure> failures = new ArrayList<>();
         int imported = 0;
@@ -188,6 +200,7 @@ public class DinnerService {
             try {
                 Attendee attendee = resolveAttendee(meetingId, row);
                 String tableNo = required(row, "桌号", "餐桌号", "桌位", "tableNo", "table");
+                attendee = lockAttendeeForDinnerChange(attendee.getId());
                 String venue = row.get("晚宴地点", "用餐地点", "宴会厅", "餐厅", "venue", "dinnerVenue");
                 String dinnerTime = row.get("晚宴时间", "用餐时间", "时间", "dinnerTime", "time");
                 String remark = row.get("备注", "晚宴备注", "用餐备注", "remark", "dinnerRemark");
@@ -246,10 +259,10 @@ public class DinnerService {
                                               String source) {
         String normalizedTableNo = requiredText(tableNo, "桌号不能为空", 80);
         DinnerAssignment assignment = dinnerAssignmentRepository
-                .findByMeetingIdAndAttendeeId(attendee.getMeeting().getId(), attendee.getId())
+                .findByAttendeeIdForUpdate(attendee.getId())
                 .orElseGet(DinnerAssignment::new);
         String oldTableNo = assignment.getTableNo();
-        DinnerTable table = ensureTable(attendee.getMeeting(), normalizedTableNo);
+        DinnerTable table = lockTablesForAssignment(attendee.getMeeting(), normalizedTableNo, oldTableNo);
         assertTableCapacity(attendee, table, oldTableNo);
         assignment.setMeeting(attendee.getMeeting());
         assignment.setAttendee(attendee);
@@ -325,20 +338,76 @@ public class DinnerService {
         table.setRemark(limit(blankToNull(request.remark()), 500));
     }
 
-    private DinnerTable ensureTable(Meeting meeting, String tableNo) {
-        return dinnerTableRepository.findByMeetingIdAndTableNo(meeting.getId(), tableNo)
-                .orElseGet(() -> {
-                    /*
-                     * 导入旧格式分配表时可能只有“桌号”没有提前建桌。
-                     * 这里自动补一张默认 10 人桌，保证老流程继续可用；管理员可随后在桌号管理里调整容量。
-                     */
-                    DinnerTable table = new DinnerTable();
-                    table.setMeeting(meeting);
-                    table.setTableNo(tableNo);
-                    table.setCapacity(10);
-                    table.setCreatedBy(SecurityUtils.currentUsernameOrSystem());
-                    return dinnerTableRepository.save(table);
-                });
+    private DinnerTable lockTablesForAssignment(Meeting meeting, String targetTableNo, String oldTableNo) {
+        DinnerTable existing = dinnerTableRepository.findByMeetingIdAndTableNo(meeting.getId(), targetTableNo)
+                .orElse(null);
+        if (existing != null) {
+            return lockExistingAssignmentTables(meeting.getId(), targetTableNo, oldTableNo);
+        }
+
+        /*
+         * 导入旧格式分配表时可能只有“桌号”没有提前建桌。目标行不存在时，PESSIMISTIC_WRITE
+         * 锁不到任何记录；改锁始终存在的会议父行并二次查询，确保并发创建者看到同一张真实桌。
+         */
+        Meeting lockedMeeting = lockMeetingForDinnerChange(meeting.getId());
+        DinnerTable createdByAnotherTransaction = dinnerTableRepository
+                .findByMeetingIdAndTableNo(meeting.getId(), targetTableNo)
+                .orElse(null);
+        if (createdByAnotherTransaction != null) {
+            return lockExistingAssignmentTables(meeting.getId(), targetTableNo, oldTableNo);
+        }
+
+        if (oldTableNo != null && !oldTableNo.isBlank() && !oldTableNo.equals(targetTableNo)) {
+            // 此分支已持有会议锁；若原桌仍存在，再锁真实原桌行，使清除/重分配与删除串行。
+            dinnerTableRepository.findByMeetingIdAndTableNo(meeting.getId(), oldTableNo)
+                    .flatMap(oldTable -> dinnerTableRepository.findByIdForUpdate(oldTable.getId()));
+        }
+
+        DinnerTable table = new DinnerTable();
+        table.setMeeting(lockedMeeting);
+        table.setTableNo(targetTableNo);
+        table.setCapacity(10);
+        table.setCreatedBy(SecurityUtils.currentUsernameOrSystem());
+        // 立即插入，使后续容量统计针对真实餐桌行执行；会议锁会一直持有到事务提交。
+        return dinnerTableRepository.saveAndFlush(table);
+    }
+
+    private DinnerTable lockExistingAssignmentTables(Long meetingId, String targetTableNo, String oldTableNo) {
+        List<String> tableNos = new ArrayList<>();
+        tableNos.add(targetTableNo);
+        if (oldTableNo != null && !oldTableNo.isBlank() && !oldTableNo.equals(targetTableNo)) {
+            tableNos.add(oldTableNo);
+        }
+        // 两名参会人互换餐桌时也按桌号排序拿锁，避免目标桌与原桌形成反向锁序。
+        tableNos.sort(String::compareTo);
+        return dinnerTableRepository.findByMeetingIdAndTableNoInForUpdate(meetingId, tableNos).stream()
+                .filter(table -> targetTableNo.equals(table.getTableNo()))
+                .findFirst()
+                .orElseThrow(() -> BusinessException.notFound("桌号不存在"));
+    }
+
+    private void lockExistingTableForClear(Long meetingId, String tableNo) {
+        if (tableNo == null || tableNo.isBlank()) {
+            return;
+        }
+        // 历史自由桌号可能没有 dinner_tables 行；存在时锁真实行，不改变缺表也可清除的旧行为。
+        dinnerTableRepository.findByMeetingIdAndTableNo(meetingId, tableNo)
+                .flatMap(table -> dinnerTableRepository.findByIdForUpdate(table.getId()));
+    }
+
+    private Attendee lockAttendeeForDinnerChange(Long attendeeId) {
+        return attendeeRepository.findByIdForUpdate(attendeeId)
+                .orElseThrow(() -> BusinessException.notFound("参会人不存在"));
+    }
+
+    private DinnerTable lockDinnerTable(Long tableId) {
+        return dinnerTableRepository.findByIdForUpdate(tableId)
+                .orElseThrow(() -> BusinessException.notFound("桌号不存在"));
+    }
+
+    private Meeting lockMeetingForDinnerChange(Long meetingId) {
+        return dinnerTableRepository.findMeetingByIdForUpdate(meetingId)
+                .orElseThrow(() -> BusinessException.notFound("会议不存在"));
     }
 
     private DinnerSettingsResponse toSettingsResponse(Meeting meeting) {
@@ -361,6 +430,7 @@ public class DinnerService {
     }
 
     private void assertTableCapacity(Attendee attendee, DinnerTable table, String oldTableNo) {
+        // 已有桌持有 PESSIMISTIC_WRITE；新桌由插入锁和会议父行锁保护，均覆盖计数与 assignment 写入。
         long occupied = dinnerAssignmentRepository.countByMeetingIdAndTableNo(attendee.getMeeting().getId(), table.getTableNo());
         boolean alreadyInThisTable = table.getTableNo().equals(oldTableNo);
         if (!alreadyInThisTable && occupied >= normalizedCapacity(table.getCapacity())) {

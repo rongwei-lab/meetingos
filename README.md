@@ -21,6 +21,7 @@ TDuck 不并入本仓库，按独立前后端服务部署，再通过 Nginx 反�
 
 ```bash
 cp .env.example .env
+chmod 600 .env
 ```
 
 2. 修改 `.env` 中的数据库、JWT、`TDUCK_WEBHOOK_TOKEN` 和管理员初始密码；Redis/MinIO 当前主要供 TDuck 和后续多副本限流、异步导出存储预留。
@@ -29,7 +30,7 @@ cp .env.example .env
 
 ```bash
 cd deploy
-docker compose --env-file ../.env up -d mysql redis minio minio-init
+./scripts/deploy.sh ../.env up -d mysql redis minio minio-init
 ```
 
 4. 分别启动后端和前端开发服务。实际命令以 `meetingos-backend/`、`meetingos-admin/` 内的项目脚本为准。
@@ -38,20 +39,23 @@ docker compose --env-file ../.env up -d mysql redis minio minio-init
 
 ```bash
 cd deploy
-docker compose --env-file ../.env --profile tduck up -d
+./scripts/deploy.sh ../.env --profile tduck up -d
 ```
 
 ## 生产部署
 
 1. 构建并推送 `meetingos-backend`、`meetingos-admin` 镜像。
 2. 在服务器上复制 `.env.example` 为 `.env`，替换所有 `CHANGE_ME`。
-3. 配置域名、HTTPS 证书、Nginx 上传大小和日志策略。
+3. 配置域名、HTTPS 证书和 Nginx 上传大小，并执行 `chmod 600 .env`。
 4. 启动完整服务：
 
 ```bash
 cd deploy
-docker compose --env-file ../.env --profile tduck up -d
+./scripts/deploy.sh ../.env --profile tduck up -d
 ```
+
+`deploy.sh` 会在启动或创建容器前强制执行 `scripts/check-env.sh`；`logs`、`ps`、`config`、`down`、
+`stop` 等观测或停止命令仍可直接执行。生产环境不要绕过该入口直接执行 `compose up`。
 
 5. 首次登录后立刻修改 MeetingOS 初始管理员密码和 TDuck 默认管理员密码。
 
@@ -126,16 +130,16 @@ MVP 至少建议映射：
 cd deploy && docker compose --env-file ../.env.example config
 
 # 启动基础依赖
-cd deploy && docker compose --env-file ../.env up -d mysql redis minio minio-init
+cd deploy && ./scripts/deploy.sh ../.env up -d mysql redis minio minio-init
 
 # 启动全量服务
-cd deploy && docker compose --env-file ../.env --profile tduck up -d
+cd deploy && ./scripts/deploy.sh ../.env --profile tduck up -d
 
 # 查看后端日志
-cd deploy && docker compose --env-file ../.env logs -f meetingos-backend
+cd deploy && ./scripts/deploy.sh ../.env logs -f meetingos-backend
 
 # 停止服务但保留数据卷
-cd deploy && docker compose --env-file ../.env down
+cd deploy && ./scripts/deploy.sh ../.env down
 ```
 
 ## 验收清单
@@ -161,6 +165,7 @@ cd deploy && docker compose --env-file ../.env down
 - 系统设置：只维护域名和 TDuck 地址等运行配置；Webhook Token 不在前端展示或运行期轮换。
 - 导出权限：住宿名单、签到记录、全量报名数据属于敏感导出；生产应开启导出审批并记录操作日志。
 - 部署边界：MySQL、Redis、MinIO 不应暴露到公网；Nginx 若开放 443 必须有真实 TLS 配置。
+- 代理边界：Compose 默认仅允许内部 Nginx 访问后端并启用可信转发头；如果开放后端公网直连，必须设置 `PUBLIC_QUERY_TRUST_FORWARD_HEADERS=false`。
 - 镜像供应链：生产镜像应固定版本 tag 或 digest，不使用 `latest`。
 - 备份：MySQL、Redis 持久化数据和 MinIO 文件必须纳入备份；上线前验证恢复流程。
 - TDuck 边界：MeetingOS 不直接修改 TDuck 表；通过 Webhook/API 同步并保留原始快照。

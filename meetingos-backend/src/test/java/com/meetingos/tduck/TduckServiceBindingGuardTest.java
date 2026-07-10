@@ -47,6 +47,12 @@ class TduckServiceBindingGuardTest {
     @Mock
     private TduckSyncLogService syncLogService;
 
+    @Mock
+    private TduckWebhookParser webhookParser;
+
+    @Mock
+    private TduckTransactionRunner transactionRunner;
+
     private TduckService tduckService;
     private Meeting meeting;
 
@@ -61,7 +67,9 @@ class TduckServiceBindingGuardTest {
                 new TduckFieldMapper(),
                 org.mockito.Mockito.mock(SystemSettingsService.class),
                 tduckClient,
-                syncLogService
+                syncLogService,
+                webhookParser,
+                transactionRunner
         );
         meeting = new Meeting();
         meeting.setId(1L);

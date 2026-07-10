@@ -56,9 +56,10 @@ class UserServiceTest {
     }
 
     @Test
-    void updateRejectsDisablingBuiltInAdmin() {
-        AppUser admin = user("admin", "超级管理员", UserStatus.ACTIVE, Set.of(Role.SUPER_ADMIN, Role.MEETING_ADMIN));
+    void updateRejectsDisablingOnlyActiveSuperAdminWithCustomUsername() {
+        AppUser admin = user("platform-root", "超级管理员", UserStatus.ACTIVE, Set.of(Role.SUPER_ADMIN, Role.MEETING_ADMIN));
         when(userRepository.findById(1L)).thenReturn(Optional.of(admin));
+        when(userRepository.findAll()).thenReturn(List.of(admin));
 
         assertThatThrownBy(() -> userService.update(1L, new UpdateUserRequest(
                 "超级管理员",
@@ -70,9 +71,10 @@ class UserServiceTest {
     }
 
     @Test
-    void updateRejectsRemovingSuperAdminFromBuiltInAdmin() {
-        AppUser admin = user("admin", "超级管理员", UserStatus.ACTIVE, Set.of(Role.SUPER_ADMIN, Role.MEETING_ADMIN));
+    void updateRejectsRemovingRoleFromOnlyActiveSuperAdminWithCustomUsername() {
+        AppUser admin = user("platform-root", "超级管理员", UserStatus.ACTIVE, Set.of(Role.SUPER_ADMIN, Role.MEETING_ADMIN));
         when(userRepository.findById(1L)).thenReturn(Optional.of(admin));
+        when(userRepository.findAll()).thenReturn(List.of(admin));
 
         assertThatThrownBy(() -> userService.update(1L, new UpdateUserRequest(
                 "超级管理员",
@@ -81,6 +83,22 @@ class UserServiceTest {
         )))
                 .isInstanceOf(BusinessException.class)
                 .hasMessageContaining("必须保留超级管理员");
+    }
+
+    @Test
+    void updateAllowsDisablingSuperAdminWhenAnotherActiveSuperAdminExists() {
+        AppUser admin = user("platform-root", "超级管理员", UserStatus.ACTIVE, Set.of(Role.SUPER_ADMIN));
+        AppUser backup = user("backup-root", "备用管理员", UserStatus.ACTIVE, Set.of(Role.SUPER_ADMIN));
+        when(userRepository.findById(1L)).thenReturn(Optional.of(admin));
+        when(userRepository.findAll()).thenReturn(List.of(admin, backup));
+
+        UserResponse response = userService.update(1L, new UpdateUserRequest(
+                "超级管理员",
+                UserStatus.DISABLED,
+                Set.of(Role.SUPER_ADMIN)
+        ));
+
+        assertThat(response.status()).isEqualTo(UserStatus.DISABLED);
     }
 
     @Test

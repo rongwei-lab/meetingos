@@ -1,6 +1,8 @@
 package com.meetingos.dinner;
 
+import jakarta.persistence.LockModeType;
 import org.springframework.data.jpa.repository.JpaRepository;
+import org.springframework.data.jpa.repository.Lock;
 import org.springframework.data.jpa.repository.Query;
 import org.springframework.data.repository.query.Param;
 
@@ -9,6 +11,9 @@ import java.util.List;
 import java.util.Optional;
 
 public interface DinnerAssignmentRepository extends JpaRepository<DinnerAssignment, Long> {
+
+    @Query("select attendee.meeting.id from Attendee attendee where attendee.id = :attendeeId")
+    Optional<Long> findMeetingIdByAttendeeId(@Param("attendeeId") Long attendeeId);
 
     List<DinnerAssignment> findByMeetingIdOrderByTableNoAscIdAsc(Long meetingId);
 
@@ -34,6 +39,15 @@ public interface DinnerAssignmentRepository extends JpaRepository<DinnerAssignme
     Optional<DinnerAssignment> findByMeetingIdAndAttendeeId(Long meetingId, Long attendeeId);
 
     Optional<DinnerAssignment> findByAttendeeId(Long attendeeId);
+
+    @Lock(LockModeType.PESSIMISTIC_WRITE)
+    @Query("""
+            select assignment
+            from DinnerAssignment assignment
+            join fetch assignment.attendee
+            where assignment.attendee.id = :attendeeId
+            """)
+    Optional<DinnerAssignment> findByAttendeeIdForUpdate(@Param("attendeeId") Long attendeeId);
 
     boolean existsByAttendeeId(Long attendeeId);
 

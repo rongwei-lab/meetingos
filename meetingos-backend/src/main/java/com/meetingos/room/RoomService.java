@@ -15,7 +15,11 @@ import com.meetingos.meeting.Meeting;
 import com.meetingos.meeting.MeetingRepository;
 import com.meetingos.operationlog.OperationLogService;
 import com.meetingos.settings.SystemSettingsService;
+import jakarta.persistence.EntityManager;
+import jakarta.persistence.LockModeType;
 import org.springframework.stereotype.Service;
+import org.springframework.transaction.annotation.Isolation;
+import org.springframework.transaction.annotation.Propagation;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.web.multipart.MultipartFile;
 
@@ -32,17 +36,20 @@ public class RoomService {
     private final MeetingRepository meetingRepository;
     private final RoomRepository roomRepository;
     private final AttendeeRepository attendeeRepository;
+    private final EntityManager entityManager;
     private final OperationLogService operationLogService;
     private final SystemSettingsService systemSettingsService;
 
     public RoomService(MeetingRepository meetingRepository,
                        RoomRepository roomRepository,
                        AttendeeRepository attendeeRepository,
+                       EntityManager entityManager,
                        OperationLogService operationLogService,
                        SystemSettingsService systemSettingsService) {
         this.meetingRepository = meetingRepository;
         this.roomRepository = roomRepository;
         this.attendeeRepository = attendeeRepository;
+        this.entityManager = entityManager;
         this.operationLogService = operationLogService;
         this.systemSettingsService = systemSettingsService;
     }
@@ -65,17 +72,28 @@ public class RoomService {
         return roomRepository.findByMeetingId(meetingId);
     }
 
-    @Transactional
+    @Transactional(isolation = Isolation.READ_COMMITTED)
     public Attendee assign(AssignRoomRequest request) {
-        Attendee attendee = attendeeRepository.findById(request.attendeeId())
-                .orElseThrow(() -> BusinessException.notFound("参会人不存在"));
-        Room room = roomRepository.findByMeetingIdAndRoomNo(attendee.getMeeting().getId(), requiredRoomNo(request.roomNo()))
-                .orElseThrow(() -> BusinessException.notFound("房间号不存在: " + request.roomNo()));
-        assignAttendeeToRoom(attendee, room, request.roomRemark(), "MANUAL");
+        return assignWithinTransaction(request, "MANUAL");
+    }
+
+    /**
+     * 供参会人创建/更新/导入事务复用同一套锁与容量规则。业务校验异常由调用方决定是回滚整次请求
+     * 还是记录为单行导入失败，因此该参与式事务不主动把 BusinessException 标记为 rollback-only。
+     */
+    @Transactional(propagation = Propagation.MANDATORY, noRollbackFor = BusinessException.class)
+    public Attendee assignWithinTransaction(AssignRoomRequest request, String source) {
+        Attendee attendee = lockAttendeeForRoomChange(request.attendeeId());
+        LockedRooms lockedRooms = lockRoomsForAssignment(attendee, requiredRoomNo(request.roomNo()));
+        assignAttendeeToRoom(attendee, lockedRooms.target(), lockedRooms.previous(), request.roomRemark(), source);
         return attendee;
     }
 
-    private void assignAttendeeToRoom(Attendee attendee, Room room, String roomRemark, String source) {
+    private void assignAttendeeToRoom(Attendee attendee,
+                                      Room room,
+                                      Room previousRoom,
+                                      String roomRemark,
+                                      String source) {
         String oldRoomNo = attendee.getRoomNo();
         if (room.getStatus() == RoomStatus.DISABLED) {
             throw BusinessException.badRequest("停用房间不能分配入住人员");
@@ -83,6 +101,8 @@ public class RoomService {
         /*
          * 容量按“当前会议 + 房间号”实时统计。参会人从同一房间重复保存时不占用额外名额；
          * 从其他房间迁入时，只有目标房间未满才允许写入，避免多人误挤到单人房。
+         * 调用方已经按稳定顺序对目标房和原房加写锁，直到当前事务提交前其他分配不能
+         * 对同一房间完成另一轮“统计后写入”，清除/重分配也不会把房间状态刷新错乱。
          */
         long occupied = attendeeRepository.countByMeetingIdAndRoomNo(attendee.getMeeting().getId(), room.getRoomNo());
         boolean alreadyInThisRoom = room.getRoomNo().equals(oldRoomNo);
@@ -93,26 +113,29 @@ public class RoomService {
         attendee.setRoomNo(room.getRoomNo());
         attendee.setRoomRemark(roomRemark);
         attendee.setAccommodationRequired(true);
-        if (oldRoomNo != null && !oldRoomNo.isBlank() && !oldRoomNo.equals(room.getRoomNo())) {
-            roomRepository.findByMeetingIdAndRoomNo(attendee.getMeeting().getId(), oldRoomNo)
-                    .ifPresent(this::refreshRoomStatus);
+        if (previousRoom != null && !oldRoomNo.equals(room.getRoomNo())) {
+            refreshRoomStatus(previousRoom);
         }
         recordRoomChange(attendee, oldRoomNo, room.getRoomNo(), source, roomRemark);
     }
 
-    @Transactional
+    @Transactional(isolation = Isolation.READ_COMMITTED)
     public Attendee clearAssignment(Long attendeeId) {
-        Attendee attendee = attendeeRepository.findById(attendeeId)
-                .orElseThrow(() -> BusinessException.notFound("参会人不存在"));
+        return clearAssignmentWithinTransaction(attendeeId, "MANUAL_CLEAR");
+    }
+
+    @Transactional(propagation = Propagation.MANDATORY, noRollbackFor = BusinessException.class)
+    public Attendee clearAssignmentWithinTransaction(Long attendeeId, String source) {
+        Attendee attendee = lockAttendeeForRoomChange(attendeeId);
         String oldRoomNo = attendee.getRoomNo();
+        Room previousRoom = lockCurrentRoomForUpdate(attendee.getMeeting().getId(), oldRoomNo);
         attendee.setRoomNo(null);
         attendee.setRoomRemark(null);
         attendee.setAccommodationRequired(false);
-        if (oldRoomNo != null && !oldRoomNo.isBlank()) {
-            roomRepository.findByMeetingIdAndRoomNo(attendee.getMeeting().getId(), oldRoomNo)
-                    .ifPresent(this::refreshRoomStatus);
+        if (previousRoom != null) {
+            refreshRoomStatus(previousRoom);
         }
-        recordRoomChange(attendee, oldRoomNo, null, "MANUAL_CLEAR", null);
+        recordRoomChange(attendee, oldRoomNo, null, source, null);
         return attendee;
     }
 
@@ -138,7 +161,7 @@ public class RoomService {
         return ImportResult.of(rows.size(), imported, failures, "房间号");
     }
 
-    @Transactional
+    @Transactional(isolation = Isolation.READ_COMMITTED)
     public ImportResult importAssignments(Long meetingId, MultipartFile file) {
         meetingRepository.findById(meetingId)
                 .orElseThrow(() -> BusinessException.notFound("会议不存在"));
@@ -149,10 +172,16 @@ public class RoomService {
         for (TableRow row : rows) {
             try {
                 Attendee attendee = resolveAttendee(meetingId, row);
+                attendee = lockAttendeeForRoomChange(attendee.getId());
                 String roomNo = required(row, "房间号", "房号", "roomNo", "room");
-                Room room = roomRepository.findByMeetingIdAndRoomNo(meetingId, roomNo)
-                        .orElseThrow(() -> BusinessException.notFound("房间号不存在: " + roomNo));
-                assignAttendeeToRoom(attendee, room, row.get("房间备注", "住宿备注", "remark", "roomRemark"), "IMPORT");
+                LockedRooms lockedRooms = lockRoomsForAssignment(attendee, roomNo);
+                assignAttendeeToRoom(
+                        attendee,
+                        lockedRooms.target(),
+                        lockedRooms.previous(),
+                        row.get("房间备注", "住宿备注", "remark", "roomRemark"),
+                        "IMPORT"
+                );
                 imported++;
             } catch (BusinessException ex) {
                 failures.add(new ImportFailure(row.rowNumber(), ex.getMessage()));
@@ -285,6 +314,53 @@ public class RoomService {
         return roomNo.trim();
     }
 
+    private LockedRooms lockRoomsForAssignment(Attendee attendee, String targetRoomNo) {
+        String oldRoomNo = attendee.getRoomNo();
+        List<String> roomNos = new ArrayList<>();
+        roomNos.add(targetRoomNo);
+        if (oldRoomNo != null && !oldRoomNo.isBlank() && !oldRoomNo.equals(targetRoomNo)) {
+            roomNos.add(oldRoomNo);
+        }
+        // 两个参会人互换房间时也按房号顺序拿锁，降低 A->B 与 B->A 形成循环等待的风险。
+        roomNos.sort(String::compareTo);
+        List<Room> lockedRooms = roomRepository.findByMeetingIdAndRoomNoInForUpdate(
+                attendee.getMeeting().getId(),
+                roomNos
+        );
+        Room target = lockedRooms.stream()
+                .filter(room -> targetRoomNo.equals(room.getRoomNo()))
+                .findFirst()
+                .orElseThrow(() -> BusinessException.notFound("房间号不存在: " + targetRoomNo));
+        Room previous = oldRoomNo == null || oldRoomNo.isBlank()
+                ? null
+                : lockedRooms.stream()
+                .filter(room -> oldRoomNo.equals(room.getRoomNo()))
+                .findFirst()
+                .orElse(null);
+        return new LockedRooms(target, previous);
+    }
+
+    private Attendee lockAttendeeForRoomChange(Long attendeeId) {
+        /*
+         * 必须先锁参会人再读取 oldRoomNo。否则同一参会人的两个并发请求可能分别锁住不同
+         * 目标房，最后一次写覆盖房号，却留下两个房间都为 ASSIGNED 的不一致状态。
+         */
+        Attendee attendee = attendeeRepository.findByIdForUpdate(attendeeId)
+                .orElseThrow(() -> BusinessException.notFound("参会人不存在"));
+        // 导入匹配可能已把旧版本实体放入一级缓存；refresh 同时保留写锁并强制读取最新 oldRoomNo。
+        entityManager.refresh(attendee, LockModeType.PESSIMISTIC_WRITE);
+        return attendee;
+    }
+
+    private Room lockCurrentRoomForUpdate(Long meetingId, String roomNo) {
+        if (roomNo == null || roomNo.isBlank()) {
+            return null;
+        }
+        return roomRepository.findByMeetingIdAndRoomNoInForUpdate(meetingId, List.of(roomNo)).stream()
+                .findFirst()
+                .orElse(null);
+    }
+
     private int normalizedCapacity(Integer capacity) {
         return capacity == null || capacity < 1 ? 1 : capacity;
     }
@@ -367,5 +443,8 @@ public class RoomService {
                 null,
                 details
         );
+    }
+
+    private record LockedRooms(Room target, Room previous) {
     }
 }

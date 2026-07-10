@@ -1,8 +1,9 @@
 import { defineStore } from "pinia";
 import { canUseDemoFallback, extractErrorMessage, http, isAuthFailure, unwrapApi } from "@/api/http";
+import { useMeetingStore } from "@/stores/meeting";
 
 const USER_KEY = "meetingos.user";
-export const SYSTEM_ADMIN_USERNAME = "admin";
+const SUPER_ADMIN_ROLE = "SUPER_ADMIN";
 
 interface LoginResponse {
   userId: number;
@@ -23,6 +24,7 @@ interface AuthUser {
   name: string;
   email: string;
   role: string;
+  roles: string[];
 }
 
 function createEmptyUser(): AuthUser {
@@ -30,23 +32,27 @@ function createEmptyUser(): AuthUser {
     username: "",
     name: "未登录",
     email: "",
-    role: ""
+    role: "",
+    roles: []
   };
 }
 
 function createAuthUser(username: string, displayName?: string, roles?: string[]): AuthUser {
   const normalizedUsername = username.trim();
   const normalizedDisplayName = displayName?.trim();
+  const normalizedRoles = normalizeRoles(roles);
   return {
     username: normalizedUsername,
     name: normalizedDisplayName || normalizedUsername || "未登录",
     email: normalizedUsername,
-    role: roles?.[0] || ""
+    // 保留 role 兼容旧缓存，同时完整保存 roles，避免接口返回顺序变化导致权限误判。
+    role: normalizedRoles[0] || "",
+    roles: normalizedRoles
   };
 }
 
-export function isSystemAdminUsername(username?: string) {
-  return (username || "").trim().toLocaleLowerCase("en-US") === SYSTEM_ADMIN_USERNAME;
+export function hasSystemAdminRole(roles?: readonly string[]) {
+  return Boolean(roles?.some((role) => role.trim().toUpperCase() === SUPER_ADMIN_ROLE));
 }
 
 function readStoredUser(): AuthUser {
@@ -66,12 +72,20 @@ function normalizeStoredUser(value: unknown): AuthUser {
   if (!value || typeof value !== "object") return createEmptyUser();
   const user = value as Record<string, unknown>;
   const username = readString(user.username) || readString(user.email);
+  const roles = normalizeRoles(user.roles, readString(user.role));
   return {
     username,
     name: readString(user.name) || readString(user.displayName) || username || "未登录",
     email: readString(user.email) || username,
-    role: readString(user.role)
+    role: roles[0] || "",
+    roles
   };
+}
+
+function normalizeRoles(value: unknown, legacyRole = "") {
+  const roles = Array.isArray(value) ? value.map(readString).filter(Boolean) : [];
+  if (!roles.length && legacyRole) roles.push(legacyRole);
+  return [...new Set(roles.map((role) => role.toUpperCase()))];
 }
 
 function readString(value: unknown) {
@@ -89,7 +103,8 @@ export const useAuthStore = defineStore("auth", {
   }),
   getters: {
     isAuthenticated: (state) => Boolean(state.user.username),
-    canAccessSystemSettings: (state) => isSystemAdminUsername(state.user.username)
+    // 初始管理员用户名可配置，系统权限必须与后端一样以 SUPER_ADMIN 角色为准。
+    canAccessSystemSettings: (state) => hasSystemAdminRole(state.user.roles)
   },
   actions: {
     async login(username: string, password: string) {
@@ -116,6 +131,8 @@ export const useAuthStore = defineStore("auth", {
         this.user = createAuthUser("admin", "超级管理员", ["SUPER_ADMIN"]);
         this.sessionChecked = true;
       }
+      // 每次建立新登录主体都从空会议上下文开始，避免浏览器内存中残留上一个账号的数据。
+      useMeetingStore().resetForAuthChange();
       persistUser(this.user);
     },
     async ensureSession() {
@@ -123,12 +140,18 @@ export const useAuthStore = defineStore("auth", {
         return true;
       }
       try {
+        const previousUsername = this.user.username;
         const data = unwrapApi(await http.get<CurrentUserResponse>("/auth/me"));
-        this.user = createAuthUser(data.username, data.displayName, data.roles);
+        const nextUser = createAuthUser(data.username, data.displayName, data.roles);
+        if (previousUsername !== nextUser.username) {
+          useMeetingStore().resetForAuthChange();
+        }
+        this.user = nextUser;
         this.sessionChecked = true;
         persistUser(this.user);
         return true;
       } catch (error) {
+        useMeetingStore().resetForAuthChange();
         this.user = createEmptyUser();
         this.sessionChecked = true;
         localStorage.removeItem(USER_KEY);
@@ -143,6 +166,7 @@ export const useAuthStore = defineStore("auth", {
       }
       this.user = createEmptyUser();
       this.sessionChecked = true;
+      useMeetingStore().resetForAuthChange();
       localStorage.removeItem(USER_KEY);
       localStorage.removeItem("meetingos.token");
     }

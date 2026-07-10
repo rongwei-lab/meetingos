@@ -178,6 +178,10 @@ watch(overview, () => {
   void renderDashboardCharts();
 });
 
+watch(routeMeetingId, (meetingId, previousMeetingId) => {
+  if (meetingId && meetingId !== previousMeetingId) loadDashboardSummary();
+});
+
 function formatPercent(value?: number) {
   if (!value) return "0%";
   return `${Math.round(value * 100)}%`;

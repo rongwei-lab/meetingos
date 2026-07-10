@@ -1,8 +1,10 @@
 package com.meetingos.publicapi;
 
 import com.meetingos.common.BusinessException;
+import com.meetingos.security.ClientIpResolver;
 import com.meetingos.security.PublicQueryProperties;
 import jakarta.servlet.http.HttpServletRequest;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Service;
 
 import java.time.Instant;
@@ -10,23 +12,45 @@ import java.util.ArrayDeque;
 import java.util.Deque;
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.atomic.AtomicLong;
 
 @Service
 public class PublicRateLimitService {
 
-    private final PublicQueryProperties properties;
-    private final Map<String, Deque<Long>> hitsByClient = new ConcurrentHashMap<>();
+    private static final long WINDOW_MILLIS = 60_000L;
+    private static final long ENTRY_TTL_MILLIS = 2 * WINDOW_MILLIS;
+    private static final long CLEANUP_INTERVAL_MILLIS = 60_000L;
+    private static final int MAX_TRACKED_CLIENTS = 10_000;
 
-    public PublicRateLimitService(PublicQueryProperties properties) {
+    private final PublicQueryProperties properties;
+    private final ClientIpResolver clientIpResolver;
+    private final Map<String, ClientHits> hitsByClient = new ConcurrentHashMap<>();
+    private final AtomicLong lastCleanupAt = new AtomicLong();
+    private final Object capacityLock = new Object();
+    private final int maxTrackedClients;
+
+    @Autowired
+    public PublicRateLimitService(PublicQueryProperties properties, ClientIpResolver clientIpResolver) {
+        this(properties, clientIpResolver, MAX_TRACKED_CLIENTS);
+    }
+
+    PublicRateLimitService(PublicQueryProperties properties, ClientIpResolver clientIpResolver, int maxTrackedClients) {
         this.properties = properties;
+        this.clientIpResolver = clientIpResolver;
+        this.maxTrackedClients = Math.max(1, maxTrackedClients);
     }
 
     public void check(HttpServletRequest request) {
         int limit = Math.max(1, properties.getRateLimitPerMinute());
         String client = resolveClientIp(request);
         long now = Instant.now().toEpochMilli();
-        long windowStart = now - 60_000;
-        Deque<Long> hits = hitsByClient.computeIfAbsent(client, key -> new ArrayDeque<>());
+        cleanupIfNeeded(now);
+        long windowStart = now - WINDOW_MILLIS;
+        ClientHits clientHits = getOrCreate(client, now);
+        if (clientHits == null) {
+            throw BusinessException.badRequest("公开查询过于频繁，请稍后再试");
+        }
+        Deque<Long> hits = clientHits.hits;
         synchronized (hits) {
             while (!hits.isEmpty() && hits.peekFirst() < windowStart) {
                 hits.removeFirst();
@@ -35,27 +59,64 @@ public class PublicRateLimitService {
                 throw BusinessException.badRequest("公开查询过于频繁，请稍后再试");
             }
             hits.addLast(now);
+            clientHits.lastTouchedAt = now;
         }
     }
 
     public String resolveClientIp(HttpServletRequest request) {
-        if (request == null) {
-            return "unknown";
+        return clientIpResolver.resolve(request);
+    }
+
+    private ClientHits getOrCreate(String client, long now) {
+        ClientHits existing = hitsByClient.get(client);
+        if (existing != null) {
+            return existing;
         }
-        /*
-         * 只有在明确处于可信反向代理之后时才接受转发头。
-         * 如果公网可以直连后端，客户端可随意伪造 X-Forwarded-For 绕过公开查询限流和审计。
-         */
-        if (properties.isTrustForwardHeaders()) {
-            String forwarded = request.getHeader("X-Forwarded-For");
-            if (forwarded != null && !forwarded.isBlank()) {
-                return forwarded.split(",")[0].trim();
+        synchronized (capacityLock) {
+            existing = hitsByClient.get(client);
+            if (existing != null) {
+                return existing;
             }
-            String realIp = request.getHeader("X-Real-IP");
-            if (realIp != null && !realIp.isBlank()) {
-                return realIp.trim();
+            if (hitsByClient.size() >= maxTrackedClients) {
+                cleanupExpiredEntries(now);
             }
+            if (hitsByClient.size() >= maxTrackedClients) {
+                return null;
+            }
+            ClientHits created = new ClientHits(now);
+            hitsByClient.put(client, created);
+            return created;
         }
-        return request.getRemoteAddr() == null ? "unknown" : request.getRemoteAddr();
+    }
+
+    private void cleanupIfNeeded(long now) {
+        long lastCleanup = lastCleanupAt.get();
+        if (now - lastCleanup < CLEANUP_INTERVAL_MILLIS || !lastCleanupAt.compareAndSet(lastCleanup, now)) {
+            return;
+        }
+        cleanupExpiredEntries(now);
+    }
+
+    void cleanupExpiredEntries(long now) {
+        hitsByClient.forEach((client, hits) -> {
+            synchronized (hits.hits) {
+                if (now - hits.lastTouchedAt >= ENTRY_TTL_MILLIS) {
+                    hitsByClient.remove(client, hits);
+                }
+            }
+        });
+    }
+
+    int trackedClientCount() {
+        return hitsByClient.size();
+    }
+
+    private static final class ClientHits {
+        private final Deque<Long> hits = new ArrayDeque<>();
+        private volatile long lastTouchedAt;
+
+        private ClientHits(long now) {
+            this.lastTouchedAt = now;
+        }
     }
 }

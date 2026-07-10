@@ -12,17 +12,25 @@ import java.util.Map;
 @Service
 public class TduckSyncLogService {
 
+    private static final int FORM_KEY_MAX_LENGTH = 120;
+    private static final int EVENT_ID_MAX_LENGTH = 120;
+    private static final int EVENT_TYPE_MAX_LENGTH = 80;
+    private static final int DATA_ID_MAX_LENGTH = 120;
+    private static final int MESSAGE_MAX_LENGTH = 500;
+
     private final TduckSyncLogRepository syncLogRepository;
 
     public TduckSyncLogService(TduckSyncLogRepository syncLogRepository) {
         this.syncLogRepository = syncLogRepository;
     }
 
-    @Transactional(propagation = Propagation.REQUIRES_NEW)
+    @Transactional(propagation = Propagation.MANDATORY)
     public TduckSyncLog success(TduckWebhookRequest request, Meeting meeting, String eventId, Attendee attendee, String message) {
         TduckSyncLog log = baseLog(request, meeting, eventId);
         log.setStatus(SyncStatus.SUCCESS);
-        log.setMessage(message);
+        // 仅成功事件占用幂等键；失败事件保留 eventId 便于排障，但不会阻止修复后的重试。
+        log.setSuccessEventId(eventId);
+        log.setMessage(truncate(message, MESSAGE_MAX_LENGTH));
         log.setAttendeeId(attendee.getId());
         return syncLogRepository.save(log);
     }
@@ -31,17 +39,17 @@ public class TduckSyncLogService {
     public TduckSyncLog failed(TduckWebhookRequest request, Meeting meeting, String message) {
         TduckSyncLog log = baseLog(request, meeting, request == null ? null : request.eventId());
         log.setStatus(SyncStatus.FAILED);
-        log.setMessage(message);
+        log.setMessage(truncate(message, MESSAGE_MAX_LENGTH));
         return syncLogRepository.save(log);
     }
 
     private TduckSyncLog baseLog(TduckWebhookRequest request, Meeting meeting, String eventId) {
         TduckSyncLog log = new TduckSyncLog();
         log.setMeeting(meeting);
-        log.setFormKey(firstNonBlank(request == null ? null : request.formKey(), "UNKNOWN"));
-        log.setEventId(eventId);
-        log.setEventType(firstNonBlank(request == null ? null : request.eventType(), "UNKNOWN"));
-        log.setTduckDataId(request == null ? null : request.dataId());
+        log.setFormKey(truncate(firstNonBlank(request == null ? null : request.formKey(), "UNKNOWN"), FORM_KEY_MAX_LENGTH));
+        log.setEventId(truncate(eventId, EVENT_ID_MAX_LENGTH));
+        log.setEventType(truncate(firstNonBlank(request == null ? null : request.eventType(), "UNKNOWN"), EVENT_TYPE_MAX_LENGTH));
+        log.setTduckDataId(truncate(request == null ? null : request.dataId(), DATA_ID_MAX_LENGTH));
         log.setRawPayload(toPayload(request));
         return log;
     }
@@ -61,5 +69,13 @@ public class TduckSyncLogService {
 
     private String firstNonBlank(String value, String fallback) {
         return value == null || value.isBlank() ? fallback : value;
+    }
+
+    private String truncate(String value, int maxLength) {
+        if (value == null) {
+            return null;
+        }
+        String normalized = value.trim();
+        return normalized.length() <= maxLength ? normalized : normalized.substring(0, maxLength);
     }
 }

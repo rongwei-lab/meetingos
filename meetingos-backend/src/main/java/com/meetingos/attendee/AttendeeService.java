@@ -16,6 +16,8 @@ import com.meetingos.meeting.MeetingRepository;
 import com.meetingos.permission.MeetingAccessService;
 import com.meetingos.publicapi.PublicQueryHistoryRepository;
 import com.meetingos.publicapi.PublicQueryType;
+import com.meetingos.room.AssignRoomRequest;
+import com.meetingos.room.RoomService;
 import com.meetingos.security.SecurityUtils;
 import com.meetingos.seating.SeatAssignmentRepository;
 import com.meetingos.settings.SystemSettingsService;
@@ -23,6 +25,8 @@ import com.meetingos.tduck.TduckFieldMapping;
 import com.meetingos.tduck.TduckFieldMappingRepository;
 import com.meetingos.tduck.TduckSubmissionFields;
 import org.springframework.stereotype.Service;
+import org.springframework.transaction.interceptor.TransactionAspectSupport;
+import org.springframework.transaction.annotation.Isolation;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.web.multipart.MultipartFile;
 
@@ -32,6 +36,7 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
+import java.util.Optional;
 import java.util.UUID;
 
 @Service
@@ -51,6 +56,7 @@ public class AttendeeService {
     private final PublicQueryHistoryRepository publicQueryHistoryRepository;
     private final SeatAssignmentRepository seatAssignmentRepository;
     private final DinnerAssignmentRepository dinnerAssignmentRepository;
+    private final RoomService roomService;
 
     public AttendeeService(AttendeeRepository attendeeRepository,
                            MeetingRepository meetingRepository,
@@ -59,7 +65,8 @@ public class AttendeeService {
                            TduckFieldMappingRepository tduckFieldMappingRepository,
                            PublicQueryHistoryRepository publicQueryHistoryRepository,
                            SeatAssignmentRepository seatAssignmentRepository,
-                           DinnerAssignmentRepository dinnerAssignmentRepository) {
+                           DinnerAssignmentRepository dinnerAssignmentRepository,
+                           RoomService roomService) {
         this.attendeeRepository = attendeeRepository;
         this.meetingRepository = meetingRepository;
         this.meetingAccessService = meetingAccessService;
@@ -68,9 +75,10 @@ public class AttendeeService {
         this.publicQueryHistoryRepository = publicQueryHistoryRepository;
         this.seatAssignmentRepository = seatAssignmentRepository;
         this.dinnerAssignmentRepository = dinnerAssignmentRepository;
+        this.roomService = roomService;
     }
 
-    @Transactional
+    @Transactional(isolation = Isolation.READ_COMMITTED)
     public Attendee create(AttendeeRequest request) {
         Meeting meeting = meetingRepository.findById(request.meetingId())
                 .orElseThrow(() -> BusinessException.notFound("会议不存在"));
@@ -85,7 +93,8 @@ public class AttendeeService {
         applyRequest(attendee, request);
         attendee.setRegisteredAt(LocalDateTime.now());
         attendee.setAttendeeCode(generateAttendeeCode(meeting));
-        return attendeeRepository.save(attendee);
+        Attendee saved = attendeeRepository.saveAndFlush(attendee);
+        return synchronizeRoomRequest(saved, request, "ATTENDEE_CREATE");
     }
 
     @Transactional(readOnly = true)
@@ -110,9 +119,9 @@ public class AttendeeService {
                 .orElseThrow(() -> BusinessException.notFound("参会人不存在"));
     }
 
-    @Transactional
+    @Transactional(isolation = Isolation.READ_COMMITTED)
     public Attendee update(Long attendeeId, AttendeeRequest request) {
-        Attendee attendee = attendeeRepository.findById(attendeeId)
+        Attendee attendee = attendeeRepository.findByIdForUpdate(attendeeId)
                 .orElseThrow(() -> BusinessException.notFound("参会人不存在"));
         meetingAccessService.requireManage(attendee.getMeeting().getId());
         Meeting meeting = meetingRepository.findById(request.meetingId())
@@ -126,13 +135,14 @@ public class AttendeeService {
                 .ifPresent(existing -> {
                     throw BusinessException.conflict("同一会议内手机号已存在报名记录");
                 });
+        synchronizeRoomRequest(attendee, request, "ATTENDEE_UPDATE");
         applyRequest(attendee, request);
         return attendee;
     }
 
     @Transactional
     public Attendee review(Long attendeeId, ReviewRequest request) {
-        Attendee attendee = attendeeRepository.findById(attendeeId)
+        Attendee attendee = attendeeRepository.findByIdForUpdate(attendeeId)
                 .orElseThrow(() -> BusinessException.notFound("参会人不存在"));
         meetingAccessService.requireManage(attendee.getMeeting().getId());
         applyReview(attendee, request.reviewStatus(), request.reason(), request.remark());
@@ -144,7 +154,16 @@ public class AttendeeService {
         if (request.attendeeIds() == null || request.attendeeIds().isEmpty()) {
             throw BusinessException.badRequest("批量审核必须提供 attendeeIds");
         }
-        List<Attendee> attendees = attendeeRepository.findAllById(request.attendeeIds());
+        /*
+         * 审核会更新 Attendee 整行。按 ID 固定顺序逐个加锁，既避免旧 roomNo 回写覆盖并发分房，
+         * 也避免两个批量请求以相反顺序拿 attendee 锁形成死锁。
+         */
+        List<Attendee> attendees = request.attendeeIds().stream()
+                .distinct()
+                .sorted()
+                .map(attendeeRepository::findByIdForUpdate)
+                .flatMap(Optional::stream)
+                .toList();
         attendees.forEach(attendee -> meetingAccessService.requireManage(attendee.getMeeting().getId()));
         return (int) attendees.stream()
                 .filter(attendee -> applyReview(attendee, request.reviewStatus(), request.reason(), request.remark()))
@@ -153,7 +172,7 @@ public class AttendeeService {
 
     @Transactional
     public Attendee updateTags(Long attendeeId, String tags) {
-        Attendee attendee = attendeeRepository.findById(attendeeId)
+        Attendee attendee = attendeeRepository.findByIdForUpdate(attendeeId)
                 .orElseThrow(() -> BusinessException.notFound("参会人不存在"));
         meetingAccessService.requireManage(attendee.getMeeting().getId());
         attendee.setTags(tags);
@@ -162,7 +181,7 @@ public class AttendeeService {
 
     @Transactional
     public Attendee cancel(Long attendeeId, String reason) {
-        Attendee attendee = attendeeRepository.findById(attendeeId)
+        Attendee attendee = attendeeRepository.findByIdForUpdate(attendeeId)
                 .orElseThrow(() -> BusinessException.notFound("参会人不存在"));
         meetingAccessService.requireManage(attendee.getMeeting().getId());
         attendee.setReviewStatus(ReviewStatus.CANCELLED);
@@ -172,13 +191,17 @@ public class AttendeeService {
         return attendee;
     }
 
-    @Transactional
+    @Transactional(isolation = Isolation.READ_COMMITTED)
     public Attendee assignRoom(Long attendeeId, String roomNo, String roomRemark) {
-        Attendee attendee = attendeeRepository.findById(attendeeId)
+        Attendee attendee = attendeeRepository.findByIdForUpdate(attendeeId)
                 .orElseThrow(() -> BusinessException.notFound("参会人不存在"));
-        attendee.setRoomNo(roomNo);
-        attendee.setRoomRemark(roomRemark);
-        return attendee;
+        return synchronizeRoomRequest(
+                attendee,
+                roomNo == null || roomNo.isBlank() ? Boolean.FALSE : Boolean.TRUE,
+                roomNo,
+                roomRemark,
+                "ATTENDEE_ASSIGN_ROOM"
+        );
     }
 
     @Transactional(readOnly = true)
@@ -187,7 +210,7 @@ public class AttendeeService {
                 .orElseThrow(() -> BusinessException.notFound("未找到参会人"));
     }
 
-    @Transactional
+    @Transactional(isolation = Isolation.READ_COMMITTED)
     public ImportResult importFile(Long meetingId, MultipartFile file) {
         Meeting meeting = meetingRepository.findById(meetingId)
                 .orElseThrow(() -> BusinessException.notFound("会议不存在"));
@@ -197,13 +220,32 @@ public class AttendeeService {
         int imported = 0;
 
         for (TableRow row : rows) {
+            Attendee saved = null;
             try {
                 Attendee attendee = fromRow(meeting, row);
-                attendeeRepository.save(attendee);
+                String requestedRoomNo = row.get("房间号", "房号", "roomNo", "room");
+                saved = attendeeRepository.saveAndFlush(attendee);
+                synchronizeRoomRequest(
+                        saved,
+                        attendee.isAccommodationRequired(),
+                        requestedRoomNo,
+                        attendee.getRoomRemark(),
+                        "ATTENDEE_IMPORT"
+                );
                 imported++;
             } catch (BusinessException ex) {
+                discardFailedImport(saved);
                 failures.add(new ImportFailure(row.rowNumber(), ex.getMessage()));
             } catch (RuntimeException ex) {
+                boolean rowWasPersisted = saved != null;
+                discardFailedImport(saved);
+                if (rowWasPersisted || TransactionAspectSupport.currentTransactionStatus().isRollbackOnly()) {
+                    /*
+                     * 保存后的非业务异常可能发生在房态更新或操作日志阶段，仅删除 attendee 无法撤销
+                     * 这些副作用；唯一键、连接或 flush 异常也会使事务不可提交，两者都必须回滚整批。
+                     */
+                    throw ex;
+                }
                 failures.add(new ImportFailure(row.rowNumber(), "数据格式不正确，请检查该行字段"));
             }
         }
@@ -249,11 +291,47 @@ public class AttendeeService {
         attendee.setIdentityNo(request.identityNo());
         attendee.setEmail(request.email());
         attendee.setAttendeeType(request.attendeeType() == null ? AttendeeType.NORMAL : request.attendeeType());
-        attendee.setAccommodationRequired(Boolean.TRUE.equals(request.accommodationRequired()));
-        attendee.setRoomNo(request.roomNo());
-        attendee.setRoomRemark(request.roomRemark());
         attendee.setRemark(request.remark());
         attendee.setTags(request.tags());
+    }
+
+    private Attendee synchronizeRoomRequest(Attendee attendee, AttendeeRequest request, String source) {
+        return synchronizeRoomRequest(
+                attendee,
+                request.accommodationRequired(),
+                request.roomNo(),
+                request.roomRemark(),
+                source
+        );
+    }
+
+    private Attendee synchronizeRoomRequest(Attendee attendee,
+                                            Boolean accommodationRequired,
+                                            String requestedRoomNo,
+                                            String roomRemark,
+                                            String source) {
+        String targetRoomNo = blankToNull(requestedRoomNo);
+        if (targetRoomNo != null) {
+            // 指定房号即视为实际占用，统一由 RoomService 完成 attendee -> room 行锁和容量校验。
+            return roomService.assignWithinTransaction(
+                    new AssignRoomRequest(attendee.getId(), targetRoomNo, roomRemark),
+                    source
+            );
+        }
+        if (attendee.getRoomNo() != null && !attendee.getRoomNo().isBlank()) {
+            roomService.clearAssignmentWithinTransaction(attendee.getId(), source + "_CLEAR");
+        }
+        // “需要住宿但尚未排房”仍是合法业务状态，不占用任何房间容量。
+        attendee.setAccommodationRequired(Boolean.TRUE.equals(accommodationRequired));
+        attendee.setRoomNo(null);
+        attendee.setRoomRemark(roomRemark);
+        return attendee;
+    }
+
+    private void discardFailedImport(Attendee attendee) {
+        if (attendee != null && attendee.getId() != null) {
+            attendeeRepository.delete(attendee);
+        }
     }
 
     private boolean applyReview(Attendee attendee, ReviewStatus status, String reason, String remark) {
@@ -335,7 +413,6 @@ public class AttendeeService {
         attendee.setEmail(row.get("邮箱", "电子邮箱", "email"));
         attendee.setAttendeeType(parseAttendeeType(row.get("参会类型", "类型", "attendeeType", "type")));
         attendee.setAccommodationRequired(parseBoolean(row.get("是否住宿", "住宿", "accommodationRequired", "needRoom", "roomRequired")));
-        attendee.setRoomNo(row.get("房间号", "房号", "roomNo", "room"));
         attendee.setRoomRemark(row.get("房间备注", "住宿备注", "roomRemark"));
         attendee.setRemark(row.get("备注", "remark", "note"));
         attendee.setTags(row.get("标签", "tags"));

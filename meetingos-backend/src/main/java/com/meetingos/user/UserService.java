@@ -19,8 +19,6 @@ import java.util.Set;
 @Service
 public class UserService {
 
-    private static final String BUILT_IN_ADMIN_USERNAME = "admin";
-
     private final AppUserRepository userRepository;
     private final PasswordEncoder passwordEncoder;
 
@@ -56,7 +54,7 @@ public class UserService {
     public UserResponse update(Long id, UpdateUserRequest request) {
         AppUser user = userRepository.findById(id)
                 .orElseThrow(() -> BusinessException.notFound("用户不存在"));
-        ensureBuiltInAdminKeepsSystemAccess(user, request);
+        ensureActiveSuperAdminRemains(user, request);
         user.setDisplayName(request.displayName().trim());
         user.setStatus(request.status());
         user.setRoles(normalizeRoles(request.roles()));
@@ -92,21 +90,40 @@ public class UserService {
         return new LinkedHashSet<>(roles);
     }
 
-    private void ensureBuiltInAdminKeepsSystemAccess(AppUser user, UpdateUserRequest request) {
-        if (!BUILT_IN_ADMIN_USERNAME.equals(user.getUsername())) {
+    private void ensureActiveSuperAdminRemains(AppUser user, UpdateUserRequest request) {
+        boolean currentlyProvidesSystemAccess = user.getStatus() == UserStatus.ACTIVE
+                && user.getRoles().contains(Role.SUPER_ADMIN);
+        boolean keepsSystemAccess = request.status() == UserStatus.ACTIVE
+                && request.roles() != null
+                && request.roles().contains(Role.SUPER_ADMIN);
+        if (!currentlyProvidesSystemAccess || keepsSystemAccess) {
             return;
         }
+
         /*
-         * 系统设置入口由 SystemAdminAccess 固定识别内置 admin 账号。
-         * 因此 admin 不能被停用，也不能移除 SUPER_ADMIN，否则会把用户管理、
-         * 品牌配置、TDuck 接入等全局设置全部锁死，只能手工改库恢复。
+         * 系统管理权限只由活跃账号的 SUPER_ADMIN 角色决定。允许在存在其他活跃超级管理员时
+         * 调整当前账号，但禁止停用或降级最后一个超级管理员，避免只能通过手工改库恢复。
          */
+        boolean hasAnotherActiveSuperAdmin = userRepository.findAll().stream()
+                .filter(candidate -> !sameUser(candidate, user))
+                .anyMatch(candidate -> candidate.getStatus() == UserStatus.ACTIVE
+                        && candidate.getRoles().contains(Role.SUPER_ADMIN));
+        if (hasAnotherActiveSuperAdmin) {
+            return;
+        }
         if (request.status() != UserStatus.ACTIVE) {
-            throw BusinessException.badRequest("内置 admin 账号不能停用");
+            throw BusinessException.badRequest("最后一个启用的超级管理员账号不能停用");
         }
         if (request.roles() == null || !request.roles().contains(Role.SUPER_ADMIN)) {
-            throw BusinessException.badRequest("内置 admin 账号必须保留超级管理员角色");
+            throw BusinessException.badRequest("最后一个启用的超级管理员账号必须保留超级管理员角色");
         }
+    }
+
+    private boolean sameUser(AppUser first, AppUser second) {
+        if (first == second) {
+            return true;
+        }
+        return first.getId() != null && first.getId().equals(second.getId());
     }
 
     private String normalizeUsername(String username) {

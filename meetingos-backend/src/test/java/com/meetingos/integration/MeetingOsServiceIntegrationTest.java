@@ -53,6 +53,7 @@ import com.meetingos.tduck.SyncStatus;
 import com.meetingos.tduck.TduckFieldMapping;
 import com.meetingos.tduck.TduckFieldMappingRepository;
 import com.meetingos.tduck.TduckService;
+import com.meetingos.tduck.TduckTransactionRunner;
 import com.meetingos.tduck.TduckWebhookRequest;
 import com.meetingos.tduck.TduckWebhookResult;
 import com.meetingos.user.CreateUserRequest;
@@ -69,6 +70,7 @@ import org.springframework.security.core.authority.SimpleGrantedAuthority;
 import org.springframework.security.core.context.SecurityContextHolder;
 import org.springframework.security.test.context.support.WithMockUser;
 import org.springframework.test.context.ActiveProfiles;
+import org.springframework.test.context.transaction.AfterTransaction;
 import org.springframework.test.web.servlet.MockMvc;
 import org.springframework.transaction.annotation.Transactional;
 import org.apache.poi.xssf.usermodel.XSSFWorkbook;
@@ -102,6 +104,12 @@ class MeetingOsServiceIntegrationTest {
     private static final String STRONG_TEST_PASSWORD = "MeetingOS@2026";
     private static final String TEST_PUBLIC_QUERY_TOKEN = "pq_test_ndef2026";
     private static final ObjectMapper OBJECT_MAPPER = new ObjectMapper();
+    private static final List<String> COMMITTED_TDUCK_TEST_PHONES = List.of(
+            "13800009999",
+            "13800007777",
+            "13800007778",
+            "13800006666"
+    );
 
     @Autowired
     private SeatingService seatingService;
@@ -117,6 +125,9 @@ class MeetingOsServiceIntegrationTest {
 
     @Autowired
     private TduckService tduckService;
+
+    @Autowired
+    private TduckTransactionRunner tduckTransactionRunner;
 
     @Autowired
     private TduckFieldMappingRepository tduckFieldMappingRepository;
@@ -153,6 +164,20 @@ class MeetingOsServiceIntegrationTest {
 
     @Autowired
     private OperationLogRepository operationLogRepository;
+
+    @AfterTransaction
+    void cleanupCommittedTduckAttendees() {
+        /*
+         * Webhook 使用 REQUIRES_NEW，提交结果不会随测试方法的外层事务回滚。
+         * 在外层测试事务结束后再用独立事务清理，避免固定手机号污染同类中的统计和更新用例。
+         */
+        tduckTransactionRunner.requiresNew(() -> {
+            COMMITTED_TDUCK_TEST_PHONES.forEach(phone ->
+                    attendeeRepository.findByMeetingIdAndPhone(1L, phone).ifPresent(attendeeRepository::delete)
+            );
+            return null;
+        });
+    }
 
     @Test
     void autoAssignSeatsKeepsApprovedAttendeesAssignable() {
@@ -648,6 +673,7 @@ class MeetingOsServiceIntegrationTest {
         assertThat(attendee.getReviewStatus()).isEqualTo(ReviewStatus.CANCELLED);
         assertThat(attendee.getReviewReason()).isEqualTo("行程取消");
 
+        ensureRoom("1802");
         var updated = attendeeService.update(2L, new AttendeeRequest(
                 1L,
                 "王子墨",

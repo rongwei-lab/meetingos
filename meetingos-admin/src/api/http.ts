@@ -44,6 +44,10 @@ export function isAuthFailure(error: unknown) {
   return isUnauthenticated(error) || isForbidden(error);
 }
 
+export function isRequestCanceled(error: unknown) {
+  return axios.isCancel(error) || (error instanceof DOMException && error.name === "AbortError");
+}
+
 export const demoFallbackEnabled =
   import.meta.env.DEV && import.meta.env.VITE_ENABLE_DEMO_FALLBACK !== "false";
 

@@ -16,6 +16,10 @@ import java.util.Optional;
 
 public interface AttendeeRepository extends JpaRepository<Attendee, Long> {
 
+    @Lock(LockModeType.PESSIMISTIC_WRITE)
+    @Query("select a from Attendee a where a.id = :id")
+    Optional<Attendee> findByIdForUpdate(@Param("id") Long id);
+
     Optional<Attendee> findByMeetingAndPhone(Meeting meeting, String phone);
 
     Optional<Attendee> findByMeetingIdAndAttendeeCode(Long meetingId, String attendeeCode);
@@ -31,6 +35,11 @@ public interface AttendeeRepository extends JpaRepository<Attendee, Long> {
     List<Attendee> findByMeetingIdAndPhoneEndingWith(Long meetingId, String phone);
 
     Optional<Attendee> findByMeetingIdAndTduckDataId(Long meetingId, String tduckDataId);
+
+    @Lock(LockModeType.PESSIMISTIC_WRITE)
+    @Query("select a from Attendee a where a.meeting.id = :meetingId and a.tduckDataId = :tduckDataId")
+    Optional<Attendee> findByMeetingIdAndTduckDataIdForUpdate(@Param("meetingId") Long meetingId,
+                                                              @Param("tduckDataId") String tduckDataId);
 
     Optional<Attendee> findByMeetingIdAndIdentityNo(Long meetingId, String identityNo);
 
