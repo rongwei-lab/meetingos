@@ -1,6 +1,7 @@
 package com.meetingos.exporttask;
 
 import com.meetingos.attendee.Attendee;
+import com.meetingos.attendee.AttendeeExportData;
 import com.meetingos.attendee.AttendeeRepository;
 import com.meetingos.attendee.AttendeeService;
 import com.meetingos.attendee.CheckinStatus;
@@ -19,6 +20,7 @@ import com.meetingos.dinner.DinnerService;
 import com.meetingos.meeting.Meeting;
 import com.meetingos.meeting.MeetingRepository;
 import com.meetingos.permission.MeetingAccessService;
+import com.meetingos.publicapi.PublicQueryType;
 import com.meetingos.room.RoomService;
 import com.meetingos.security.SecurityUtils;
 import com.meetingos.seating.SeatAssignment;
@@ -58,6 +60,7 @@ import java.time.LocalDateTime;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.HexFormat;
+import java.util.HashSet;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Locale;
@@ -79,12 +82,6 @@ public class ExportTaskService {
     private static final long SYNCHRONOUS_EXPORT_ROW_LIMIT = 10_000L;
     // 与文件任务执行器的 2 个工作线程 + 32 个有界队列槽位一致，避免一次恢复扫描制造无效派发洪峰。
     private static final int RECOVERY_BATCH_SIZE = 34;
-    private static final List<String> ATTENDEE_HEADERS = List.of(
-            "ID", "姓名", "手机号", "单位", "职务", "证件号", "邮箱", "参会类型",
-            "是否住宿", "房间号", "房间备注", "审核状态", "审核原因", "审核备注",
-            "审核人", "审核时间", "报名时间", "签到状态", "签到时间", "签到入口",
-            "签到操作人", "参会码", "标签", "备注"
-    );
     private static final List<String> CHECKIN_HEADERS = List.of(
             "记录ID", "姓名", "手机号", "签到方式", "结果", "入口", "操作人", "签到时间", "消息"
     );
@@ -739,10 +736,14 @@ public class ExportTaskService {
 
     private StreamingExport attendeeStreamingExport(TaskWork work) {
         boolean masked = currentMaskSetting();
+        Meeting meeting = transactionTemplate.execute(status -> meetingRepository.findById(work.meetingId())
+                .orElseThrow(() -> BusinessException.notFound("会议不存在")));
+        if (meeting == null) {
+            throw BusinessException.notFound("会议不存在");
+        }
         ExportRange range = attendeeExportRange(work);
-        List<DynamicColumn> dynamicColumns = discoverAttendeeColumns(work, range);
-        List<String> headers = new ArrayList<>(ATTENDEE_HEADERS);
-        headers.addAll(dynamicColumns.stream().map(DynamicColumn::header).toList());
+        List<AttendeeExportData.DynamicColumn> dynamicColumns = discoverAttendeeColumns(work, range);
+        List<String> headers = AttendeeExportData.headers(dynamicColumns);
 
         ExportRowProducer producer = consumer -> {
             long cursor = 0L;
@@ -752,8 +753,14 @@ public class ExportTaskService {
                 long requestedCursor = cursor;
                 CursorPage batch = transactionTemplate.execute(status -> {
                     List<Attendee> attendees = loadAttendeeBatch(work, range.maxId(), requestedCursor);
+                    Map<Long, AttendeeExportData.RelatedData> relatedData = loadAttendeeExportRelations(meeting.getId(), attendees);
                     List<List<?>> rows = attendees.stream()
-                            .<List<?>>map(attendee -> attendeeRow(attendee, dynamicColumns, masked))
+                            .<List<?>>map(attendee -> AttendeeExportData.row(
+                                    attendee,
+                                    relatedData.get(attendee.getId()),
+                                    dynamicColumns,
+                                    masked
+                            ))
                             .toList();
                     long nextCursor = attendees.isEmpty() ? requestedCursor : attendees.get(attendees.size() - 1).getId();
                     return new CursorPage(rows, nextCursor, attendees.size() < EXPORT_BATCH_SIZE || nextCursor >= range.maxId());
@@ -779,10 +786,10 @@ public class ExportTaskService {
         return new StreamingExport(attendeeSheetName(work.type()), headers, producer, 35);
     }
 
-    private List<DynamicColumn> discoverAttendeeColumns(TaskWork work, ExportRange range) {
+    private List<AttendeeExportData.DynamicColumn> discoverAttendeeColumns(TaskWork work, ExportRange range) {
         Map<String, String> configuredLabels = transactionTemplate.execute(status -> {
             Map<String, String> labels = new LinkedHashMap<>();
-            for (TduckFieldMapping mapping : tduckFieldMappingRepository.findByMeetingId(work.meetingId())) {
+            for (TduckFieldMapping mapping : tduckFieldMappingRepository.findByMeetingIdOrderByIdAsc(work.meetingId())) {
                 String key = mapping.getTduckFieldKey();
                 if (!hasExportableFormValueKey(key)) {
                     continue;
@@ -792,7 +799,11 @@ public class ExportTaskService {
             }
             return labels;
         });
-        Map<String, DynamicColumn> columns = new LinkedHashMap<>();
+        Map<String, AttendeeExportData.DynamicColumn> columns = new LinkedHashMap<>();
+        if (configuredLabels != null) {
+            configuredLabels.forEach((key, label) ->
+                    columns.putIfAbsent(key, new AttendeeExportData.DynamicColumn(label, key, key + "label")));
+        }
 
         long cursor = 0L;
         long processed = 0L;
@@ -822,7 +833,7 @@ public class ExportTaskService {
                         continue;
                     }
                     String label = configuredLabels == null ? key : configuredLabels.getOrDefault(key, key);
-                    columns.putIfAbsent(key, new DynamicColumn(label, key, key + "label"));
+                    columns.putIfAbsent(key, new AttendeeExportData.DynamicColumn(label, key, key + "label"));
                 }
             }
             processed += batch.scannedRows();
@@ -880,6 +891,66 @@ public class ExportTaskService {
                 .getResultList();
     }
 
+    private Map<Long, AttendeeExportData.RelatedData> loadAttendeeExportRelations(Long meetingId,
+                                                                                   List<Attendee> attendees) {
+        if (attendees.isEmpty()) {
+            return Map.of();
+        }
+        List<Long> attendeeIds = attendees.stream().map(Attendee::getId).toList();
+        List<SeatAssignment> seatAssignments = entityManager.createQuery("""
+                        select assignment
+                        from SeatAssignment assignment
+                        join fetch assignment.attendee
+                        join fetch assignment.seat
+                        where assignment.meeting.id = :meetingId
+                          and assignment.attendee.id in :attendeeIds
+                        """, SeatAssignment.class)
+                .setParameter("meetingId", meetingId)
+                .setParameter("attendeeIds", attendeeIds)
+                .getResultList();
+        List<Object[]> queriedTypes = entityManager.createQuery("""
+                        select distinct history.attendee.id, history.queryType
+                        from PublicQueryHistory history
+                        where history.meeting.id = :meetingId
+                          and history.attendee.id in :attendeeIds
+                          and history.queryType in :queryTypes
+                        """, Object[].class)
+                .setParameter("meetingId", meetingId)
+                .setParameter("attendeeIds", attendeeIds)
+                .setParameter("queryTypes", List.of(PublicQueryType.SEAT, PublicQueryType.ROOM))
+                .getResultList();
+
+        Map<Long, SeatAssignment> seatByAttendeeId = seatAssignments.stream()
+                .collect(Collectors.toMap(
+                        assignment -> assignment.getAttendee().getId(),
+                        assignment -> assignment,
+                        (existing, replacement) -> existing,
+                        LinkedHashMap::new
+                ));
+        Set<Long> seatQueried = new HashSet<>();
+        Set<Long> roomQueried = new HashSet<>();
+        for (Object[] queried : queriedTypes) {
+            Long attendeeId = (Long) queried[0];
+            PublicQueryType queryType = (PublicQueryType) queried[1];
+            switch (queryType) {
+                case SEAT -> seatQueried.add(attendeeId);
+                case ROOM -> roomQueried.add(attendeeId);
+                default -> {
+                }
+            }
+        }
+
+        Map<Long, AttendeeExportData.RelatedData> result = new LinkedHashMap<>();
+        for (Attendee attendee : attendees) {
+            result.put(attendee.getId(), new AttendeeExportData.RelatedData(
+                    seatByAttendeeId.get(attendee.getId()),
+                    seatQueried.contains(attendee.getId()),
+                    roomQueried.contains(attendee.getId())
+            ));
+        }
+        return result;
+    }
+
     private String attendeeFilterClause(String type) {
         StringBuilder clause = new StringBuilder("from Attendee attendee where attendee.meeting.id = :meetingId");
         if ("approved".equals(type) || "no-checkin".equals(type)) {
@@ -903,43 +974,6 @@ public class ExportTaskService {
 
     private long number(Object value) {
         return value instanceof Number numeric ? numeric.longValue() : 0L;
-    }
-
-    private List<?> attendeeRow(Attendee attendee, List<DynamicColumn> dynamicColumns, boolean masked) {
-        List<Object> row = new ArrayList<>(List.of(
-                attendee.getId(),
-                attendee.getName(),
-                masked ? SensitiveDataMasker.maskPhone(attendee.getPhone()) : attendee.getPhone(),
-                nullable(attendee.getOrganization()),
-                nullable(attendee.getTitle()),
-                nullable(masked ? SensitiveDataMasker.maskIdentityNo(attendee.getIdentityNo()) : attendee.getIdentityNo()),
-                nullable(masked ? SensitiveDataMasker.maskEmail(attendee.getEmail()) : attendee.getEmail()),
-                attendee.getAttendeeType(),
-                attendee.isAccommodationRequired() ? "是" : "否",
-                nullable(attendee.getRoomNo()),
-                nullable(attendee.getRoomRemark()),
-                attendee.getReviewStatus(),
-                nullable(attendee.getReviewReason()),
-                nullable(attendee.getReviewRemark()),
-                nullable(attendee.getReviewedBy()),
-                nullable(attendee.getReviewedAt()),
-                nullable(attendee.getRegisteredAt()),
-                attendee.getCheckinStatus(),
-                nullable(attendee.getCheckedInAt()),
-                nullable(attendee.getCheckinEntrance()),
-                nullable(attendee.getCheckinOperator()),
-                nullable(attendee.getAttendeeCode()),
-                nullable(attendee.getTags()),
-                nullable(attendee.getRemark())
-        ));
-        Map<String, Object> snapshot = attendee.getRawDataSnapshot() == null ? Map.of() : attendee.getRawDataSnapshot();
-        for (DynamicColumn column : dynamicColumns) {
-            Object value = snapshot.getOrDefault(column.labelKey(), snapshot.get(column.valueKey()));
-            row.add(nullable(masked
-                    ? SensitiveDataMasker.maskValue(column.valueKey(), column.header(), value)
-                    : value));
-        }
-        return row;
     }
 
     private boolean hasExportableFormValueKey(String key) {
@@ -1360,6 +1394,4 @@ public class ExportTaskService {
     private record ExportRange(long maxId, long totalRows) {
     }
 
-    private record DynamicColumn(String header, String valueKey, String labelKey) {
-    }
 }

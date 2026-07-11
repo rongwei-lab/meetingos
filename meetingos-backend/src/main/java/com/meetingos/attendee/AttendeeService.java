@@ -9,7 +9,6 @@ import com.meetingos.common.ImportResult;
 import com.meetingos.common.ImportRowTransactionRunner;
 import com.meetingos.common.PageRequests;
 import com.meetingos.common.PageResponse;
-import com.meetingos.common.SensitiveDataMasker;
 import com.meetingos.common.TableFileReader;
 import com.meetingos.common.TableRow;
 import com.meetingos.dinner.DinnerAssignmentRepository;
@@ -22,6 +21,7 @@ import com.meetingos.room.AssignRoomRequest;
 import com.meetingos.room.RoomService;
 import com.meetingos.security.SecurityUtils;
 import com.meetingos.seating.SeatAssignmentRepository;
+import com.meetingos.seating.SeatAssignment;
 import com.meetingos.settings.SystemSettingsService;
 import com.meetingos.tduck.TduckFieldMapping;
 import com.meetingos.tduck.TduckFieldMappingRepository;
@@ -348,6 +348,8 @@ public class AttendeeService {
     public ExportTable exportTable(Long meetingId, String type) {
         // 导出类型保持和通用导出接口一致，便于前端在专用按钮和“数据导出”页之间复用。
         String normalizedType = normalizeExportType(type);
+        Meeting meeting = meetingRepository.findById(meetingId)
+                .orElseThrow(() -> BusinessException.notFound("会议不存在"));
         List<Attendee> attendees = switch (normalizedType) {
             case "approved" -> attendeeRepository.findByMeetingIdAndReviewStatusOrderByIdAsc(meetingId, ReviewStatus.APPROVED);
             case "no-checkin" -> attendeeRepository.findByMeetingIdAndReviewStatusAndCheckinStatusOrderByIdAsc(
@@ -357,20 +359,13 @@ public class AttendeeService {
             );
             default -> attendeeRepository.findByMeetingIdOrderByIdAsc(meetingId);
         };
-        List<String> baseHeaders = List.of(
-                "ID", "姓名", "手机号", "单位", "职务", "证件号", "邮箱", "参会类型",
-                "是否住宿", "房间号", "房间备注", "审核状态", "审核原因", "审核备注",
-                "审核人", "审核时间", "报名时间", "签到状态", "签到时间", "签到入口",
-                "签到操作人", "参会码", "标签", "备注"
-        );
-        List<FormValueColumn> formColumns = formValueColumns(meetingId, attendees);
-        List<String> headers = new ArrayList<>(baseHeaders);
-        headers.addAll(formColumns.stream().map(FormValueColumn::header).toList());
+        List<AttendeeExportData.DynamicColumn> formColumns = formValueColumns(meetingId, attendees);
+        Map<Long, AttendeeExportData.RelatedData> relatedData = exportRelatedData(meeting, attendees);
         boolean masked = systemSettingsService.maskSensitiveEnabled();
         var rows = attendees.stream()
-                .map(attendee -> exportRow(attendee, formColumns, masked))
+                .map(attendee -> AttendeeExportData.row(attendee, relatedData.get(attendee.getId()), formColumns, masked))
                 .toList();
-        return new ExportTable(attendeeSheetName(normalizedType), headers, rows);
+        return new ExportTable(attendeeSheetName(normalizedType), AttendeeExportData.headers(formColumns), rows);
     }
 
     private void applyRequest(Attendee attendee, AttendeeRequest request) {
@@ -587,7 +582,7 @@ public class AttendeeService {
 
     private Map<String, String> extensionFieldKeys(Long meetingId) {
         Map<String, String> keys = new LinkedHashMap<>();
-        for (TduckFieldMapping mapping : tduckFieldMappingRepository.findByMeetingId(meetingId)) {
+        for (TduckFieldMapping mapping : tduckFieldMappingRepository.findByMeetingIdOrderByIdAsc(meetingId)) {
             String fieldKey = mapping.getTduckFieldKey();
             if (fieldKey == null || fieldKey.isBlank()) {
                 continue;
@@ -641,47 +636,40 @@ public class AttendeeService {
         };
     }
 
-    private List<Object> exportRow(Attendee attendee, List<FormValueColumn> formColumns, boolean masked) {
-        List<Object> row = new ArrayList<>(List.of(
-                attendee.getId(),
-                attendee.getName(),
-                masked ? SensitiveDataMasker.maskPhone(attendee.getPhone()) : attendee.getPhone(),
-                nullable(attendee.getOrganization()),
-                nullable(attendee.getTitle()),
-                nullable(masked ? SensitiveDataMasker.maskIdentityNo(attendee.getIdentityNo()) : attendee.getIdentityNo()),
-                nullable(masked ? SensitiveDataMasker.maskEmail(attendee.getEmail()) : attendee.getEmail()),
-                attendee.getAttendeeType(),
-                attendee.isAccommodationRequired() ? "是" : "否",
-                nullable(attendee.getRoomNo()),
-                nullable(attendee.getRoomRemark()),
-                attendee.getReviewStatus(),
-                nullable(attendee.getReviewReason()),
-                nullable(attendee.getReviewRemark()),
-                nullable(attendee.getReviewedBy()),
-                nullable(attendee.getReviewedAt()),
-                nullable(attendee.getRegisteredAt()),
-                attendee.getCheckinStatus(),
-                nullable(attendee.getCheckedInAt()),
-                nullable(attendee.getCheckinEntrance()),
-                nullable(attendee.getCheckinOperator()),
-                nullable(attendee.getAttendeeCode()),
-                nullable(attendee.getTags()),
-                nullable(attendee.getRemark())
-        ));
-        Map<String, Object> snapshot = attendee.getRawDataSnapshot() == null ? Map.of() : attendee.getRawDataSnapshot();
-        for (FormValueColumn column : formColumns) {
-            // TDuck 选择类组件会带 key + keylabel 两份数据；导出优先使用填写人看到的展示标签。
-            Object value = snapshot.getOrDefault(column.labelKey(), snapshot.get(column.valueKey()));
-            row.add(nullable(masked
-                    ? SensitiveDataMasker.maskValue(column.valueKey(), column.header(), value)
-                    : value));
+    private Map<Long, AttendeeExportData.RelatedData> exportRelatedData(Meeting meeting, List<Attendee> attendees) {
+        if (attendees.isEmpty()) {
+            return Map.of();
         }
-        return row;
+        List<Long> attendeeIds = attendees.stream().map(Attendee::getId).toList();
+        Map<Long, SeatAssignment> seatAssignments = new LinkedHashMap<>();
+        for (SeatAssignment assignment : seatAssignmentRepository
+                .findWithAttendeeAndSeatByMeetingIdAndAttendeeIdIn(meeting.getId(), attendeeIds)) {
+            seatAssignments.putIfAbsent(assignment.getAttendee().getId(), assignment);
+        }
+        Set<Long> seatQueried = Set.copyOf(publicQueryHistoryRepository
+                .findQueriedAttendeeIds(meeting.getId(), PublicQueryType.SEAT, attendeeIds));
+        Set<Long> roomQueried = Set.copyOf(publicQueryHistoryRepository
+                .findQueriedAttendeeIds(meeting.getId(), PublicQueryType.ROOM, attendeeIds));
+
+        Map<Long, AttendeeExportData.RelatedData> result = new LinkedHashMap<>();
+        for (Attendee attendee : attendees) {
+            result.put(attendee.getId(), new AttendeeExportData.RelatedData(
+                    seatAssignments.get(attendee.getId()),
+                    seatQueried.contains(attendee.getId()),
+                    roomQueried.contains(attendee.getId())
+            ));
+        }
+        return result;
     }
 
-    private List<FormValueColumn> formValueColumns(Long meetingId, List<Attendee> attendees) {
+    private List<AttendeeExportData.DynamicColumn> formValueColumns(Long meetingId, List<Attendee> attendees) {
         Map<String, String> fieldLabels = tduckFieldLabels(meetingId);
-        Map<String, FormValueColumn> columns = new LinkedHashMap<>();
+        Map<String, AttendeeExportData.DynamicColumn> columns = new LinkedHashMap<>();
+        fieldLabels.forEach((key, label) -> {
+            if (hasExportableFormValueKey(key)) {
+                columns.putIfAbsent(key, new AttendeeExportData.DynamicColumn(label, key, key + "label"));
+            }
+        });
         for (Attendee attendee : attendees) {
             Map<String, Object> snapshot = attendee.getRawDataSnapshot();
             if (snapshot == null || snapshot.isEmpty()) {
@@ -697,7 +685,7 @@ public class AttendeeService {
                  * CSV/XLSX 按首次出现顺序展开；如果已经同步过 TDuck 字段，表头使用填写页中文标签，
                  * 避免导出文件出现 input/radio 这类组件内部 key。
                  */
-                columns.putIfAbsent(key, new FormValueColumn(fieldLabels.getOrDefault(key, key), key, key + "label"));
+                columns.putIfAbsent(key, new AttendeeExportData.DynamicColumn(fieldLabels.getOrDefault(key, key), key, key + "label"));
             }
         }
         return new ArrayList<>(columns.values());
@@ -724,13 +712,6 @@ public class AttendeeService {
                 && !TduckSubmissionFields.isMetaField(key)
                 && !"source".equals(key)
                 && !key.endsWith("label");
-    }
-
-    private Object nullable(Object value) {
-        return value == null ? "" : value;
-    }
-
-    private record FormValueColumn(String header, String valueKey, String labelKey) {
     }
 
     private String normalizePhone(String phone) {

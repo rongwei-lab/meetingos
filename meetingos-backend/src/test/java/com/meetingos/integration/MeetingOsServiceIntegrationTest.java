@@ -29,10 +29,14 @@ import com.meetingos.permission.MeetingUserPermissionRequest;
 import com.meetingos.permission.MeetingUserPermissionService;
 import com.meetingos.publicapi.MeetingQuerySettingsRequest;
 import com.meetingos.publicapi.PublicQueryField;
+import com.meetingos.publicapi.PublicQueryHistory;
+import com.meetingos.publicapi.PublicQueryHistoryRepository;
 import com.meetingos.publicapi.PublicQueryMatchMode;
 import com.meetingos.publicapi.PublicQueryRequest;
 import com.meetingos.publicapi.PublicQueryResultField;
 import com.meetingos.publicapi.PublicQueryService;
+import com.meetingos.publicapi.PublicQueryStatus;
+import com.meetingos.publicapi.PublicQueryType;
 import com.meetingos.room.AssignRoomRequest;
 import com.meetingos.room.RoomRequest;
 import com.meetingos.room.RoomRepository;
@@ -97,6 +101,7 @@ import java.time.LocalDate;
 import java.time.LocalDateTime;
 import java.util.List;
 import java.util.ArrayList;
+import java.util.LinkedHashMap;
 import java.util.Map;
 import java.util.Set;
 
@@ -146,6 +151,9 @@ class MeetingOsServiceIntegrationTest {
 
     @Autowired
     private RoomRepository roomRepository;
+
+    @Autowired
+    private PublicQueryHistoryRepository publicQueryHistoryRepository;
 
     @Autowired
     private ExportTaskService exportTaskService;
@@ -1182,6 +1190,10 @@ class MeetingOsServiceIntegrationTest {
 
     @Test
     void exportTaskDownloadStillSupportsExplicitCsvContent() {
+        Attendee attendee = attendeeRepository.findById(1L).orElseThrow();
+        attendee.setRawDataSnapshot(tduckSnapshot(attendee));
+        attendeeRepository.saveAndFlush(attendee);
+
         ExportFile attendeeFile = exportTaskService.build(1L, "attendees", "csv", null, null);
         ExportFile seatFile = exportTaskService.build(1L, "seats", "csv", null, null);
         String attendeeCsv = new String(attendeeFile.content(), StandardCharsets.UTF_8);
@@ -1197,6 +1209,10 @@ class MeetingOsServiceIntegrationTest {
 
     @Test
     void exportTaskDownloadBuildsXlsxAndStatisticsContent() throws Exception {
+        Attendee attendee = attendeeRepository.findById(1L).orElseThrow();
+        attendee.setRawDataSnapshot(tduckSnapshot(attendee));
+        attendeeRepository.saveAndFlush(attendee);
+
         ExportFile attendeeXlsx = exportTaskService.build(1L, "attendees");
         ExportFile statisticsXlsx = exportTaskService.build(
                 1L,
@@ -1209,11 +1225,13 @@ class MeetingOsServiceIntegrationTest {
         assertThat(attendeeXlsx.filename()).isEqualTo("meetingos-attendees.xlsx");
         try (XSSFWorkbook workbook = new XSSFWorkbook(new ByteArrayInputStream(attendeeXlsx.content()))) {
             assertThat(workbook.getSheetAt(0).getSheetName()).isEqualTo("参会名单");
-            assertThat(workbook.getSheetAt(0).getRow(0).getCell(1).getStringCellValue()).isEqualTo("姓名");
-            assertThat(workbook.getSheetAt(0).getRow(1).getCell(1).getStringCellValue()).isEqualTo("陈嘉宁");
-            assertThat(workbook.getSheetAt(0).getRow(1).getCell(11).getStringCellValue()).isEqualTo("已通过");
-            assertThat(workbook.getSheetAt(0).getRow(1).getCell(15).getStringCellValue()).matches("\\d{4}-\\d{2}-\\d{2} \\d{2}:\\d{2}:\\d{2}");
-            assertThat(workbook.getSheetAt(0).getRow(1).getCell(17).getStringCellValue()).isEqualTo("未签到");
+            assertThat(sheetText(workbook.getSheetAt(0)))
+                    .contains(
+                            "姓名", "手机号", "单位", "职务", "参会类型", "陈嘉宁",
+                            "标签", "审核", "座位", "房间", "座位查询", "住宿查询", "签到", "参会人备注",
+                            "已通过", "未签到"
+                    )
+                    .doesNotContain("会议ID", "会议编码", "晚宴桌号", "审核人", "签到时间");
         }
         try (XSSFWorkbook workbook = new XSSFWorkbook(new ByteArrayInputStream(statisticsXlsx.content()))) {
             assertThat(workbook.getNumberOfSheets()).isEqualTo(3);
@@ -1257,6 +1275,30 @@ class MeetingOsServiceIntegrationTest {
 
     @Test
     void exportTaskCreateGeneratesFixedDownloadWithVisibleProgress() throws Exception {
+        Attendee attendee = attendeeRepository.findById(1L).orElseThrow();
+        Map<String, Object> snapshot = tduckSnapshot(attendee);
+        snapshot.put("customField", "TDuck扩展值");
+        attendee.setRawDataSnapshot(snapshot);
+        attendee.setTags("重点接待");
+        attendee.setRemark("参会人导出备注");
+        attendeeRepository.saveAndFlush(attendee);
+        Long seatId = seatRepository.findByMeetingIdAndAreaNameOrderByRowNoAscSeatNoAsc(1L, "A区").get(0).getId();
+        seatingService.manualAssign(new ManualAssignSeatRequest(attendee.getId(), seatId));
+        ensureRoom("1908");
+        roomService.assign(new AssignRoomRequest(attendee.getId(), "1908", "导出测试住宿备注"));
+        for (PublicQueryType queryType : List.of(PublicQueryType.SEAT, PublicQueryType.ROOM)) {
+            PublicQueryHistory history = new PublicQueryHistory();
+            history.setMeeting(attendee.getMeeting());
+            history.setAttendee(attendee);
+            history.setQueryType(queryType);
+            history.setQueryStatus(PublicQueryStatus.SUCCESS);
+            history.setQueryValues(Map.of("PHONE", attendee.getPhone()));
+            history.setAttendeeName(attendee.getName());
+            history.setAttendeePhone(attendee.getPhone());
+            history.setResultSummary("导出测试");
+            publicQueryHistoryRepository.save(history);
+        }
+
         var created = exportTaskService.create(1L, "attendees");
         var tasks = exportTaskService.list(1L);
 
@@ -1291,6 +1333,13 @@ class MeetingOsServiceIntegrationTest {
         assertThat(download.contentLength()).isEqualTo(completed.fileSize());
         try (XSSFWorkbook workbook = new XSSFWorkbook(download.resource().getInputStream())) {
             assertThat(workbook.getSheet("参会名单")).isNotNull();
+            assertThat(sheetText(workbook.getSheet("参会名单")))
+                    .contains(
+                            "姓名", "手机号", "TDuck扩展值",
+                            "标签", "审核", "座位", "房间", "座位查询", "住宿查询", "签到", "参会人备注",
+                            "重点接待", "已通过", "A区 1排1座", "1908", "已查询", "未签到", "参会人导出备注"
+                    )
+                    .doesNotContain("会议编码", "晚宴桌号", "酒店名称", "审核人", "签到时间");
         }
         var generatedPath = download.resource().getFile().toPath();
         var task = exportTaskRepository.findById(created.id()).orElseThrow();
@@ -1446,6 +1495,11 @@ class MeetingOsServiceIntegrationTest {
         var attendee = attendeeRepository.findById(1L).orElseThrow();
         attendee.setIdentityNo("110101199001010011");
         attendee.setEmail("chen@example.com");
+        Map<String, Object> snapshot = tduckSnapshot(attendee);
+        snapshot.put("identityNo", attendee.getIdentityNo());
+        snapshot.put("email", attendee.getEmail());
+        attendee.setRawDataSnapshot(snapshot);
+        attendeeRepository.saveAndFlush(attendee);
 
         AttendeeResponse response = AttendeeResponse.masked(attendee);
 
@@ -1859,6 +1913,16 @@ class MeetingOsServiceIntegrationTest {
         mapping.setTduckFieldLabel(label);
         mapping.setRequiredMapping(false);
         tduckFieldMappingRepository.save(mapping);
+    }
+
+    private Map<String, Object> tduckSnapshot(Attendee attendee) {
+        Map<String, Object> snapshot = new LinkedHashMap<>();
+        snapshot.put("name", attendee.getName());
+        snapshot.put("phone", attendee.getPhone());
+        snapshot.put("organization", attendee.getOrganization());
+        snapshot.put("title", attendee.getTitle());
+        snapshot.put("attendeeType", attendee.getAttendeeType() == null ? null : attendee.getAttendeeType().name());
+        return snapshot;
     }
 
     private void withCurrentUser(Long userId, String username, Set<Role> roles, Runnable action) {

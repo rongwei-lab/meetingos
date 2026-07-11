@@ -9,6 +9,8 @@ public interface TduckFieldMappingRepository extends JpaRepository<TduckFieldMap
 
     List<TduckFieldMapping> findByMeetingId(Long meetingId);
 
+    List<TduckFieldMapping> findByMeetingIdOrderByIdAsc(Long meetingId);
+
     Optional<TduckFieldMapping> findByMeetingIdAndAttendeeField(Long meetingId, AttendeeField attendeeField);
 
     void deleteByMeetingId(Long meetingId);
