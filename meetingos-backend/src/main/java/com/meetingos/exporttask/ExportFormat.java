@@ -28,7 +28,7 @@ public enum ExportFormat {
     }
 
     public static ExportFormat from(String value) {
-        String normalized = value == null || value.isBlank() ? "csv" : value.trim().toLowerCase(Locale.ROOT);
+        String normalized = value == null || value.isBlank() ? "xlsx" : value.trim().toLowerCase(Locale.ROOT);
         for (ExportFormat format : values()) {
             if (format.extension.equals(normalized)) {
                 return format;

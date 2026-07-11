@@ -4,7 +4,9 @@ import com.meetingos.common.BusinessException;
 import com.meetingos.common.CsvFiles;
 import com.meetingos.common.ExportTable;
 import com.meetingos.common.ImportFailure;
+import com.meetingos.common.ImportProgressListener;
 import com.meetingos.common.ImportResult;
+import com.meetingos.common.ImportRowTransactionRunner;
 import com.meetingos.common.PageRequests;
 import com.meetingos.common.PageResponse;
 import com.meetingos.common.SensitiveDataMasker;
@@ -25,7 +27,8 @@ import com.meetingos.tduck.TduckFieldMapping;
 import com.meetingos.tduck.TduckFieldMappingRepository;
 import com.meetingos.tduck.TduckSubmissionFields;
 import org.springframework.stereotype.Service;
-import org.springframework.transaction.interceptor.TransactionAspectSupport;
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.transaction.annotation.Isolation;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.web.multipart.MultipartFile;
@@ -37,10 +40,25 @@ import java.util.List;
 import java.util.Locale;
 import java.util.Map;
 import java.util.Optional;
-import java.util.UUID;
+import java.util.Set;
 
 @Service
 public class AttendeeService {
+
+    private static final Set<String> KNOWN_IMPORT_HEADERS = Set.of(
+            "姓名", "name", "参会人", "attendeename",
+            "手机号", "手机", "电话", "phone", "mobile", "tel",
+            "单位", "公司", "机构", "organization", "company",
+            "职务", "职位", "title", "position",
+            "证件号", "身份证号", "身份证", "identityno", "idcard", "idno",
+            "邮箱", "电子邮箱", "email",
+            "参会类型", "类型", "attendeetype", "type",
+            "是否住宿", "住宿", "accommodationrequired", "needroom", "roomrequired",
+            "房间号", "房号", "roomno", "room",
+            "房间备注", "住宿备注", "roomremark",
+            "备注", "remark", "note", "标签", "tags",
+            "审核状态", "reviewstatus", "auditstatus"
+    );
 
     private static final List<PublicQueryType> REJECTION_LOCK_QUERY_TYPES = List.of(
             PublicQueryType.SEAT,
@@ -57,6 +75,8 @@ public class AttendeeService {
     private final SeatAssignmentRepository seatAssignmentRepository;
     private final DinnerAssignmentRepository dinnerAssignmentRepository;
     private final RoomService roomService;
+    private final ImportRowTransactionRunner importRowTransactionRunner;
+    private final AttendeeCodeGenerator attendeeCodeGenerator;
 
     public AttendeeService(AttendeeRepository attendeeRepository,
                            MeetingRepository meetingRepository,
@@ -67,6 +87,33 @@ public class AttendeeService {
                            SeatAssignmentRepository seatAssignmentRepository,
                            DinnerAssignmentRepository dinnerAssignmentRepository,
                            RoomService roomService) {
+        this(
+                attendeeRepository,
+                meetingRepository,
+                meetingAccessService,
+                systemSettingsService,
+                tduckFieldMappingRepository,
+                publicQueryHistoryRepository,
+                seatAssignmentRepository,
+                dinnerAssignmentRepository,
+                roomService,
+                ImportRowTransactionRunner.direct(),
+                new AttendeeCodeGenerator(attendeeRepository)
+        );
+    }
+
+    @Autowired
+    public AttendeeService(AttendeeRepository attendeeRepository,
+                           MeetingRepository meetingRepository,
+                           MeetingAccessService meetingAccessService,
+                           SystemSettingsService systemSettingsService,
+                           TduckFieldMappingRepository tduckFieldMappingRepository,
+                           PublicQueryHistoryRepository publicQueryHistoryRepository,
+                           SeatAssignmentRepository seatAssignmentRepository,
+                           DinnerAssignmentRepository dinnerAssignmentRepository,
+                           RoomService roomService,
+                           ImportRowTransactionRunner importRowTransactionRunner,
+                           AttendeeCodeGenerator attendeeCodeGenerator) {
         this.attendeeRepository = attendeeRepository;
         this.meetingRepository = meetingRepository;
         this.meetingAccessService = meetingAccessService;
@@ -76,6 +123,8 @@ public class AttendeeService {
         this.seatAssignmentRepository = seatAssignmentRepository;
         this.dinnerAssignmentRepository = dinnerAssignmentRepository;
         this.roomService = roomService;
+        this.importRowTransactionRunner = importRowTransactionRunner;
+        this.attendeeCodeGenerator = attendeeCodeGenerator;
     }
 
     @Transactional(isolation = Isolation.READ_COMMITTED)
@@ -223,46 +272,70 @@ public class AttendeeService {
                 .orElseThrow(() -> BusinessException.notFound("未找到参会人"));
     }
 
-    @Transactional(isolation = Isolation.READ_COMMITTED)
     public ImportResult importFile(Long meetingId, MultipartFile file) {
         Meeting meeting = meetingRepository.findById(meetingId)
                 .orElseThrow(() -> BusinessException.notFound("会议不存在"));
         meetingAccessService.requireManage(meeting.getId());
         List<TableRow> rows = TableFileReader.read(file);
+        return importRows(meetingId, rows, ImportProgressListener.NOOP);
+    }
+
+    public ImportResult importRows(Long meetingId, List<TableRow> rows, ImportProgressListener progressListener) {
+        meetingRepository.findById(meetingId)
+                .orElseThrow(() -> BusinessException.notFound("会议不存在"));
+        Map<String, String> extensionFieldKeys = extensionFieldKeys(meetingId);
         List<ImportFailure> failures = new ArrayList<>();
         int imported = 0;
 
         for (TableRow row : rows) {
-            Attendee saved = null;
             try {
-                Attendee attendee = fromRow(meeting, row);
-                String requestedRoomNo = row.get("房间号", "房号", "roomNo", "room");
-                saved = attendeeRepository.saveAndFlush(attendee);
-                synchronizeRoomRequest(
-                        saved,
-                        attendee.isAccommodationRequired(),
-                        requestedRoomNo,
-                        attendee.getRoomRemark(),
-                        "ATTENDEE_IMPORT"
-                );
+                importAttendeeRowWithCodeRetry(meetingId, row, extensionFieldKeys);
                 imported++;
             } catch (BusinessException ex) {
-                discardFailedImport(saved);
                 failures.add(new ImportFailure(row.rowNumber(), ex.getMessage()));
             } catch (RuntimeException ex) {
-                boolean rowWasPersisted = saved != null;
-                discardFailedImport(saved);
-                if (rowWasPersisted || TransactionAspectSupport.currentTransactionStatus().isRollbackOnly()) {
-                    /*
-                     * 保存后的非业务异常可能发生在房态更新或操作日志阶段，仅删除 attendee 无法撤销
-                     * 这些副作用；唯一键、连接或 flush 异常也会使事务不可提交，两者都必须回滚整批。
-                     */
-                    throw ex;
-                }
                 failures.add(new ImportFailure(row.rowNumber(), "数据格式不正确，请检查该行字段"));
             }
+            progressListener.onProgress(imported + failures.size(), imported, failures.size());
         }
         return ImportResult.of(rows.size(), imported, failures, "参会人");
+    }
+
+    private void importAttendeeRowWithCodeRetry(Long meetingId,
+                                                TableRow row,
+                                                Map<String, String> extensionFieldKeys) {
+        for (int attempt = 1; attempt <= 3; attempt++) {
+            try {
+                importRowTransactionRunner.execute(() -> {
+                    Meeting managedMeeting = meetingRepository.findById(meetingId)
+                            .orElseThrow(() -> BusinessException.notFound("会议不存在"));
+                    Attendee attendee = fromRow(managedMeeting, row, extensionFieldKeys);
+                    String requestedRoomNo = row.get("房间号", "房号", "roomNo", "room");
+                    Attendee saved = attendeeRepository.saveAndFlush(attendee);
+                    synchronizeRoomRequest(
+                            saved,
+                            attendee.isAccommodationRequired(),
+                            requestedRoomNo,
+                            attendee.getRoomRemark(),
+                            "ATTENDEE_IMPORT"
+                    );
+                    attendeeRepository.flush();
+                    return null;
+                });
+                return;
+            } catch (DataIntegrityViolationException ex) {
+                if (isAttendeeCodeCollision(ex) && attempt < 3) {
+                    continue;
+                }
+                if (isAttendeeCodeCollision(ex)) {
+                    throw BusinessException.conflict("参会码生成冲突，请重新提交导入");
+                }
+                if (constraintMessageContains(ex, "meeting_phone")) {
+                    throw BusinessException.conflict("同一会议内手机号已存在报名记录");
+                }
+                throw ex;
+            }
+        }
     }
 
     @Transactional(readOnly = true)
@@ -277,7 +350,11 @@ public class AttendeeService {
         String normalizedType = normalizeExportType(type);
         List<Attendee> attendees = switch (normalizedType) {
             case "approved" -> attendeeRepository.findByMeetingIdAndReviewStatusOrderByIdAsc(meetingId, ReviewStatus.APPROVED);
-            case "no-checkin" -> attendeeRepository.findByMeetingIdAndCheckinStatusOrderByIdAsc(meetingId, CheckinStatus.NOT_CHECKED_IN);
+            case "no-checkin" -> attendeeRepository.findByMeetingIdAndReviewStatusAndCheckinStatusOrderByIdAsc(
+                    meetingId,
+                    ReviewStatus.APPROVED,
+                    CheckinStatus.NOT_CHECKED_IN
+            );
             default -> attendeeRepository.findByMeetingIdOrderByIdAsc(meetingId);
         };
         List<String> baseHeaders = List.of(
@@ -341,12 +418,6 @@ public class AttendeeService {
         return attendee;
     }
 
-    private void discardFailedImport(Attendee attendee) {
-        if (attendee != null && attendee.getId() != null) {
-            attendeeRepository.delete(attendee);
-        }
-    }
-
     private boolean applyReview(Attendee attendee, ReviewStatus status, String reason, String remark) {
         if (status == ReviewStatus.PENDING || status == ReviewStatus.CANCELLED) {
             throw BusinessException.badRequest("普通审核只支持通过或拒绝");
@@ -405,10 +476,10 @@ public class AttendeeService {
     }
 
     private String generateAttendeeCode(Meeting meeting) {
-        return meeting.getCode() + "-" + UUID.randomUUID().toString().substring(0, 8).toUpperCase();
+        return attendeeCodeGenerator.generate(meeting);
     }
 
-    private Attendee fromRow(Meeting meeting, TableRow row) {
+    private Attendee fromRow(Meeting meeting, TableRow row, Map<String, String> extensionFieldKeys) {
         String name = required(row, "姓名", "name", "参会人", "attendeename");
         String phone = normalizePhone(required(row, "手机号", "手机", "电话", "phone", "mobile", "tel"));
         attendeeRepository.findByMeetingAndPhone(meeting, phone)
@@ -418,21 +489,25 @@ public class AttendeeService {
 
         Attendee attendee = new Attendee();
         attendee.setMeeting(meeting);
-        attendee.setName(name);
+        attendee.setName(requireMaxLength(name, 120, "姓名"));
         attendee.setPhone(phone);
-        attendee.setOrganization(row.get("单位", "公司", "机构", "organization", "company"));
-        attendee.setTitle(row.get("职务", "职位", "title", "position"));
-        attendee.setIdentityNo(row.get("证件号", "身份证号", "身份证", "identityNo", "idcard", "idno"));
-        attendee.setEmail(row.get("邮箱", "电子邮箱", "email"));
+        attendee.setOrganization(optionalMaxLength(row.get("单位", "公司", "机构", "organization", "company"), 160, "单位"));
+        attendee.setTitle(optionalMaxLength(row.get("职务", "职位", "title", "position"), 120, "职务"));
+        attendee.setIdentityNo(optionalMaxLength(row.get("证件号", "身份证号", "身份证", "identityNo", "idcard", "idno"), 80, "证件号"));
+        attendee.setEmail(optionalMaxLength(row.get("邮箱", "电子邮箱", "email"), 160, "邮箱"));
         attendee.setAttendeeType(parseAttendeeType(row.get("参会类型", "类型", "attendeeType", "type")));
         attendee.setAccommodationRequired(parseBoolean(row.get("是否住宿", "住宿", "accommodationRequired", "needRoom", "roomRequired")));
-        attendee.setRoomRemark(row.get("房间备注", "住宿备注", "roomRemark"));
-        attendee.setRemark(row.get("备注", "remark", "note"));
-        attendee.setTags(row.get("标签", "tags"));
+        attendee.setRoomRemark(optionalMaxLength(row.get("房间备注", "住宿备注", "roomRemark"), 160, "房间备注"));
+        attendee.setRemark(optionalMaxLength(row.get("备注", "remark", "note"), 500, "备注"));
+        attendee.setTags(optionalMaxLength(row.get("标签", "tags"), 300, "标签"));
         attendee.setReviewStatus(parseReviewStatus(row.get("审核状态", "reviewStatus", "auditStatus")));
         attendee.setRegisteredAt(LocalDateTime.now());
         attendee.setAttendeeCode(generateAttendeeCode(meeting));
-        Map<String, Object> snapshot = new LinkedHashMap<>(row.rawValues());
+        if (attendee.getReviewStatus() != ReviewStatus.PENDING) {
+            attendee.setReviewedAt(LocalDateTime.now());
+            attendee.setReviewedBy(SecurityUtils.currentUsernameOrSystem());
+        }
+        Map<String, Object> snapshot = extensionFields(row, extensionFieldKeys);
         snapshot.put("source", "admin-import");
         attendee.setRawDataSnapshot(snapshot);
         return attendee;
@@ -492,13 +567,66 @@ public class AttendeeService {
             return false;
         }
         String normalized = value.trim().toLowerCase(Locale.ROOT);
-        return normalized.equals("true")
-                || normalized.equals("1")
-                || normalized.equals("yes")
-                || normalized.equals("y")
-                || normalized.equals("是")
-                || normalized.equals("需要")
-                || normalized.equals("住宿");
+        return switch (normalized) {
+            case "true", "1", "yes", "y", "是", "需要", "住宿" -> true;
+            case "false", "0", "no", "n", "否", "不需要", "不住宿" -> false;
+            default -> throw BusinessException.badRequest("是否住宿仅支持是/否、需要/不需要或 true/false");
+        };
+    }
+
+    private Map<String, Object> extensionFields(TableRow row, Map<String, String> extensionFieldKeys) {
+        Map<String, Object> extension = new LinkedHashMap<>();
+        row.rawValues().forEach((key, value) -> {
+            String storageKey = extensionFieldKeys.get(key);
+            if (!KNOWN_IMPORT_HEADERS.contains(key) && storageKey != null) {
+                extension.put(storageKey, value);
+            }
+        });
+        return extension;
+    }
+
+    private Map<String, String> extensionFieldKeys(Long meetingId) {
+        Map<String, String> keys = new LinkedHashMap<>();
+        for (TduckFieldMapping mapping : tduckFieldMappingRepository.findByMeetingId(meetingId)) {
+            String fieldKey = mapping.getTduckFieldKey();
+            if (fieldKey == null || fieldKey.isBlank()) {
+                continue;
+            }
+            keys.putIfAbsent(TableRow.normalizeHeader(fieldKey), fieldKey);
+            keys.putIfAbsent(TableRow.normalizeHeader(fieldKey + "label"), fieldKey + "label");
+            String fieldLabel = mapping.getTduckFieldLabel();
+            if (fieldLabel != null && !fieldLabel.isBlank()) {
+                keys.putIfAbsent(TableRow.normalizeHeader(fieldLabel), fieldKey);
+            }
+        }
+        return keys;
+    }
+
+    private String requireMaxLength(String value, int maxLength, String label) {
+        if (value.length() > maxLength) {
+            throw BusinessException.badRequest(label + "不能超过 " + maxLength + " 个字符");
+        }
+        return value;
+    }
+
+    private String optionalMaxLength(String value, int maxLength, String label) {
+        return value == null ? null : requireMaxLength(value, maxLength, label);
+    }
+
+    private boolean isAttendeeCodeCollision(DataIntegrityViolationException ex) {
+        return constraintMessageContains(ex, "attendee_code");
+    }
+
+    private boolean constraintMessageContains(DataIntegrityViolationException ex, String fragment) {
+        Throwable current = ex;
+        while (current != null) {
+            String message = current.getMessage();
+            if (message != null && message.toLowerCase(Locale.ROOT).contains(fragment)) {
+                return true;
+            }
+            current = current.getCause();
+        }
+        return false;
     }
 
     private String normalizeExportType(String type) {
@@ -541,10 +669,12 @@ public class AttendeeService {
                 nullable(attendee.getRemark())
         ));
         Map<String, Object> snapshot = attendee.getRawDataSnapshot() == null ? Map.of() : attendee.getRawDataSnapshot();
-        Map<String, Object> exportSnapshot = masked ? SensitiveDataMasker.maskMap(snapshot) : snapshot;
         for (FormValueColumn column : formColumns) {
             // TDuck 选择类组件会带 key + keylabel 两份数据；导出优先使用填写人看到的展示标签。
-            row.add(nullable(exportSnapshot.getOrDefault(column.labelKey(), exportSnapshot.get(column.valueKey()))));
+            Object value = snapshot.getOrDefault(column.labelKey(), snapshot.get(column.valueKey()));
+            row.add(nullable(masked
+                    ? SensitiveDataMasker.maskValue(column.valueKey(), column.header(), value)
+                    : value));
         }
         return row;
     }

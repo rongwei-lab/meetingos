@@ -32,9 +32,9 @@ public class SecurityConfig {
                 .sessionManagement(session -> session.sessionCreationPolicy(SessionCreationPolicy.STATELESS))
                 .authorizeHttpRequests(registry -> registry
                         .requestMatchers("/api/auth/login", "/swagger-ui.html", "/swagger-ui/**", "/v3/api-docs/**", "/actuator/health").permitAll()
-                        .requestMatchers(HttpMethod.GET, "/uploads/**").permitAll()
+                        .requestMatchers(HttpMethod.GET, "/uploads/images/**").permitAll()
                         // 公开入口常被监控、curl -I 或链接预览用 HEAD 探测；权限应与 GET 保持一致。
-                        .requestMatchers(HttpMethod.HEAD, "/uploads/**", "/r/**", "/api/public/**").permitAll()
+                        .requestMatchers(HttpMethod.HEAD, "/uploads/images/**", "/r/**", "/api/public/**").permitAll()
                         .requestMatchers(HttpMethod.POST, "/api/tduck/webhook", "/api/public/tduck/webhook", "/api/integrations/tduck/webhook").permitAll()
                         .requestMatchers(HttpMethod.POST, "/api/public/seat-query", "/api/public/room-query", "/api/public/dinner-query", "/api/public/checkin").permitAll()
                         .requestMatchers(HttpMethod.GET, "/r/**", "/api/public/**").permitAll()

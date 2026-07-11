@@ -18,9 +18,11 @@ public class WebConfig implements WebMvcConfigurer {
 
     @Override
     public void addResourceHandlers(ResourceHandlerRegistry registry) {
-        // 公开查询页需要直接渲染后台上传的 Logo/背景图。这里只映射上传目录为只读静态资源；
-        // 上传动作仍由 /api/admin/assets/images 保护，避免匿名用户写入文件。
-        registry.addResourceHandler("/uploads/**")
-                .addResourceLocations(uploadRoot.toUri().toString() + "/");
+        /*
+         * 公开查询页只需要渲染后台上传的图片。任务输入、失败明细和固定导出文件也位于
+         * uploadRoot，但必须经过带会议权限校验的控制器下载，不能落入匿名静态映射。
+         */
+        registry.addResourceHandler("/uploads/images/**")
+                .addResourceLocations(uploadRoot.resolve("images").toUri().toString() + "/");
     }
 }

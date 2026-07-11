@@ -2,6 +2,7 @@ package com.meetingos.integration;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.meetingos.attendee.AttendeeRepository;
+import com.meetingos.attendee.Attendee;
 import com.meetingos.attendee.AttendeeRequest;
 import com.meetingos.attendee.AttendeeResponse;
 import com.meetingos.attendee.AttendeeService;
@@ -18,6 +19,7 @@ import com.meetingos.common.BusinessException;
 import com.meetingos.common.ImportResult;
 import com.meetingos.exporttask.ExportFile;
 import com.meetingos.exporttask.ExportTaskService;
+import com.meetingos.exporttask.ExportTaskRepository;
 import com.meetingos.exporttask.ExportTaskStatus;
 import com.meetingos.meeting.MeetingService;
 import com.meetingos.meeting.MeetingStatus;
@@ -90,9 +92,11 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 import java.io.ByteArrayOutputStream;
 import java.io.ByteArrayInputStream;
 import java.nio.charset.StandardCharsets;
+import java.nio.file.Files;
 import java.time.LocalDate;
 import java.time.LocalDateTime;
 import java.util.List;
+import java.util.ArrayList;
 import java.util.Map;
 import java.util.Set;
 
@@ -145,6 +149,9 @@ class MeetingOsServiceIntegrationTest {
 
     @Autowired
     private ExportTaskService exportTaskService;
+
+    @Autowired
+    private ExportTaskRepository exportTaskRepository;
 
     @Autowired
     private MeetingService meetingService;
@@ -654,6 +661,24 @@ class MeetingOsServiceIntegrationTest {
     }
 
     @Test
+    void attendeeImportCommitsValidRowWhenAnotherRowFailsValidation() {
+        MockMultipartFile file = xlsx("attendees-partial.xlsx", """
+                姓名,手机号,单位
+                %s,13800008886,字段过长
+                独立提交成功,13800008887,逐行事务
+                """.formatted("超".repeat(121)));
+
+        ImportResult result = attendeeService.importFile(1L, file);
+
+        assertThat(result.importedRows()).isEqualTo(1);
+        assertThat(result.failedRows()).singleElement()
+                .extracting(failure -> failure.rowNumber())
+                .isEqualTo(2);
+        assertThat(attendeeRepository.findByMeetingIdAndPhone(1L, "13800008886")).isEmpty();
+        assertThat(attendeeRepository.findByMeetingIdAndPhone(1L, "13800008887")).isPresent();
+    }
+
+    @Test
     void meetingStatusTransitionRejectsInvalidJumpAfterArchive() {
         assertThat(meetingService.transition(1L, MeetingStatus.READY).getStatus()).isEqualTo(MeetingStatus.READY);
         assertThat(meetingService.transition(1L, MeetingStatus.IN_PROGRESS).getStatus()).isEqualTo(MeetingStatus.IN_PROGRESS);
@@ -1156,9 +1181,9 @@ class MeetingOsServiceIntegrationTest {
     }
 
     @Test
-    void exportTaskDownloadBuildsRealCsvContent() {
-        ExportFile attendeeFile = exportTaskService.build(1L, "attendees");
-        ExportFile seatFile = exportTaskService.build(1L, "seats");
+    void exportTaskDownloadStillSupportsExplicitCsvContent() {
+        ExportFile attendeeFile = exportTaskService.build(1L, "attendees", "csv", null, null);
+        ExportFile seatFile = exportTaskService.build(1L, "seats", "csv", null, null);
         String attendeeCsv = new String(attendeeFile.content(), StandardCharsets.UTF_8);
         String seatCsv = new String(seatFile.content(), StandardCharsets.UTF_8);
 
@@ -1172,7 +1197,7 @@ class MeetingOsServiceIntegrationTest {
 
     @Test
     void exportTaskDownloadBuildsXlsxAndStatisticsContent() throws Exception {
-        ExportFile attendeeXlsx = exportTaskService.build(1L, "attendees", "xlsx", null, null);
+        ExportFile attendeeXlsx = exportTaskService.build(1L, "attendees");
         ExportFile statisticsXlsx = exportTaskService.build(
                 1L,
                 "statistics",
@@ -1207,21 +1232,145 @@ class MeetingOsServiceIntegrationTest {
         assertThatThrownBy(() -> exportTaskService.build(1L, "statistics", "csv", LocalDate.now(), LocalDate.now().minusDays(1)))
                 .isInstanceOf(BusinessException.class)
                 .hasMessageContaining("统计开始日期不能晚于结束日期");
+
+        assertThatThrownBy(() -> exportTaskService.build(1L, "statistics", "csv", LocalDate.now(), null))
+                .isInstanceOf(BusinessException.class)
+                .hasMessageContaining("同时提供开始日期和结束日期");
     }
 
     @Test
-    void exportTaskCreateIsPersistedAndQueryableByMeeting() {
+    void statisticsCsvKeepsMetricValuesInValueColumn() {
+        ExportFile file = exportTaskService.build(
+                1L,
+                "statistics",
+                "csv",
+                LocalDate.now().minusDays(6),
+                LocalDate.now()
+        );
+        String csv = new String(file.content(), StandardCharsets.UTF_8);
+
+        assertThat(csv)
+                .containsPattern("报名统计,报名总人数,\\d+,")
+                .containsPattern("趋势,\\d{4}-\\d{2}-\\d{2} 报名新增,\\d+,")
+                .doesNotContain("统计概览,报名统计,报名总人数");
+    }
+
+    @Test
+    void exportTaskCreateGeneratesFixedDownloadWithVisibleProgress() throws Exception {
         var created = exportTaskService.create(1L, "attendees");
         var tasks = exportTaskService.list(1L);
 
-        assertThat(created.status()).isEqualTo(ExportTaskStatus.COMPLETED);
-        assertThat(created.filename()).isEqualTo("meetingos-attendees.csv");
+        assertThat(created.status()).isEqualTo(ExportTaskStatus.PENDING);
+        assertThat(created.format()).isEqualTo("xlsx");
+        assertThat(created.progress()).isZero();
+        assertThat(created.fileAvailable()).isFalse();
+        assertThat(created.filename()).isEqualTo("meetingos-attendees-" + created.id() + ".xlsx");
+        assertThatThrownBy(() -> exportTaskService.create(1L, "attendees"))
+                .isInstanceOf(BusinessException.class)
+                .hasMessageContaining("已有同类型导出任务");
         assertThat(tasks).anySatisfy(task -> {
             assertThat(task.id()).isEqualTo(created.id());
             assertThat(task.meetingId()).isEqualTo(1L);
             assertThat(task.type()).isEqualTo("attendees");
-            assertThat(task.status()).isEqualTo(ExportTaskStatus.COMPLETED);
+            assertThat(task.status()).isEqualTo(ExportTaskStatus.PENDING);
         });
+
+        // 测试方法事务不会提交，因此 AFTER_COMMIT 监听器不会自动执行；这里直接驱动 worker 核心逻辑。
+        exportTaskService.processTask(created.id());
+        var completed = exportTaskService.get(1L, created.id());
+        assertThat(completed.status()).isEqualTo(ExportTaskStatus.COMPLETED);
+        assertThat(completed.progress()).isEqualTo(100);
+        assertThat(completed.fileAvailable()).isTrue();
+        assertThat(completed.fileSize()).isPositive();
+        assertThat(completed.checksum()).hasSize(64);
+        assertThat(completed.generatedAt()).isNotNull();
+        assertThat(completed.expiresAt()).isAfter(completed.generatedAt());
+
+        var download = exportTaskService.openDownload(1L, created.id());
+        assertThat(download.filename()).isEqualTo(completed.filename());
+        assertThat(download.contentLength()).isEqualTo(completed.fileSize());
+        try (XSSFWorkbook workbook = new XSSFWorkbook(download.resource().getInputStream())) {
+            assertThat(workbook.getSheet("参会名单")).isNotNull();
+        }
+        var generatedPath = download.resource().getFile().toPath();
+        var task = exportTaskRepository.findById(created.id()).orElseThrow();
+        task.setExpiresAt(LocalDateTime.now().minusSeconds(1));
+        exportTaskService.cleanupExpiredTasks();
+        assertThat(Files.exists(generatedPath)).isFalse();
+        assertThat(exportTaskService.get(1L, created.id()).status()).isEqualTo(ExportTaskStatus.EXPIRED);
+    }
+
+    @Test
+    void roomStaffCanCreateRoomExportButCannotCreateAttendeeExport() throws Exception {
+        var user = userService.create(new CreateUserRequest(
+                "room-exporter",
+                "住宿导出员",
+                STRONG_TEST_PASSWORD,
+                UserStatus.ACTIVE,
+                Set.of(Role.ROOM_STAFF)
+        ));
+        meetingUserPermissionService.grant(new MeetingUserPermissionRequest(1L, user.id(), MeetingPermissionRole.ROOM));
+        CurrentUser currentUser = new CurrentUser(user.id(), user.username(), user.displayName(), Set.of(Role.ROOM_STAFF));
+        var authorities = List.of(new SimpleGrantedAuthority("ROLE_ROOM_STAFF"));
+        var authentication = new UsernamePasswordAuthenticationToken(currentUser, null, authorities);
+
+        mockMvc.perform(post("/api/admin/exports")
+                        .param("meetingId", "1")
+                        .param("type", "rooms")
+                        .param("format", "xlsx")
+                        .with(authentication(authentication)))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.data.status").value("PENDING"));
+
+        mockMvc.perform(post("/api/admin/exports")
+                        .param("meetingId", "1")
+                        .param("type", "attendees")
+                        .param("format", "xlsx")
+                        .with(authentication(authentication)))
+                .andExpect(status().isForbidden());
+
+        mockMvc.perform(get("/api/admin/exports")
+                        .param("meetingId", "1")
+                        .param("page", "0")
+                        .param("size", "20")
+                        .with(authentication(authentication)))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.data.content[*].type", hasItem("rooms")));
+    }
+
+    @Test
+    void attendeeTaskStreamsAcrossRepositoryPages() throws Exception {
+        var meeting = attendeeRepository.findById(1L).orElseThrow().getMeeting();
+        List<Attendee> added = new ArrayList<>();
+        for (int index = 0; index < 501; index++) {
+            Attendee attendee = new Attendee();
+            attendee.setMeeting(meeting);
+            attendee.setName("分页参会人" + index);
+            attendee.setPhone("139" + String.format("%08d", index));
+            attendee.setOrganization("分页测试单位");
+            attendee.setAttendeeType(AttendeeType.NORMAL);
+            attendee.setReviewStatus(ReviewStatus.APPROVED);
+            attendee.setReviewedAt(LocalDateTime.now());
+            attendee.setRegisteredAt(LocalDateTime.now());
+            attendee.setCheckinStatus(CheckinStatus.NOT_CHECKED_IN);
+            attendee.setAttendeeCode("PAGE-" + String.format("%05d", index));
+            added.add(attendee);
+        }
+        attendeeRepository.saveAll(added);
+
+        var created = exportTaskService.create(1L, "approved", "xlsx", null, null);
+        exportTaskService.processTask(created.id());
+        var completed = exportTaskService.get(1L, created.id());
+        assertThat(completed.status()).isEqualTo(ExportTaskStatus.COMPLETED);
+
+        var download = exportTaskService.openDownload(1L, created.id());
+        try (XSSFWorkbook workbook = new XSSFWorkbook(download.resource().getInputStream())) {
+            // 测试种子有 2 名已审核人员，加上 501 行，验证至少跨过 500 行分页边界且没有漏行。
+            assertThat(workbook.getSheet("审核通过名单").getLastRowNum()).isEqualTo(503);
+        }
+        var task = exportTaskRepository.findById(created.id()).orElseThrow();
+        task.setExpiresAt(LocalDateTime.now().minusSeconds(1));
+        exportTaskService.cleanupExpiredTasks();
     }
 
     @Test

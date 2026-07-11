@@ -486,23 +486,62 @@ export interface StatisticsOverviewDto {
   checkinTypeDistribution?: Record<string, number>;
 }
 
-export interface ImportResultDto {
+export type ImportTaskType = "attendees" | "rooms" | "room-assignments" | "dinner";
+export type ImportTaskStatus =
+  | "PENDING"
+  | "PREFLIGHTING"
+  | "PREVIEW_READY"
+  | "RUNNING"
+  | "COMPLETED"
+  | "FAILED"
+  | "EXPIRED"
+  | string;
+
+export interface ImportTaskDto {
+  id: string;
+  meetingId: number | string;
+  type: ImportTaskType;
+  status: ImportTaskStatus;
+  originalFilename: string;
   totalRows: number;
+  processedRows: number;
   importedRows: number;
-  skippedRows: number;
-  message: string;
-  failedRows?: Array<{ rowNumber: number; reason: string }>;
+  failedRows: number;
+  progress: number;
+  message?: string;
+  failureFileAvailable: boolean;
+  startedAt?: string;
+  createdAt?: string;
+  completedAt?: string;
+  expiresAt?: string;
+}
+
+interface ImportTaskWireDto extends Partial<Omit<ImportTaskDto, "id" | "meetingId" | "type">> {
+  id?: number | string;
+  taskId?: number | string;
+  meetingId?: number | string;
+  type?: ImportTaskType;
 }
 
 export interface ExportTaskDto {
   taskId: string;
   meetingId: number | string;
   type: string;
-  status: "PENDING" | "RUNNING" | "APPROVED" | "REJECTED" | "COMPLETED" | "FAILED" | "LOCAL" | string;
+  status: "PENDING" | "RUNNING" | "COMPLETED" | "FAILED" | "EXPIRED" | string;
   createdAt: string;
   filename?: string;
   requestedBy?: string;
   message?: string;
+  format?: "xlsx" | string;
+  startDate?: string;
+  endDate?: string;
+  progress?: number;
+  completedAt?: string;
+  expiresAt?: string;
+  fileAvailable?: boolean;
+  fileSize?: number;
+  checksum?: string;
+  generatedAt?: string;
 }
 
 interface ExportTaskWireDto {
@@ -516,6 +555,15 @@ interface ExportTaskWireDto {
   completedAt?: string;
   message?: string;
   createdAt?: string;
+  format?: string;
+  startDate?: string;
+  endDate?: string;
+  progress?: number;
+  expiresAt?: string;
+  fileAvailable?: boolean;
+  fileSize?: number;
+  checksum?: string;
+  generatedAt?: string;
 }
 
 export interface AdminUserDto {
@@ -628,9 +676,9 @@ function downloadBlob(blob: Blob, filename: string) {
   URL.revokeObjectURL(url);
 }
 
-function filenameFromDisposition(disposition: string | undefined, fallback: string) {
+export function filenameFromDisposition(disposition: string | undefined, fallback: string) {
   if (!disposition) return fallback;
-  const utf8Match = disposition.match(/filename\\*=UTF-8''([^;]+)/i);
+  const utf8Match = disposition.match(/filename\*=UTF-8''([^;]+)/i);
   if (utf8Match?.[1]) {
     try {
       return decodeURIComponent(utf8Match[1]);
@@ -640,6 +688,20 @@ function filenameFromDisposition(disposition: string | undefined, fallback: stri
   }
   const asciiMatch = disposition.match(/filename="?([^";]+)"?/i);
   return asciiMatch?.[1] || fallback;
+}
+
+async function downloadErrorMessage(error: unknown, fallback: string) {
+  const responseData = (error as { response?: { data?: unknown } } | null)?.response?.data;
+  if (responseData instanceof Blob) {
+    try {
+      const text = await responseData.text();
+      const parsed = JSON.parse(text) as { message?: unknown };
+      if (typeof parsed.message === "string" && parsed.message.trim()) return parsed.message;
+    } catch {
+      // 非 JSON 下载错误继续交给通用错误提取，避免掩盖网络层信息。
+    }
+  }
+  return extractErrorMessage(error, fallback);
 }
 
 function blankToUndefined(value?: string) {
@@ -2423,111 +2485,185 @@ export const useMeetingStore = defineStore("meeting", {
         if (attendee) attendee.dinnerAssigned = false;
       }
     },
-    async importAttendees(file: File) {
-      const meetingId = requireMeetingId(this.currentMeetingId);
-      const result = await this.uploadImport("/admin/attendees/import", file, "参会人");
-      await this.loadAttendees(meetingId);
-      this.refreshMeetingCounters();
-      return result;
+    async preflightImportTask(
+      type: ImportTaskType,
+      file: File,
+      idempotencyKey: string,
+      options: { meetingId?: string; signal?: AbortSignal; onProgress?: (percent: number) => void } = {}
+    ) {
+      const meetingId = requireMeetingId(options.meetingId || this.currentMeetingId);
+      const form = new FormData();
+      form.append("file", file);
+      try {
+        const task = unwrapApi(
+          await http.post<ImportTaskWireDto>("/admin/imports", form, {
+            params: {
+              meetingId: backendId(meetingId),
+              type,
+              preflight: true,
+              idempotencyKey
+            },
+            signal: options.signal,
+            timeout: 120_000,
+            onUploadProgress: (event) => {
+              const total = event.total || file.size;
+              if (total > 0) options.onProgress?.(Math.min(100, Math.round((event.loaded / total) * 100)));
+            }
+          })
+        );
+        return mapImportTask(task, meetingId, type, file.name);
+      } catch (error) {
+        if (isRequestCanceled(error)) throw error;
+        throw new Error(extractErrorMessage(error, "导入文件格式检查失败"));
+      }
     },
-    async importRooms(file: File) {
-      const meetingId = requireMeetingId(this.currentMeetingId);
-      const result = await this.uploadImport("/admin/rooms/import", file, "房间号");
-      await this.loadRooms(meetingId);
-      return result;
+    async loadImportTasks(options: { meetingId?: string; page?: number; size?: number; signal?: AbortSignal } = {}) {
+      const meetingId = requireMeetingId(options.meetingId || this.currentMeetingId);
+      try {
+        const page = unwrapApi(
+          await http.get<PagePayload<ImportTaskWireDto>>("/admin/imports", {
+            params: {
+              meetingId: backendId(meetingId),
+              page: options.page ?? 0,
+              size: options.size ?? 20
+            },
+            signal: options.signal
+          })
+        );
+        return {
+          ...page,
+          content: page.content.map((item) => mapImportTask(item, meetingId))
+        } satisfies PagePayload<ImportTaskDto>;
+      } catch (error) {
+        if (isRequestCanceled(error)) throw error;
+        throw new Error(extractErrorMessage(error, "导入任务加载失败"));
+      }
     },
-    async importRoomAssignments(file: File) {
-      const meetingId = requireMeetingId(this.currentMeetingId);
-      const result = await this.uploadImport("/admin/rooms/assignments/import", file, "房间分配");
-      await Promise.allSettled([this.loadRooms(meetingId), this.loadAttendees(meetingId)]);
-      this.reconcileAssignments();
-      this.refreshMeetingCounters();
-      return result;
+    async loadImportTask(taskId: string, options: { meetingId?: string; signal?: AbortSignal } = {}) {
+      const meetingId = requireMeetingId(options.meetingId || this.currentMeetingId);
+      try {
+        const task = unwrapApi(
+          await http.get<ImportTaskWireDto>(`/admin/imports/${encodeURIComponent(taskId)}`, {
+            params: { meetingId: backendId(meetingId) },
+            signal: options.signal
+          })
+        );
+        return mapImportTask(task, meetingId);
+      } catch (error) {
+        if (isRequestCanceled(error)) throw error;
+        throw new Error(extractErrorMessage(error, "导入任务状态加载失败"));
+      }
     },
-    async importDinnerAssignments(file: File) {
-      const meetingId = requireMeetingId(this.currentMeetingId);
-      const result = await this.uploadImport("/admin/dinner/import", file, "晚宴分配");
-      await Promise.allSettled([this.loadDinnerAssignments(meetingId), this.loadDinnerTables(meetingId), this.loadDinnerSettings(meetingId)]);
-      return result;
+    async commitImportTask(taskId: string, options: { meetingId?: string; signal?: AbortSignal } = {}) {
+      const meetingId = requireMeetingId(options.meetingId || this.currentMeetingId);
+      try {
+        const task = unwrapApi(
+          await http.post<ImportTaskWireDto>(`/admin/imports/${encodeURIComponent(taskId)}/commit`, null, {
+            params: { meetingId: backendId(meetingId) },
+            signal: options.signal
+          })
+        );
+        return mapImportTask(task, meetingId);
+      } catch (error) {
+        if (isRequestCanceled(error)) throw error;
+        throw new Error(extractErrorMessage(error, "正式导入启动失败"));
+      }
     },
-    async downloadDinnerExport() {
-      const meetingId = requireMeetingId(this.currentMeetingId);
-      const response = await http.get<Blob>("/admin/dinner/export", {
-        params: { meetingId: backendId(meetingId) },
-        responseType: "blob"
-      });
-      downloadBlob(response.data, filenameFromDisposition(response.headers["content-disposition"], "meetingos-dinner.xlsx"));
+    async downloadImportFailures(taskId: string, options: { meetingId?: string; signal?: AbortSignal } = {}) {
+      const meetingId = requireMeetingId(options.meetingId || this.currentMeetingId);
+      try {
+        const response = await http.get<Blob>(`/admin/imports/${encodeURIComponent(taskId)}/failures`, {
+          params: { meetingId: backendId(meetingId) },
+          responseType: "blob",
+          timeout: 120_000,
+          signal: options.signal
+        });
+        downloadBlob(
+          response.data,
+          filenameFromDisposition(response.headers["content-disposition"], `meetingos-import-${taskId}-failures.xlsx`)
+        );
+      } catch (error) {
+        if (isRequestCanceled(error)) throw error;
+        throw new Error(await downloadErrorMessage(error, "失败明细下载失败"));
+      }
     },
-    async createExportTask(type: string) {
-      const meetingId = requireMeetingId(this.currentMeetingId);
+    async createExportTask(
+      type: string,
+      options: { meetingId?: string; startDate?: string; endDate?: string; signal?: AbortSignal } = {}
+    ) {
+      const meetingId = requireMeetingId(options.meetingId || this.currentMeetingId);
       try {
         const task = unwrapApi(
           await http.post<ExportTaskWireDto>("/admin/exports", null, {
-            params: { meetingId: backendId(meetingId), type }
+            params: {
+              meetingId: backendId(meetingId),
+              type,
+              format: "xlsx",
+              startDate: options.startDate || undefined,
+              endDate: options.endDate || undefined
+            },
+            signal: options.signal
           })
         );
         return mapExportTask(task);
       } catch (error) {
-        if (!canUseDemoFallback(error)) throw new Error(extractErrorMessage(error, "导出任务创建失败"));
-        return {
-          taskId: `local-${Date.now()}`,
-          meetingId: Number(meetingId) || 0,
-          type,
-          status: "LOCAL",
-          createdAt: new Date().toISOString()
-        };
+        if (isRequestCanceled(error)) throw error;
+        throw new Error(extractErrorMessage(error, "导出任务创建失败"));
       }
     },
-    async loadExportTasks() {
-      const meetingId = requireMeetingId(this.currentMeetingId);
+    async loadExportTask(taskId: string, options: { meetingId?: string; signal?: AbortSignal } = {}) {
+      const meetingId = requireMeetingId(options.meetingId || this.currentMeetingId);
       try {
-        const tasks = unwrapApi(
-          await http.get<ExportTaskWireDto[] | PagePayload<ExportTaskWireDto>>("/admin/exports", {
-            params: { meetingId: backendId(meetingId) }
+        const task = unwrapApi(
+          await http.get<ExportTaskWireDto>(`/admin/exports/${encodeURIComponent(taskId)}`, {
+            params: { meetingId: backendId(meetingId) },
+            signal: options.signal
           })
         );
-        const content = Array.isArray(tasks) ? tasks : tasks.content;
-        return content.map(mapExportTask);
+        return mapExportTask(task);
       } catch (error) {
-        if (!canUseDemoFallback(error)) throw new Error(extractErrorMessage(error, "导出任务加载失败"));
-        // 当前后端可能只实现创建/下载，列表接口不可用时由页面保留本地任务缓存。
-        return null;
+        if (isRequestCanceled(error)) throw error;
+        throw new Error(extractErrorMessage(error, "导出任务状态加载失败"));
       }
     },
-    async downloadExport(type: string, options: { format?: "csv" | "xlsx"; startDate?: string; endDate?: string } = {}) {
-      const meetingId = requireMeetingId(this.currentMeetingId);
-      const response = await http.get<Blob>("/admin/exports/download", {
-        params: {
-          meetingId: backendId(meetingId),
-          type,
-          format: options.format || "csv",
-          startDate: options.startDate || undefined,
-          endDate: options.endDate || undefined
-        },
-        responseType: "blob"
-      });
-      const fallbackFilename = `meetingos-${type}.${options.format || "csv"}`;
-      downloadBlob(response.data, filenameFromDisposition(response.headers["content-disposition"], fallbackFilename));
-    },
-    async uploadImport(url: string, file: File, subject: string) {
-      const meetingId = requireMeetingId(this.currentMeetingId);
-      const form = new FormData();
-      form.append("file", file);
+    async loadExportTasks(options: { meetingId?: string; page?: number; size?: number; signal?: AbortSignal } = {}) {
+      const meetingId = requireMeetingId(options.meetingId || this.currentMeetingId);
       try {
-        return unwrapApi(
-          await http.post<ImportResultDto>(url, form, {
-            params: { meetingId: backendId(meetingId) }
+        const page = unwrapApi(
+          await http.get<PagePayload<ExportTaskWireDto>>("/admin/exports", {
+            params: {
+              meetingId: backendId(meetingId),
+              page: options.page || 0,
+              size: options.size || 20
+            },
+            signal: options.signal
           })
         );
+        return { ...page, content: page.content.map(mapExportTask) } satisfies PagePayload<ExportTaskDto>;
       } catch (error) {
-        if (!canUseDemoFallback(error)) throw error;
-        return {
-          totalRows: 0,
-          importedRows: 0,
-          skippedRows: 0,
-          message: `当前处于本地演示模式，${subject}文件未提交到后端`,
-          failedRows: []
-        };
+        if (isRequestCanceled(error)) throw error;
+        throw new Error(extractErrorMessage(error, "导出任务加载失败"));
+      }
+    },
+    async downloadExportTask(
+      taskId: string,
+      options: { meetingId?: string; filename?: string; signal?: AbortSignal } = {}
+    ) {
+      const meetingId = requireMeetingId(options.meetingId || this.currentMeetingId);
+      try {
+        const response = await http.get<Blob>(`/admin/exports/${encodeURIComponent(taskId)}/download`, {
+          params: { meetingId: backendId(meetingId) },
+          responseType: "blob",
+          timeout: 120_000,
+          signal: options.signal
+        });
+        downloadBlob(
+          response.data,
+          filenameFromDisposition(response.headers["content-disposition"], options.filename || `meetingos-export-${taskId}.xlsx`)
+        );
+      } catch (error) {
+        if (isRequestCanceled(error)) throw error;
+        throw new Error(await downloadErrorMessage(error, "导出文件下载失败"));
       }
     },
     async uploadImageAsset(file: File) {
@@ -3839,8 +3975,53 @@ function mapExportTask(item: ExportTaskWireDto): ExportTaskDto {
     createdAt: item.createdAt || item.completedAt || "",
     filename: item.filename,
     requestedBy: item.requestedBy,
-    message: item.message
+    message: item.message,
+    format: item.format,
+    startDate: item.startDate,
+    endDate: item.endDate,
+    progress: normalizeTaskProgress(item.progress),
+    completedAt: item.completedAt,
+    expiresAt: item.expiresAt,
+    fileAvailable: item.fileAvailable,
+    fileSize: item.fileSize,
+    checksum: item.checksum,
+    generatedAt: item.generatedAt
   };
+}
+
+function mapImportTask(
+  item: ImportTaskWireDto,
+  fallbackMeetingId: string,
+  fallbackType: ImportTaskType = "attendees",
+  fallbackFilename = ""
+): ImportTaskDto {
+  const totalRows = Math.max(0, Number(item.totalRows) || 0);
+  const processedRows = Math.max(0, Number(item.processedRows) || 0);
+  const importedRows = Math.max(0, Number(item.importedRows) || 0);
+  const failedRows = Math.max(0, Number(item.failedRows) || 0);
+  return {
+    id: idOf(item.taskId ?? item.id),
+    meetingId: item.meetingId ?? fallbackMeetingId,
+    type: item.type || fallbackType,
+    status: item.status || "PENDING",
+    originalFilename: item.originalFilename || fallbackFilename,
+    totalRows,
+    processedRows,
+    importedRows,
+    failedRows,
+    progress: normalizeTaskProgress(item.progress, totalRows > 0 ? (processedRows / totalRows) * 100 : 0),
+    message: item.message,
+    failureFileAvailable: Boolean(item.failureFileAvailable),
+    startedAt: item.startedAt,
+    createdAt: item.createdAt,
+    completedAt: item.completedAt,
+    expiresAt: item.expiresAt
+  };
+}
+
+function normalizeTaskProgress(value: number | undefined, fallback = 0) {
+  const progress = Number.isFinite(Number(value)) ? Number(value) : fallback;
+  return Math.min(100, Math.max(0, Math.round(progress)));
 }
 
 function getLocalAdminUsers(): AdminUserDto[] {

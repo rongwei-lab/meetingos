@@ -15,23 +15,64 @@
           导入模板
         </n-button>
       </n-dropdown>
-      <n-upload :show-file-list="false" accept=".xlsx" :custom-request="importRooms">
+      <n-button secondary size="large" @click="importHistoryVisible = true">
+        <template #icon><n-icon :component="TimeOutline" /></template>
+        导入记录
+      </n-button>
+      <n-upload :show-file-list="false" accept=".xlsx" :disabled="importingRooms" :custom-request="importRooms">
         <n-button secondary size="large" :loading="importingRooms">
           <template #icon><n-icon :component="CloudUploadOutline" /></template>
           导入房间号
         </n-button>
       </n-upload>
-      <n-upload :show-file-list="false" accept=".xlsx" :custom-request="importAssignments">
+      <n-upload :show-file-list="false" accept=".xlsx" :disabled="importingAssignments" :custom-request="importAssignments">
         <n-button secondary size="large" :loading="importingAssignments">
           <template #icon><n-icon :component="CloudUploadOutline" /></template>
           导入分配
         </n-button>
       </n-upload>
-      <n-button secondary size="large" @click="exportRooms">
+      <n-button secondary size="large" :loading="exportingRooms" :disabled="exportingRooms" @click="exportRooms">
         <template #icon><n-icon :component="DownloadOutline" /></template>
         导出住宿安排
       </n-button>
     </page-header>
+
+    <import-task-feedback
+      v-if="roomImportFeedbackVisible"
+      v-model:show="roomImportResultVisible"
+      label="房间号导入"
+      :filename="roomImportFileName"
+      :task="roomImportTask"
+      :busy="importingRooms"
+      :uploading-file="uploadingRoomFile"
+      :progress="roomImportProgress"
+      :flow-error="roomImportError"
+      :refresh-warning="roomImportRefreshWarning"
+      :downloading-failures="downloadingRoomFailures"
+      @open-result="openRoomImportResult"
+      @download-failures="downloadRoomFailures"
+    />
+    <import-task-feedback
+      v-if="assignmentImportFeedbackVisible"
+      v-model:show="assignmentImportResultVisible"
+      label="房间分配导入"
+      :filename="assignmentImportFileName"
+      :task="assignmentImportTask"
+      :busy="importingAssignments"
+      :uploading-file="uploadingAssignmentFile"
+      :progress="assignmentImportProgress"
+      :flow-error="assignmentImportError"
+      :refresh-warning="assignmentImportRefreshWarning"
+      :downloading-failures="downloadingAssignmentFailures"
+      @open-result="openAssignmentImportResult"
+      @download-failures="downloadAssignmentFailures"
+    />
+
+    <import-task-history-modal
+      v-model:show="importHistoryVisible"
+      :meeting-id="routeMeetingId || store.currentMeetingId || ''"
+      :type-options="roomImportHistoryTypes"
+    />
 
     <section class="room-stats" aria-label="住宿统计">
       <div v-for="item in roomStats" :key="item.label" class="room-stat-card surface">
@@ -363,7 +404,7 @@
 </template>
 
 <script setup lang="ts">
-import type { DataTableColumns, DropdownOption, SelectOption, UploadCustomRequestOptions } from "naive-ui";
+import type { DataTableColumns, DropdownOption, SelectOption } from "naive-ui";
 import { NButton, NDataTable, NTag, NUpload, useMessage } from "naive-ui";
 import {
   AddOutline,
@@ -371,13 +412,18 @@ import {
   CheckmarkCircleOutline,
   CloudUploadOutline,
   DownloadOutline,
-  SearchOutline
+  SearchOutline,
+  TimeOutline
 } from "@vicons/ionicons5";
 import { computed, h, onMounted, reactive, ref, watch } from "vue";
+import ImportTaskFeedback from "@/components/ImportTaskFeedback.vue";
+import ImportTaskHistoryModal from "@/components/ImportTaskHistoryModal.vue";
 import PageHeader from "@/components/PageHeader.vue";
+import { useExportTaskDownload } from "@/composables/useExportTaskDownload";
+import { useImportTaskFlow } from "@/composables/useImportTaskFlow";
 import { useRouteMeeting } from "@/composables/useRouteMeeting";
 import { useIsMobile } from "@/composables/useResponsive";
-import type { CreateRoomPayload, ImportResultDto } from "@/stores/meeting";
+import type { CreateRoomPayload } from "@/stores/meeting";
 import { useMeetingStore } from "@/stores/meeting";
 import { attendeeTypeLabel } from "@/utils/meetingDisplay";
 import { downloadXlsxTemplate } from "@/utils/xlsxTemplate";
@@ -421,8 +467,62 @@ const isMobile = useIsMobile();
 const selectedAttendeeId = ref<string | null>(null);
 const selectedRoomId = ref<string | null>(null);
 const assignmentRemark = ref("");
-const importingRooms = ref(false);
-const importingAssignments = ref(false);
+const {
+  importing: importingRooms,
+  uploadingFile: uploadingRoomFile,
+  selectedFileName: roomImportFileName,
+  task: roomImportTask,
+  flowError: roomImportError,
+  refreshWarning: roomImportRefreshWarning,
+  resultVisible: roomImportResultVisible,
+  downloadingFailures: downloadingRoomFailures,
+  hasFeedback: roomImportFeedbackVisible,
+  progress: roomImportProgress,
+  handleUpload: importRooms,
+  downloadFailures: downloadRoomFailures,
+  openResult: openRoomImportResult,
+  cancelAndReset: cancelRoomImport
+} = useImportTaskFlow({
+  type: "rooms",
+  label: "房间号导入",
+  refresh: async (meetingId) => {
+    await store.loadRooms(meetingId);
+  }
+});
+const {
+  importing: importingAssignments,
+  uploadingFile: uploadingAssignmentFile,
+  selectedFileName: assignmentImportFileName,
+  task: assignmentImportTask,
+  flowError: assignmentImportError,
+  refreshWarning: assignmentImportRefreshWarning,
+  resultVisible: assignmentImportResultVisible,
+  downloadingFailures: downloadingAssignmentFailures,
+  hasFeedback: assignmentImportFeedbackVisible,
+  progress: assignmentImportProgress,
+  handleUpload: importAssignments,
+  downloadFailures: downloadAssignmentFailures,
+  openResult: openAssignmentImportResult,
+  cancelAndReset: cancelAssignmentImport
+} = useImportTaskFlow({
+  type: "room-assignments",
+  label: "房间分配导入",
+  refresh: async (meetingId) => {
+    await Promise.all([store.loadRooms(meetingId), store.loadAttendees(meetingId)]);
+    store.reconcileAssignments();
+    store.refreshMeetingCounters();
+  }
+});
+const {
+  exporting: exportingRooms,
+  runExport: runRoomExport,
+  cancelAndReset: cancelRoomExport
+} = useExportTaskDownload();
+const importHistoryVisible = ref(false);
+const roomImportHistoryTypes = [
+  { label: "房间号", value: "rooms" },
+  { label: "房间分配", value: "room-assignments" }
+] as const;
 const assigningRoom = ref(false);
 const createRoomModalVisible = ref(false);
 const batchRoomModalVisible = ref(false);
@@ -482,9 +582,12 @@ onMounted(() => {
 });
 
 watch(routeMeetingId, (meetingId, previousMeetingId) => {
-  if (meetingId && meetingId !== previousMeetingId) {
-    void loadRoomPageData();
-  }
+  if (meetingId === previousMeetingId) return;
+  cancelRoomImport();
+  cancelAssignmentImport();
+  cancelRoomExport();
+  importHistoryVisible.value = false;
+  if (meetingId) void loadRoomPageData();
 });
 
 const roomStatusMeta: Record<RoomStatus, { label: string; type: "success" | "warning" | "error" }> = {
@@ -910,65 +1013,25 @@ async function clearRoomAssignmentByRow(row: RoomAttendeeRow) {
   }
 }
 
-function importRooms(options: UploadCustomRequestOptions) {
-  const file = options.file.file;
-  if (!file) {
-    options.onError();
-    return;
-  }
-  importingRooms.value = true;
-  void store.importRooms(file)
-    .then((result) => {
-      options.onFinish();
-      showImportResult(result);
-    })
-    .catch((error) => {
-      options.onError();
-      message.error(error instanceof Error ? error.message : "房间号导入失败");
-    })
-    .finally(() => {
-      importingRooms.value = false;
-    });
-}
-
-function importAssignments(options: UploadCustomRequestOptions) {
-  const file = options.file.file;
-  if (!file) {
-    options.onError();
-    return;
-  }
-  importingAssignments.value = true;
-  void store.importRoomAssignments(file)
-    .then((result) => {
-      options.onFinish();
-      showImportResult(result);
-    })
-    .catch((error) => {
-      options.onError();
-      message.error(error instanceof Error ? error.message : "房间分配导入失败");
-    })
-    .finally(() => {
-      importingAssignments.value = false;
-    });
-}
-
 function exportRooms() {
-  void store.downloadExport("rooms", { format: "xlsx" }).then(() => {
-    message.success("住宿安排 XLSX 已开始下载");
+  if (exportingRooms.value) return;
+  void runRoomExport("rooms").then(() => {
+    message.success("住宿安排 XLSX 已生成并开始下载");
   }).catch((error) => {
-    message.error(error instanceof Error ? error.message : "导出失败，请确认后端服务已启动");
+    message.error(error instanceof Error ? error.message : "住宿安排导出失败");
   });
 }
 
 function exportRoomAttendeeList() {
   /*
-   * 顶部“导出住宿安排”保留原后端完整导出；这里导出当前统一参会人列表，
+   * 顶部“导出住宿安排”生成服务端固定版本；这里导出当前统一参会人列表，
    * 会保留搜索、状态和房间号筛选结果，便于按页面视图核对或现场临时分发。
    */
   downloadXlsxTemplate(
     `${currentMeetingName()}-住宿参会人列表`,
-    ["姓名", "手机号", "单位", "职务", "参会类型", "状态", "房间号", "房间备注"],
+    ["参会码", "姓名", "手机号", "单位", "职务", "参会类型", "状态", "房间号", "房间备注"],
     filteredRoomAttendeeRows.value.map((row) => [
+      row.attendee.attendeeCode || "",
       row.attendeeName || "",
       row.attendeePhone || "",
       row.organization || "",
@@ -990,20 +1053,12 @@ function downloadImportTemplate(key: string | number) {
     message.warning("未找到导入模板");
     return;
   }
-  downloadXlsxTemplate(template.filename, template.headers, template.rows, {
-    instructions: template.instructions
+  downloadXlsxTemplate(template.filename, template.headers, [], {
+    instructions: template.instructions,
+    exampleRows: template.exampleRows,
+    textColumnCount: template.headers.length
   });
   message.success(`${template.filename} 已开始下载`);
-}
-
-function showImportResult(result: ImportResultDto) {
-  const failures = result.failedRows?.slice(0, 3).map((row) => `${row.rowNumber}行：${row.reason}`).join("；");
-  const summary = failures ? `${result.message}；${failures}` : result.message;
-  if (result.skippedRows > 0) {
-    message.warning(summary, { duration: 6000 });
-  } else {
-    message.success(summary);
-  }
 }
 
 function resetRoomForm() {
@@ -1074,11 +1129,11 @@ function errorMessageOf(error: unknown, fallback: string) {
   return error instanceof Error ? error.message : fallback;
 }
 
-const importTemplates: Record<ImportTemplateKey, { filename: string; headers: string[]; rows: string[][]; instructions: string[] }> = {
+const importTemplates: Record<ImportTemplateKey, { filename: string; headers: string[]; exampleRows: string[][]; instructions: string[] }> = {
   rooms: {
     filename: "房间号导入模板",
     headers: ["房间号", "酒店", "房型", "可入住人数", "入住提示"],
-    rows: [
+    exampleRows: [
       ["1801", "上海会议中心酒店", "标准间", "2", "14:00 后可入住，凭身份证办理入住"],
       ["1802", "上海会议中心酒店", "大床房", "1", "VIP 嘉宾优先安排"]
     ],
@@ -1087,23 +1142,26 @@ const importTemplates: Record<ImportTemplateKey, { filename: string; headers: st
       "房间号为必填，且同一会议内不能重复。",
       "可入住人数请填写正整数；为空时系统按 1 人处理。",
       "酒店、房型、入住提示可为空，入住提示会在住宿查询结果中展示。",
-      "导入文件仅支持 .xlsx 格式；系统只读取第一个工作表的数据。"
+      "导入文件仅支持 .xlsx 格式；系统只读取第一个工作表的数据。",
+      "第二个“填写示例”工作表仅供参考，不会参与导入。"
     ]
   },
   assignments: {
     filename: "房间分配导入模板",
-    headers: ["姓名", "手机号", "证件号", "单位", "房间号", "房间备注"],
-    rows: [
-      ["张三", "13800000000", "", "示例公司", "1801", "同住人：李四"],
-      ["李四", "", "110101199001010000", "示例公司", "1801", "与张三同住"]
+    headers: ["参会码", "姓名", "手机号", "证件号", "单位", "房间号", "房间备注"],
+    exampleRows: [
+      ["DIGITAL2026-AB12CD34", "张三", "13800000000", "", "示例公司", "1801", "同住人：李四"],
+      ["DIGITAL2026-EF56GH78", "李四", "", "110101199001010000", "示例公司", "1801", "与张三同住"]
     ],
     instructions: [
       "请先导入或创建房间号，再导入房间分配。",
       "房间号为必填，必须是当前会议已经存在且未停用的房间号。",
-      "参会人匹配优先使用手机号，其次使用证件号；两者都为空时，使用姓名+单位匹配。",
+      "参会人匹配优先使用参会码，其次使用未脱敏手机号、证件号；这些字段都为空时，使用姓名+单位匹配。",
+      "从 MeetingOS 导出的文件回导时请保留参会码；脱敏手机号不会用于精确匹配。",
       "如果姓名+单位匹配到多人，请改填手机号或证件号，避免误分配。",
       "系统会校验房间容量，超过可入住人数的行会导入失败。",
-      "房间备注可填写同住人、特殊需求等现场可见备注。"
+      "房间备注可填写同住人、特殊需求等现场可见备注。",
+      "第二个“填写示例”工作表仅供参考，不会参与导入。"
     ]
   }
 };

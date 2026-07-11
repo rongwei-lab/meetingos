@@ -137,7 +137,7 @@ docker compose --env-file ../.env --profile tduck up -d
 - 停止并重启容器后数据仍保留。
 - MySQL 备份和恢复流程至少验证一次。
 - Redis 重启后 TDuck 业务可恢复；MeetingOS 当前公开查询限流仍为本机内存，多副本上线前需切换为 Redis。
-- MinIO bucket 存在，TDuck 上传下载正常；MeetingOS 当前导出仍实时生成 CSV，异步导出落对象存储后需补充文件上传下载回归。
+- TDuck 上传下载正常；MeetingOS 异步 XLSX 导出文件在保留期内可重复下载，过期后会清理且不能匿名访问。
 
 ## 上线前准出标准
 

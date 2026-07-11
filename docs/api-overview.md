@@ -74,12 +74,24 @@ Webhook 优先校验基于原始 body 的 `X-TDuck-Signature`，兼容 `X-Meetin
 | `PUT` | `/api/admin/attendees/batch-review` | 批量审核 |
 | `PUT` | `/api/admin/attendees/{attendeeId}/tags` | 修改标签 |
 | `DELETE` | `/api/admin/attendees/{attendeeId}` | 取消参会 |
-| `POST` | `/api/admin/attendees/import?meetingId={meetingId}` | 导入参会人，multipart 字段名 `file` |
-| `GET` | `/api/admin/attendees/export?meetingId={meetingId}&type=attendees` | 导出参会人 CSV |
+| `POST` | `/api/admin/attendees/import?meetingId={meetingId}` | 兼容导入参会人，multipart 字段名 `file`；新界面使用异步导入任务 |
+| `GET` | `/api/admin/attendees/export?meetingId={meetingId}&type=attendees` | 导出参会人 XLSX；显式 `format=csv` 兼容旧调用 |
 
-导入统一使用 `.xlsx` 模板，可识别中文和英文字段名。失败行通过 `failedRows[{rowNumber, reason}]` 返回。
+导入统一使用 `.xlsx` 模板，可识别中文和英文字段名。异步导入任务会生成 XLSX 失败明细。
 审核状态：`PENDING`、`APPROVED`、`REJECTED`、`CANCELLED`。
-后台列表和详情默认对手机号、证件号、邮箱脱敏；CSV 导出保留原始字段，但需要会议 `MANAGER` 权限并写操作日志。
+后台列表、详情和导出默认对手机号、证件号、邮箱脱敏；关闭脱敏需要会议管理权限，下载会写操作日志。
+
+## 异步导入任务
+
+| 方法 | 路径 | 说明 |
+| --- | --- | --- |
+| `POST` | `/api/admin/imports?meetingId={meetingId}&type={type}&preflight=true&idempotencyKey={key}` | 上传 XLSX 并创建文件格式检查任务，multipart 字段名 `file` |
+| `GET` | `/api/admin/imports/{taskId}?meetingId={meetingId}` | 查询导入任务状态和进度 |
+| `GET` | `/api/admin/imports?meetingId={meetingId}&page=0&size=20` | 分页查询导入任务记录 |
+| `POST` | `/api/admin/imports/{taskId}/commit?meetingId={meetingId}` | 文件格式检查通过后启动正式导入 |
+| `GET` | `/api/admin/imports/{taskId}/failures?meetingId={meetingId}` | 下载 XLSX 失败明细 |
+
+`type` 支持 `attendees`、`rooms`、`room-assignments`、`dinner`。同一幂等键的已完成任务直接返回原结果；失败或文件过期后可安全替换输入并重试。文件格式检查只验证 XLSX、表头和文本格式，业务行规则在正式导入时逐行校验并写入失败明细。
 
 ## 座位接口
 
@@ -158,9 +170,10 @@ MEETINGOS-CHECKIN:{meetingId}:{attendeeCode}
 | 方法 | 路径 | 说明 |
 | --- | --- | --- |
 | `GET` | `/api/admin/statistics/overview?meetingId={meetingId}` | 报名、座位、住宿、晚宴、签到概览 |
-| `POST` | `/api/admin/exports?meetingId={meetingId}&type={type}` | 创建导出任务，MVP 同步完成 |
-| `GET` | `/api/admin/exports?meetingId={meetingId}` | 查询已创建导出任务 |
-| `GET` | `/api/admin/exports/download?meetingId={meetingId}&type={type}` | 下载导出文件，默认 CSV，可通过 `format=xlsx` 下载 XLSX |
+| `POST` | `/api/admin/exports?meetingId={meetingId}&type={type}` | 创建异步 XLSX 导出任务 |
+| `GET` | `/api/admin/exports?meetingId={meetingId}` | 分页查询导出任务和进度 |
+| `GET` | `/api/admin/exports/{taskId}/download?meetingId={meetingId}` | 下载任务生成的固定 XLSX 文件 |
+| `GET` | `/api/admin/exports/download?meetingId={meetingId}&type={type}` | 兼容同步下载，默认 XLSX；显式 `format=csv` 兼容旧调用 |
 | `GET` | `/api/admin/operation-logs` | 操作日志 |
 | `GET` | `/api/admin/settings` | 读取系统设置，Webhook Token 仅返回脱敏状态 |
 | `PUT` | `/api/admin/settings` | 保存系统设置，忽略请求中的 Webhook Token，密钥仅由 `TDUCK_WEBHOOK_TOKEN` 管理 |

@@ -7,13 +7,19 @@ import org.apache.poi.ss.usermodel.Font;
 import org.apache.poi.ss.usermodel.Row;
 import org.apache.poi.ss.usermodel.Sheet;
 import org.apache.poi.ss.usermodel.Workbook;
+import org.apache.poi.xssf.streaming.SXSSFWorkbook;
 import org.apache.poi.xssf.usermodel.XSSFWorkbook;
+import org.springframework.core.io.Resource;
 import org.springframework.http.HttpHeaders;
 import org.springframework.http.MediaType;
 import org.springframework.http.ResponseEntity;
 
 import java.io.ByteArrayOutputStream;
 import java.io.IOException;
+import java.io.OutputStream;
+import java.nio.file.Files;
+import java.nio.file.Path;
+import java.nio.file.StandardOpenOption;
 import java.util.List;
 import java.util.Locale;
 
@@ -46,6 +52,63 @@ public final class SpreadsheetFiles {
         }
     }
 
+    /**
+     * 将工作簿直接写入文件。SXSSF 只保留固定窗口的行，避免异步大数据导出同时持有
+     * XSSFWorkbook、ByteArrayOutputStream 和响应 byte[] 三份完整内容。
+     */
+    public static void writeXlsx(Path path, List<ExportTable> tables) throws IOException {
+        Path parent = path.toAbsolutePath().normalize().getParent();
+        if (parent != null) {
+            Files.createDirectories(parent);
+        }
+        SXSSFWorkbook workbook = new SXSSFWorkbook(200);
+        workbook.setCompressTempFiles(true);
+        try (workbook;
+             OutputStream output = Files.newOutputStream(
+                     path,
+                     StandardOpenOption.CREATE,
+                     StandardOpenOption.TRUNCATE_EXISTING,
+                     StandardOpenOption.WRITE
+             )) {
+            CellStyle headerStyle = headerStyle(workbook);
+            CellStyle textStyle = textStyle(workbook);
+            for (ExportTable table : tables) {
+                writeSheet(workbook, table, headerStyle, textStyle);
+            }
+            workbook.write(output);
+        } finally {
+            // close 会关闭 OPCPackage，dispose 负责删除 SXSSF 的临时 XML 文件。
+            workbook.dispose();
+        }
+    }
+
+    /**
+     * 分页数据可通过 producer 持续写入同一工作表，调用方无需先构造完整 rows 列表。
+     */
+    public static void writeStreamingXlsx(Path path,
+                                          String sheetName,
+                                          List<String> headers,
+                                          ExportRowProducer producer) throws IOException {
+        Path parent = path.toAbsolutePath().normalize().getParent();
+        if (parent != null) {
+            Files.createDirectories(parent);
+        }
+        SXSSFWorkbook workbook = new SXSSFWorkbook(200);
+        workbook.setCompressTempFiles(true);
+        try (workbook;
+             OutputStream output = Files.newOutputStream(
+                     path,
+                     StandardOpenOption.CREATE,
+                     StandardOpenOption.TRUNCATE_EXISTING,
+                     StandardOpenOption.WRITE
+             )) {
+            writeStreamingSheet(workbook, sheetName, headers, producer);
+            workbook.write(output);
+        } finally {
+            workbook.dispose();
+        }
+    }
+
     public static ResponseEntity<byte[]> download(String filename, byte[] content, MediaType contentType) {
         return ResponseEntity.ok()
                 .header(HttpHeaders.CONTENT_DISPOSITION, "attachment; filename=\"" + safeFilename(filename) + "\"")
@@ -53,25 +116,71 @@ public final class SpreadsheetFiles {
                 .body(content);
     }
 
+    public static ResponseEntity<Resource> download(String filename,
+                                                    Resource content,
+                                                    long contentLength,
+                                                    MediaType contentType) {
+        return ResponseEntity.ok()
+                .header(HttpHeaders.CONTENT_DISPOSITION, "attachment; filename=\"" + safeFilename(filename) + "\"")
+                .contentLength(contentLength)
+                .contentType(contentType)
+                .body(content);
+    }
+
     private static void writeSheet(Workbook workbook, ExportTable table, CellStyle headerStyle, CellStyle textStyle) {
         Sheet sheet = workbook.createSheet(safeSheetName(table.sheetName()));
+        int[] visualWidths = new int[table.headers().size()];
         Row headerRow = sheet.createRow(0);
         for (int i = 0; i < table.headers().size(); i++) {
             Cell cell = headerRow.createCell(i);
             cell.setCellStyle(headerStyle);
             cell.setCellValue(table.headers().get(i));
+            visualWidths[i] = visualLength(table.headers().get(i));
         }
         for (int r = 0; r < table.rows().size(); r++) {
             Row row = sheet.createRow(r + 1);
             List<?> values = table.rows().get(r);
             for (int c = 0; c < table.headers().size(); c++) {
                 Object value = c < values.size() ? values.get(c) : "";
+                String text = ExportDisplayFormatter.value(value);
                 Cell cell = row.createCell(c);
                 cell.setCellStyle(textStyle);
-                cell.setCellValue(protectFormula(ExportDisplayFormatter.value(value)));
+                cell.setCellValue(protectFormula(text));
+                visualWidths[c] = Math.max(visualWidths[c], visualLength(text));
             }
         }
-        applyColumnWidths(sheet, table);
+        applyColumnWidths(sheet, visualWidths);
+    }
+
+    private static void writeStreamingSheet(Workbook workbook,
+                                            String sheetName,
+                                            List<String> headers,
+                                            ExportRowProducer producer) throws IOException {
+        Sheet sheet = workbook.createSheet(safeSheetName(sheetName));
+        CellStyle headerStyle = headerStyle(workbook);
+        CellStyle textStyle = textStyle(workbook);
+        int[] visualWidths = new int[headers.size()];
+        Row headerRow = sheet.createRow(0);
+        for (int index = 0; index < headers.size(); index++) {
+            Cell cell = headerRow.createCell(index);
+            cell.setCellStyle(headerStyle);
+            cell.setCellValue(headers.get(index));
+            visualWidths[index] = visualLength(headers.get(index));
+        }
+
+        int[] rowIndex = {1};
+        producer.produce(values -> {
+            Row row = sheet.createRow(rowIndex[0]++);
+            for (int column = 0; column < headers.size(); column++) {
+                Object value = column < values.size() ? values.get(column) : "";
+                String text = ExportDisplayFormatter.value(value);
+                Cell cell = row.createCell(column);
+                cell.setCellStyle(textStyle);
+                cell.setCellValue(protectFormula(text));
+                visualWidths[column] = Math.max(visualWidths[column], visualLength(text));
+            }
+        });
+        applyColumnWidths(sheet, visualWidths);
     }
 
     private static CellStyle headerStyle(Workbook workbook) {
@@ -89,14 +198,9 @@ public final class SpreadsheetFiles {
         return style;
     }
 
-    private static void applyColumnWidths(Sheet sheet, ExportTable table) {
-        for (int c = 0; c < table.headers().size(); c++) {
-            int max = visualLength(table.headers().get(c));
-            for (List<?> row : table.rows()) {
-                Object value = c < row.size() ? row.get(c) : "";
-                max = Math.max(max, visualLength(ExportDisplayFormatter.value(value)));
-            }
-            int width = Math.min(42, Math.max(10, max + 2));
+    private static void applyColumnWidths(Sheet sheet, int[] visualWidths) {
+        for (int c = 0; c < visualWidths.length; c++) {
+            int width = Math.min(42, Math.max(10, visualWidths[c] + 2));
             sheet.setColumnWidth(c, width * 256);
         }
     }

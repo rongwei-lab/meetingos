@@ -1,6 +1,7 @@
 package com.meetingos.tduck;
 
 import com.meetingos.attendee.Attendee;
+import com.meetingos.attendee.AttendeeCodeGenerator;
 import com.meetingos.attendee.AttendeeRepository;
 import com.meetingos.attendee.CheckinStatus;
 import com.meetingos.attendee.ReviewStatus;
@@ -15,6 +16,7 @@ import com.meetingos.publicapi.RegistrationInfo;
 import com.meetingos.settings.SystemSettingsService;
 import org.springframework.data.domain.Sort;
 import org.springframework.dao.DataIntegrityViolationException;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.util.DigestUtils;
@@ -33,7 +35,6 @@ import java.util.List;
 import java.util.Map;
 import java.util.Locale;
 import java.util.Optional;
-import java.util.UUID;
 import java.util.function.Supplier;
 
 @Service
@@ -56,6 +57,7 @@ public class TduckService {
     private final TduckSyncLogService syncLogService;
     private final TduckWebhookParser webhookParser;
     private final TduckTransactionRunner transactionRunner;
+    private final AttendeeCodeGenerator attendeeCodeGenerator;
 
     public TduckService(MeetingRepository meetingRepository,
                         TduckFormBindingRepository bindingRepository,
@@ -68,6 +70,35 @@ public class TduckService {
                         TduckSyncLogService syncLogService,
                         TduckWebhookParser webhookParser,
                         TduckTransactionRunner transactionRunner) {
+        this(
+                meetingRepository,
+                bindingRepository,
+                mappingRepository,
+                syncLogRepository,
+                attendeeRepository,
+                fieldMapper,
+                settingsService,
+                tduckClient,
+                syncLogService,
+                webhookParser,
+                transactionRunner,
+                new AttendeeCodeGenerator(attendeeRepository)
+        );
+    }
+
+    @Autowired
+    public TduckService(MeetingRepository meetingRepository,
+                        TduckFormBindingRepository bindingRepository,
+                        TduckFieldMappingRepository mappingRepository,
+                        TduckSyncLogRepository syncLogRepository,
+                        AttendeeRepository attendeeRepository,
+                        TduckFieldMapper fieldMapper,
+                        SystemSettingsService settingsService,
+                        TduckClient tduckClient,
+                        TduckSyncLogService syncLogService,
+                        TduckWebhookParser webhookParser,
+                        TduckTransactionRunner transactionRunner,
+                        AttendeeCodeGenerator attendeeCodeGenerator) {
         this.meetingRepository = meetingRepository;
         this.bindingRepository = bindingRepository;
         this.mappingRepository = mappingRepository;
@@ -79,6 +110,7 @@ public class TduckService {
         this.syncLogService = syncLogService;
         this.webhookParser = webhookParser;
         this.transactionRunner = transactionRunner;
+        this.attendeeCodeGenerator = attendeeCodeGenerator;
     }
 
     @Transactional
@@ -610,7 +642,7 @@ public class TduckService {
             attendee = new Attendee();
             attendee.setMeeting(meeting);
             attendee.setRegisteredAt(LocalDateTime.now());
-            attendee.setAttendeeCode(meeting.getCode() + "-" + UUID.randomUUID().toString().substring(0, 8).toUpperCase());
+            attendee.setAttendeeCode(attendeeCodeGenerator.generate(meeting));
             // TDuck 报名数据进入 MeetingOS 后默认视为有效报名；后续由管理员在参会人列表中按需拒绝。
             attendee.setReviewStatus(ReviewStatus.APPROVED);
             attendee.setReviewedAt(LocalDateTime.now());

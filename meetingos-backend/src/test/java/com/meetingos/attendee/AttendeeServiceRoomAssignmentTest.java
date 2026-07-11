@@ -31,6 +31,7 @@ import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.inOrder;
 import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
@@ -140,7 +141,7 @@ class AttendeeServiceRoomAssignmentTest {
     }
 
     @Test
-    void importDeletesNewAttendeeWhenRoomCapacityValidationFails() {
+    void importRollsBackRowWhenRoomCapacityValidationFails() {
         when(attendeeRepository.findByMeetingAndPhone(meeting, "13800000000")).thenReturn(Optional.empty());
         Attendee saved = attendee(11L, "张三", "13800000000", null);
         when(attendeeRepository.saveAndFlush(any(Attendee.class))).thenReturn(saved);
@@ -157,7 +158,8 @@ class AttendeeServiceRoomAssignmentTest {
                 .extracting(failure -> failure.reason())
                 .asString()
                 .contains("上限");
-        verify(attendeeRepository).delete(saved);
+        // 生产环境由逐行 REQUIRES_NEW 事务回滚插入，不再依赖手工 delete 补偿。
+        verify(attendeeRepository, never()).delete(saved);
     }
 
     @Test
@@ -165,7 +167,6 @@ class AttendeeServiceRoomAssignmentTest {
         assertReadCommitted("create", AttendeeRequest.class);
         assertReadCommitted("update", Long.class, AttendeeRequest.class);
         assertReadCommitted("assignRoom", Long.class, String.class, String.class);
-        assertReadCommitted("importFile", Long.class, MultipartFile.class);
     }
 
     @Test

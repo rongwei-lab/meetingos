@@ -6,6 +6,8 @@ interface XlsxEntry {
 export interface XlsxTemplateOptions {
   sheetName?: string;
   instructions?: string[];
+  exampleRows?: string[][];
+  textColumnCount?: number;
 }
 
 const XLSX_MIME = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet";
@@ -20,21 +22,7 @@ export function downloadXlsxTemplate(
   instructions: string[] = []
 ) {
   const options = normalizeOptions(sheetNameOrOptions, instructions);
-  const worksheets = [
-    { name: options.sheetName, rows: [headers, ...rows] },
-    ...instructionWorksheets(options.instructions)
-  ];
-  const entries: XlsxEntry[] = [
-    { path: "[Content_Types].xml", content: contentTypesXml(worksheets.length) },
-    { path: "_rels/.rels", content: rootRelsXml() },
-    { path: "xl/workbook.xml", content: workbookXml(worksheets.map((sheet) => sheet.name)) },
-    { path: "xl/_rels/workbook.xml.rels", content: workbookRelsXml(worksheets.length) },
-    ...worksheets.map((sheet, index) => ({
-      path: `xl/worksheets/sheet${index + 1}.xml`,
-      content: worksheetXml(sheet.rows)
-    }))
-  ];
-  const blob = new Blob([zipStore(entries)], { type: XLSX_MIME });
+  const blob = createXlsxTemplateBlob(headers, rows, options);
   const url = URL.createObjectURL(blob);
   const link = document.createElement("a");
   link.href = url;
@@ -45,17 +33,51 @@ export function downloadXlsxTemplate(
   URL.revokeObjectURL(url);
 }
 
+export function createXlsxTemplateBlob(headers: string[], rows: string[][], options: XlsxTemplateOptions = {}) {
+  const normalizedOptions = normalizeOptions(options, []);
+  const worksheets = [
+    {
+      name: normalizedOptions.sheetName,
+      rows: [headers, ...rows],
+      textColumnCount: normalizedOptions.textColumnCount || headers.length
+    },
+    ...exampleWorksheets(headers, normalizedOptions.exampleRows),
+    ...instructionWorksheets(normalizedOptions.instructions)
+  ];
+  const entries: XlsxEntry[] = [
+    { path: "[Content_Types].xml", content: contentTypesXml(worksheets.length) },
+    { path: "_rels/.rels", content: rootRelsXml() },
+    { path: "xl/workbook.xml", content: workbookXml(worksheets.map((sheet) => sheet.name)) },
+    { path: "xl/_rels/workbook.xml.rels", content: workbookRelsXml(worksheets.length) },
+    { path: "xl/styles.xml", content: stylesXml() },
+    ...worksheets.map((sheet, index) => ({
+      path: `xl/worksheets/sheet${index + 1}.xml`,
+      content: worksheetXml(sheet.rows, sheet.textColumnCount)
+    }))
+  ];
+  return new Blob([zipStore(entries)], { type: XLSX_MIME });
+}
+
 function normalizeOptions(sheetNameOrOptions: string | XlsxTemplateOptions, fallbackInstructions: string[]) {
   if (typeof sheetNameOrOptions === "string") {
     return {
       sheetName: sheetNameOrOptions,
-      instructions: fallbackInstructions
+      instructions: fallbackInstructions,
+      exampleRows: [] as string[][],
+      textColumnCount: 0
     };
   }
   return {
     sheetName: sheetNameOrOptions.sheetName || "导入模板",
-    instructions: sheetNameOrOptions.instructions || []
+    instructions: sheetNameOrOptions.instructions || [],
+    exampleRows: sheetNameOrOptions.exampleRows || [],
+    textColumnCount: Math.max(0, Math.floor(sheetNameOrOptions.textColumnCount || 0))
   };
+}
+
+function exampleWorksheets(headers: string[], exampleRows: string[][]) {
+  if (!exampleRows.length) return [];
+  return [{ name: "填写示例", rows: [headers, ...exampleRows], textColumnCount: headers.length }];
 }
 
 function instructionWorksheets(instructions: string[]) {
@@ -63,7 +85,7 @@ function instructionWorksheets(instructions: string[]) {
     return [];
   }
   /*
-   * 后端导入只读取第一个工作表。说明内容单独放在第二张表，
+   * 后端导入只读取第一个工作表。说明内容单独放在后续工作表，
    * 既方便会务人员查看，也避免把说明行误当成待导入数据。
    */
   return [{
@@ -72,11 +94,12 @@ function instructionWorksheets(instructions: string[]) {
       ["导入说明"],
       ["序号", "说明"],
       ...instructions.map((text, index) => [String(index + 1), text])
-    ]
+    ],
+    textColumnCount: 2
   }];
 }
 
-function worksheetXml(rows: string[][]) {
+function worksheetXml(rows: string[][], textColumnCount = 0) {
   const maxColumns = Math.max(...rows.map((row) => row.length), 1);
   const dimensions = `A1:${columnName(maxColumns)}${Math.max(rows.length, 1)}`;
   const columnWidths = Array.from({ length: maxColumns }, (_, index) => {
@@ -92,13 +115,15 @@ function worksheetXml(rows: string[][]) {
       )
     );
     const columnIndex = index + 1;
-    return `<col min="${columnIndex}" max="${columnIndex}" width="${width}" customWidth="1"/>`;
+    const textStyle = columnIndex <= textColumnCount ? ' style="1"' : "";
+    return `<col min="${columnIndex}" max="${columnIndex}" width="${width}" customWidth="1"${textStyle}/>`;
   }).join("");
   const sheetRows = rows.map((row, rowIndex) => {
     const rowNumber = rowIndex + 1;
     const cells = row.map((value, columnIndex) => {
       const reference = `${columnName(columnIndex + 1)}${rowNumber}`;
-      return `<c r="${reference}" t="inlineStr"><is><t>${escapeXml(value)}</t></is></c>`;
+      const styleIndex = rowIndex === 0 ? 2 : columnIndex < textColumnCount ? 1 : 0;
+      return `<c r="${reference}" s="${styleIndex}" t="inlineStr"><is><t>${escapeXml(value)}</t></is></c>`;
     }).join("");
     return `<row r="${rowNumber}">${cells}</row>`;
   }).join("");
@@ -125,6 +150,7 @@ function workbookRelsXml(sheetCount: number) {
   ).join("");
   return xmlDeclaration(`<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">
     ${relationships}
+    <Relationship Id="rId${sheetCount + 1}" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/styles" Target="styles.xml"/>
   </Relationships>`);
 }
 
@@ -142,8 +168,31 @@ function contentTypesXml(sheetCount: number) {
     <Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/>
     <Default Extension="xml" ContentType="application/xml"/>
     <Override PartName="/xl/workbook.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet.main+xml"/>
+    <Override PartName="/xl/styles.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.styles+xml"/>
     ${worksheetOverrides}
   </Types>`);
+}
+
+function stylesXml() {
+  return xmlDeclaration(`<styleSheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">
+    <numFmts count="1"><numFmt numFmtId="164" formatCode="@"/></numFmts>
+    <fonts count="2">
+      <font><sz val="11"/><name val="Aptos"/></font>
+      <font><b/><sz val="11"/><name val="Aptos"/></font>
+    </fonts>
+    <fills count="2">
+      <fill><patternFill patternType="none"/></fill>
+      <fill><patternFill patternType="gray125"/></fill>
+    </fills>
+    <borders count="1"><border><left/><right/><top/><bottom/><diagonal/></border></borders>
+    <cellStyleXfs count="1"><xf numFmtId="0" fontId="0" fillId="0" borderId="0"/></cellStyleXfs>
+    <cellXfs count="3">
+      <xf numFmtId="0" fontId="0" fillId="0" borderId="0" xfId="0"/>
+      <xf numFmtId="164" fontId="0" fillId="0" borderId="0" xfId="0" applyNumberFormat="1"/>
+      <xf numFmtId="164" fontId="1" fillId="0" borderId="0" xfId="0" applyFont="1" applyNumberFormat="1"/>
+    </cellXfs>
+    <cellStyles count="1"><cellStyle name="Normal" xfId="0" builtinId="0"/></cellStyles>
+  </styleSheet>`);
 }
 
 function zipStore(entries: XlsxEntry[]) {

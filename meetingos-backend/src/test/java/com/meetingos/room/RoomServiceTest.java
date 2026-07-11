@@ -109,7 +109,6 @@ class RoomServiceTest {
     void capacityWriteTransactionsUseReadCommittedIsolation() throws NoSuchMethodException {
         assertReadCommitted("assign", AssignRoomRequest.class);
         assertReadCommitted("clearAssignment", Long.class);
-        assertReadCommitted("importAssignments", Long.class, MultipartFile.class);
     }
 
     private void assertReadCommitted(String methodName, Class<?>... parameterTypes) throws NoSuchMethodException {

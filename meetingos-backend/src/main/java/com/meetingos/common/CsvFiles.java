@@ -5,6 +5,11 @@ import org.springframework.http.MediaType;
 import org.springframework.http.ResponseEntity;
 
 import java.nio.charset.StandardCharsets;
+import java.nio.file.Files;
+import java.nio.file.Path;
+import java.nio.file.StandardOpenOption;
+import java.io.BufferedWriter;
+import java.io.IOException;
 import java.util.List;
 
 /**
@@ -31,6 +36,26 @@ public final class CsvFiles {
                 .body(csv.getBytes(StandardCharsets.UTF_8));
     }
 
+    public static void writeCsv(Path path,
+                                List<String> headers,
+                                ExportRowProducer producer) throws IOException {
+        Path parent = path.toAbsolutePath().normalize().getParent();
+        if (parent != null) {
+            Files.createDirectories(parent);
+        }
+        try (BufferedWriter writer = Files.newBufferedWriter(
+                path,
+                StandardCharsets.UTF_8,
+                StandardOpenOption.CREATE,
+                StandardOpenOption.TRUNCATE_EXISTING,
+                StandardOpenOption.WRITE
+        )) {
+            writer.write('\uFEFF');
+            writer.write(csvRow(headers));
+            producer.produce(row -> writer.write(csvRow(row)));
+        }
+    }
+
     private static void appendRow(StringBuilder builder, List<?> values) {
         for (int i = 0; i < values.size(); i++) {
             if (i > 0) {
@@ -39,6 +64,12 @@ public final class CsvFiles {
             builder.append(escape(values.get(i)));
         }
         builder.append('\n');
+    }
+
+    private static String csvRow(List<?> values) {
+        StringBuilder builder = new StringBuilder();
+        appendRow(builder, values);
+        return builder.toString();
     }
 
     private static String escape(Object value) {
@@ -55,9 +86,24 @@ public final class CsvFiles {
         if (value == null || value.isBlank()) {
             return value;
         }
-        char first = value.charAt(0);
+        int offset = 0;
+        while (offset < value.length()) {
+            int codePoint = value.codePointAt(offset);
+            int type = Character.getType(codePoint);
+            if (!Character.isWhitespace(codePoint)
+                    && !Character.isSpaceChar(codePoint)
+                    && !Character.isISOControl(codePoint)
+                    && type != Character.FORMAT) {
+                break;
+            }
+            offset += Character.charCount(codePoint);
+        }
+        if (offset >= value.length()) {
+            return value;
+        }
+        char first = value.charAt(offset);
         if (first == '=' || first == '+' || first == '-' || first == '@') {
-            // Excel 会把这些前缀当作公式执行；导出文件面向人工打开，统一加单引号保留文本语义。
+            // Excel 可能忽略前导空白/控制字符后执行公式；单引号必须放在原值最前面才能形成文本门禁。
             return "'" + value;
         }
         return value;

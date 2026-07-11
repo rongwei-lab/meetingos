@@ -101,6 +101,12 @@ public interface AttendeeRepository extends JpaRepository<Attendee, Long> {
 
     List<Attendee> findByMeetingIdAndCheckinStatusOrderByIdAsc(Long meetingId, CheckinStatus checkinStatus);
 
+    List<Attendee> findByMeetingIdAndReviewStatusAndCheckinStatusOrderByIdAsc(Long meetingId,
+                                                                              ReviewStatus reviewStatus,
+                                                                              CheckinStatus checkinStatus);
+
+    boolean existsByAttendeeCode(String attendeeCode);
+
     long countByMeetingId(Long meetingId);
 
     long countByMeetingIdAndReviewStatus(Long meetingId, ReviewStatus reviewStatus);

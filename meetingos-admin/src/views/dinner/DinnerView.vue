@@ -5,12 +5,16 @@
         <template #icon><n-icon :component="DownloadOutline" /></template>
         导入模板
       </n-button>
-      <n-upload :show-file-list="false" accept=".xlsx" :custom-request="importAssignments">
+      <n-upload :show-file-list="false" accept=".xlsx" :disabled="importing" :custom-request="importAssignments">
         <n-button secondary size="large" :loading="importing">
           <template #icon><n-icon :component="CloudUploadOutline" /></template>
           导入分配
         </n-button>
       </n-upload>
+      <n-button secondary size="large" @click="importHistoryVisible = true">
+        <template #icon><n-icon :component="TimeOutline" /></template>
+        导入记录
+      </n-button>
       <n-button secondary size="large" :loading="exporting" @click="exportDinner">
         <template #icon><n-icon :component="DownloadOutline" /></template>
         导出晚宴安排
@@ -20,6 +24,28 @@
         手动安排
       </n-button>
     </page-header>
+
+    <import-task-feedback
+      v-if="importFeedbackVisible"
+      v-model:show="importResultVisible"
+      label="晚宴分配导入"
+      :filename="importFileName"
+      :task="importTask"
+      :busy="importing"
+      :uploading-file="uploadingImportFile"
+      :progress="importProgress"
+      :flow-error="importFlowError"
+      :refresh-warning="importRefreshWarning"
+      :downloading-failures="downloadingImportFailures"
+      @open-result="openImportResult"
+      @download-failures="downloadImportFailures"
+    />
+
+    <import-task-history-modal
+      v-model:show="importHistoryVisible"
+      :meeting-id="routeMeetingId || store.currentMeetingId || ''"
+      :type-options="dinnerImportHistoryTypes"
+    />
 
     <n-card class="surface dinner-settings-card" :bordered="false" title="晚宴信息">
       <div class="dinner-settings-form">
@@ -403,15 +429,18 @@
 </template>
 
 <script setup lang="ts">
-import type { DataTableColumns, SelectOption, UploadCustomRequestOptions } from "naive-ui";
+import type { DataTableColumns, SelectOption } from "naive-ui";
 import { NButton, NDataTable, NPopconfirm, NTag, NUpload, useDialog, useMessage } from "naive-ui";
-import { AddOutline, CloudUploadOutline, DownloadOutline, GridOutline, SearchOutline, TrashOutline } from "@vicons/ionicons5";
+import { AddOutline, CloudUploadOutline, DownloadOutline, GridOutline, SearchOutline, TimeOutline, TrashOutline } from "@vicons/ionicons5";
 import { computed, h, onMounted, reactive, ref, watch } from "vue";
+import ImportTaskFeedback from "@/components/ImportTaskFeedback.vue";
+import ImportTaskHistoryModal from "@/components/ImportTaskHistoryModal.vue";
 import PageHeader from "@/components/PageHeader.vue";
+import { useExportTaskDownload } from "@/composables/useExportTaskDownload";
+import { useImportTaskFlow } from "@/composables/useImportTaskFlow";
 import { useRouteMeeting } from "@/composables/useRouteMeeting";
 import { useIsMobile } from "@/composables/useResponsive";
 import type { DinnerAssignment, DinnerTable } from "@/utils/types";
-import type { ImportResultDto } from "@/stores/meeting";
 import { useMeetingStore } from "@/stores/meeting";
 import { attendeeTypeLabel } from "@/utils/meetingDisplay";
 import { downloadXlsxTemplate } from "@/utils/xlsxTemplate";
@@ -420,6 +449,7 @@ type DinnerStatusFilter = "ALL" | "ASSIGNED" | "UNASSIGNED";
 
 interface DinnerAttendeeRow {
   attendeeId: string;
+  attendeeCode?: string;
   attendeeName: string;
   attendeePhone?: string;
   organization?: string;
@@ -448,8 +478,39 @@ const message = useMessage();
 const dialog = useDialog();
 const isMobile = useIsMobile();
 const { routeMeetingId } = useRouteMeeting({ loadWorkspace: false });
-const importing = ref(false);
-const exporting = ref(false);
+const {
+  importing,
+  uploadingFile: uploadingImportFile,
+  selectedFileName: importFileName,
+  task: importTask,
+  flowError: importFlowError,
+  refreshWarning: importRefreshWarning,
+  resultVisible: importResultVisible,
+  downloadingFailures: downloadingImportFailures,
+  hasFeedback: importFeedbackVisible,
+  progress: importProgress,
+  handleUpload: importAssignments,
+  downloadFailures: downloadImportFailures,
+  openResult: openImportResult,
+  cancelAndReset: cancelDinnerImport
+} = useImportTaskFlow({
+  type: "dinner",
+  label: "晚宴分配导入",
+  refresh: async (meetingId) => {
+    await Promise.all([
+      store.loadDinnerAssignments(meetingId),
+      store.loadDinnerTables(meetingId),
+      store.loadDinnerSettings(meetingId)
+    ]);
+  }
+});
+const {
+  exporting,
+  runExport: runDinnerExport,
+  cancelAndReset: cancelDinnerExport
+} = useExportTaskDownload();
+const importHistoryVisible = ref(false);
+const dinnerImportHistoryTypes = [{ label: "晚宴分配", value: "dinner" }] as const;
 const saving = ref(false);
 const savingTable = ref(false);
 const savingSettings = ref(false);
@@ -502,9 +563,11 @@ const tablePalette = ["#3b82f6", "#10b981", "#f59e0b", "#ef4444", "#8b5cf6", "#0
 onMounted(loadDinnerPageData);
 
 watch(routeMeetingId, (meetingId, previousMeetingId) => {
-  if (meetingId && meetingId !== previousMeetingId) {
-    void loadDinnerPageData();
-  }
+  if (meetingId === previousMeetingId) return;
+  cancelDinnerImport();
+  cancelDinnerExport();
+  importHistoryVisible.value = false;
+  if (meetingId) void loadDinnerPageData();
 });
 
 watch(
@@ -583,6 +646,7 @@ const dinnerAttendeeRows = computed<DinnerAttendeeRow[]>(() => approvedAttendees
   if (assignment) {
     return {
       attendeeId: attendee.id,
+      attendeeCode: attendee.attendeeCode,
       attendeeName: assignment.attendeeName,
       attendeePhone: assignment.attendeePhone,
       organization: assignment.organization,
@@ -596,6 +660,7 @@ const dinnerAttendeeRows = computed<DinnerAttendeeRow[]>(() => approvedAttendees
   }
   return {
     attendeeId: attendee.id,
+    attendeeCode: attendee.attendeeCode,
     attendeeName: attendee.name,
     attendeePhone: attendee.phone,
     organization: attendee.company,
@@ -1164,67 +1229,48 @@ async function clearAssignment(assignment: DinnerAssignment) {
   }
 }
 
-function importAssignments(options: UploadCustomRequestOptions) {
-  const file = options.file.file;
-  if (!file) {
-    options.onError();
-    return;
-  }
-  importing.value = true;
-  void store.importDinnerAssignments(file)
-    .then((result) => {
-      options.onFinish();
-      showImportResult(result);
-    })
-    .catch((error) => {
-      options.onError();
-      message.error(error instanceof Error ? error.message : "晚宴分配导入失败");
-    })
-    .finally(() => {
-      importing.value = false;
-    });
-}
-
 function exportDinner() {
-  exporting.value = true;
-  void store.downloadDinnerExport()
+  if (exporting.value) return;
+  void runDinnerExport("dinner")
     .then(() => {
-      message.success("晚宴安排 XLSX 已开始下载");
+      message.success("晚宴安排 XLSX 已生成并开始下载");
     })
     .catch((error) => {
       message.error(error instanceof Error ? error.message : "导出失败");
-    })
-    .finally(() => {
-      exporting.value = false;
     });
 }
 
 function downloadImportTemplate() {
-  downloadXlsxTemplate("晚宴分配导入模板", ["姓名", "手机号", "证件号", "单位", "桌号", "备注"], [
-    ["张三", "13800000000", "", "示例公司", "1号桌", "主桌"],
-    ["李四", "", "110101199001010000", "示例公司", "2号桌", "清真"]
-  ], {
+  downloadXlsxTemplate("晚宴分配导入模板", ["参会码", "姓名", "手机号", "证件号", "单位", "桌号", "备注"], [], {
     instructions: [
       "请在“导入模板”工作表填写数据，不要修改第一行表头名称。",
       "桌号为必填；如果桌号不存在，系统会自动创建该桌，默认可就餐人数为 10 人。",
-      "参会人匹配优先使用手机号，其次使用证件号；两者都为空时，使用姓名+单位匹配。",
+      "参会人匹配优先使用参会码，其次使用未脱敏手机号、证件号；这些字段都为空时，使用姓名+单位匹配。",
+      "从 MeetingOS 导出的文件回导时请保留参会码；脱敏手机号不会用于精确匹配。",
       "如果姓名+单位匹配到多人，请改填手机号或证件号，避免误分配。",
       "系统会校验桌号容量，超过可就餐人数的行会导入失败。",
-      "备注可填写主桌、清真、素食等现场用餐提示。"
-    ]
+      "备注可填写主桌、清真、素食等现场用餐提示。",
+      "第二个“填写示例”工作表仅供参考，不会参与导入。"
+    ],
+    exampleRows: [
+      ["DIGITAL2026-AB12CD34", "张三", "13800000000", "", "示例公司", "1号桌", "主桌"],
+      ["DIGITAL2026-EF56GH78", "李四", "", "110101199001010000", "示例公司", "2号桌", "清真"]
+    ],
+    textColumnCount: 7
   });
   message.success("晚宴分配导入模板已开始下载");
 }
 
 function exportDinnerAttendeeList() {
   /*
-   * 顶部“导出晚宴安排”走后端完整导出；这里导出的是统一参会人列表的当前视图，
+   * 顶部“导出晚宴安排”生成服务端固定版本；这里导出的是统一参会人列表的当前视图，
    * 会保留搜索、状态和桌号筛选结果，便于现场按当前页面结果临时分发。
    */
   downloadXlsxTemplate(
     `${currentMeetingName()}-晚宴参会人列表`,
-    ["姓名", "手机号", "单位", "职务", "参会类型", "状态", "桌号", "备注"],
+    ["参会码", "姓名", "手机号", "单位", "职务", "参会类型", "状态", "桌号", "备注"],
     filteredDinnerAttendeeRows.value.map((row) => [
+      row.attendeeCode || "",
       row.attendeeName || "",
       row.attendeePhone || "",
       row.organization || "",
@@ -1246,16 +1292,6 @@ function currentMeetingName() {
 function syncDinnerSettingsForm() {
   dinnerSettingsForm.venue = store.currentMeeting?.dinnerVenue || "";
   dinnerSettingsForm.dinnerTime = store.currentMeeting?.dinnerTime || "";
-}
-
-function showImportResult(result: ImportResultDto) {
-  const failures = result.failedRows?.slice(0, 3).map((row) => `${row.rowNumber}行：${row.reason}`).join("；");
-  const summary = failures ? `${result.message}；${failures}` : result.message;
-  if (result.skippedRows > 0) {
-    message.warning(summary, { duration: 6000 });
-  } else {
-    message.success(summary);
-  }
 }
 
 function distinctOptions(values: string[]) {

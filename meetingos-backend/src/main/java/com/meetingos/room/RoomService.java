@@ -7,7 +7,9 @@ import com.meetingos.common.BusinessException;
 import com.meetingos.common.CsvFiles;
 import com.meetingos.common.ExportTable;
 import com.meetingos.common.ImportFailure;
+import com.meetingos.common.ImportProgressListener;
 import com.meetingos.common.ImportResult;
+import com.meetingos.common.ImportRowTransactionRunner;
 import com.meetingos.common.SensitiveDataMasker;
 import com.meetingos.common.TableFileReader;
 import com.meetingos.common.TableRow;
@@ -17,6 +19,7 @@ import com.meetingos.operationlog.OperationLogService;
 import com.meetingos.settings.SystemSettingsService;
 import jakarta.persistence.EntityManager;
 import jakarta.persistence.LockModeType;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Isolation;
 import org.springframework.transaction.annotation.Propagation;
@@ -39,6 +42,7 @@ public class RoomService {
     private final EntityManager entityManager;
     private final OperationLogService operationLogService;
     private final SystemSettingsService systemSettingsService;
+    private final ImportRowTransactionRunner importRowTransactionRunner;
 
     public RoomService(MeetingRepository meetingRepository,
                        RoomRepository roomRepository,
@@ -46,12 +50,32 @@ public class RoomService {
                        EntityManager entityManager,
                        OperationLogService operationLogService,
                        SystemSettingsService systemSettingsService) {
+        this(
+                meetingRepository,
+                roomRepository,
+                attendeeRepository,
+                entityManager,
+                operationLogService,
+                systemSettingsService,
+                ImportRowTransactionRunner.direct()
+        );
+    }
+
+    @Autowired
+    public RoomService(MeetingRepository meetingRepository,
+                       RoomRepository roomRepository,
+                       AttendeeRepository attendeeRepository,
+                       EntityManager entityManager,
+                       OperationLogService operationLogService,
+                       SystemSettingsService systemSettingsService,
+                       ImportRowTransactionRunner importRowTransactionRunner) {
         this.meetingRepository = meetingRepository;
         this.roomRepository = roomRepository;
         this.attendeeRepository = attendeeRepository;
         this.entityManager = entityManager;
         this.operationLogService = operationLogService;
         this.systemSettingsService = systemSettingsService;
+        this.importRowTransactionRunner = importRowTransactionRunner;
     }
 
     @Transactional
@@ -139,55 +163,76 @@ public class RoomService {
         return attendee;
     }
 
-    @Transactional
     public ImportResult importRooms(Long meetingId, MultipartFile file) {
-        Meeting meeting = meetingRepository.findById(meetingId)
+        meetingRepository.findById(meetingId)
                 .orElseThrow(() -> BusinessException.notFound("会议不存在"));
         List<TableRow> rows = TableFileReader.read(file);
+        return importRoomRows(meetingId, rows, ImportProgressListener.NOOP);
+    }
+
+    public ImportResult importRoomRows(Long meetingId, List<TableRow> rows, ImportProgressListener progressListener) {
+        meetingRepository.findById(meetingId)
+                .orElseThrow(() -> BusinessException.notFound("会议不存在"));
         List<ImportFailure> failures = new ArrayList<>();
         int imported = 0;
 
         for (TableRow row : rows) {
             try {
-                Room room = fromRoomRow(meeting, row);
-                roomRepository.save(room);
+                importRowTransactionRunner.execute(() -> {
+                    Meeting meeting = meetingRepository.findById(meetingId)
+                            .orElseThrow(() -> BusinessException.notFound("会议不存在"));
+                    Room room = fromRoomRow(meeting, row);
+                    roomRepository.saveAndFlush(room);
+                    return null;
+                });
                 imported++;
             } catch (BusinessException ex) {
                 failures.add(new ImportFailure(row.rowNumber(), ex.getMessage()));
             } catch (RuntimeException ex) {
                 failures.add(new ImportFailure(row.rowNumber(), "房间数据格式不正确，请检查该行字段"));
             }
+            progressListener.onProgress(imported + failures.size(), imported, failures.size());
         }
         return ImportResult.of(rows.size(), imported, failures, "房间号");
     }
 
-    @Transactional(isolation = Isolation.READ_COMMITTED)
     public ImportResult importAssignments(Long meetingId, MultipartFile file) {
         meetingRepository.findById(meetingId)
                 .orElseThrow(() -> BusinessException.notFound("会议不存在"));
         List<TableRow> rows = TableFileReader.read(file);
+        return importAssignmentRows(meetingId, rows, ImportProgressListener.NOOP);
+    }
+
+    public ImportResult importAssignmentRows(Long meetingId, List<TableRow> rows, ImportProgressListener progressListener) {
+        meetingRepository.findById(meetingId)
+                .orElseThrow(() -> BusinessException.notFound("会议不存在"));
         List<ImportFailure> failures = new ArrayList<>();
         int imported = 0;
 
         for (TableRow row : rows) {
             try {
-                Attendee attendee = resolveAttendee(meetingId, row);
-                attendee = lockAttendeeForRoomChange(attendee.getId());
-                String roomNo = required(row, "房间号", "房号", "roomNo", "room");
-                LockedRooms lockedRooms = lockRoomsForAssignment(attendee, roomNo);
-                assignAttendeeToRoom(
-                        attendee,
-                        lockedRooms.target(),
-                        lockedRooms.previous(),
-                        row.get("房间备注", "住宿备注", "remark", "roomRemark"),
-                        "IMPORT"
-                );
+                importRowTransactionRunner.execute(() -> {
+                    Attendee attendee = resolveAttendee(meetingId, row);
+                    attendee = lockAttendeeForRoomChange(attendee.getId());
+                    String roomNo = requiredMaxLength(row, 80, "房间号", "房号", "roomNo", "room");
+                    LockedRooms lockedRooms = lockRoomsForAssignment(attendee, roomNo);
+                    assignAttendeeToRoom(
+                            attendee,
+                            lockedRooms.target(),
+                            lockedRooms.previous(),
+                            optionalMaxLength(row.get("房间备注", "住宿备注", "remark", "roomRemark"), 160, "房间备注"),
+                            "IMPORT"
+                    );
+                    entityManager.flush();
+                    return null;
+                });
                 imported++;
             } catch (BusinessException ex) {
                 failures.add(new ImportFailure(row.rowNumber(), ex.getMessage()));
             } catch (RuntimeException ex) {
                 failures.add(new ImportFailure(row.rowNumber(), "分配数据格式不正确，请检查该行字段"));
             }
+            progressListener.onProgress(imported + failures.size(), imported, failures.size());
         }
         return ImportResult.of(rows.size(), imported, failures, "房间分配");
     }
@@ -228,6 +273,7 @@ public class RoomService {
     @Transactional(readOnly = true)
     public ExportTable exportRoomsTable(Long meetingId) {
         List<Attendee> assignments = attendeeRepository.findByMeetingIdAndRoomNoIsNotNullOrderByIdAsc(meetingId);
+        boolean masked = systemSettingsService.maskSensitiveEnabled();
         var roomNos = assignments.stream()
                 .map(Attendee::getRoomNo)
                 .filter(roomNo -> roomNo != null && !roomNo.isBlank())
@@ -241,7 +287,8 @@ public class RoomService {
                     Room room = roomByNo.get(attendee.getRoomNo());
                     return List.of(
                             attendee.getName(),
-                            exportPhone(attendee.getPhone()),
+                            exportPhone(attendee.getPhone(), masked),
+                            nullable(attendee.getAttendeeCode()),
                             nullable(attendee.getOrganization()),
                             nullable(attendee.getTitle()),
                             attendee.getAttendeeType(),
@@ -256,7 +303,7 @@ public class RoomService {
                 .toList();
         return new ExportTable(
                 "住宿安排",
-                List.of("姓名", "手机号", "单位", "职务", "参会类型", "房间号", "酒店", "房型", "可入住人数", "入住提示", "房间备注"),
+                List.of("姓名", "手机号", "参会码", "单位", "职务", "参会类型", "房间号", "酒店", "房型", "可入住人数", "入住提示", "房间备注"),
                 rows
         );
     }
@@ -292,16 +339,16 @@ public class RoomService {
     }
 
     private Room fromRoomRow(Meeting meeting, TableRow row) {
-        String roomNo = required(row, "房间号", "房号", "roomNo", "room");
+        String roomNo = requiredMaxLength(row, 80, "房间号", "房号", "roomNo", "room");
         roomRepository.findByMeetingIdAndRoomNo(meeting.getId(), roomNo).ifPresent(existing -> {
             throw BusinessException.conflict("房间号已存在: " + roomNo);
         });
         Room room = new Room();
         room.setMeeting(meeting);
         room.setRoomNo(roomNo);
-        room.setRoomType(row.get("房型", "房间类型", "roomType", "type"));
-        room.setHotelName(row.get("酒店", "酒店名称", "hotel", "hotelName"));
-        room.setRemark(row.get("备注", "入住提示", "checkinTips", "remark"));
+        room.setRoomType(optionalMaxLength(row.get("房型", "房间类型", "roomType", "type"), 80, "房型"));
+        room.setHotelName(optionalMaxLength(row.get("酒店", "酒店名称", "hotel", "hotelName"), 160, "酒店"));
+        room.setRemark(optionalMaxLength(row.get("备注", "入住提示", "checkinTips", "remark"), 500, "入住提示"));
         room.setCapacity(parseCapacity(row.get("可入住人数", "入住人数", "容量", "床位数", "capacity", "maxOccupancy")));
         room.setStatus(RoomStatus.AVAILABLE);
         return room;
@@ -368,7 +415,11 @@ public class RoomService {
     private int parseCapacity(String value) {
         if (value == null || value.isBlank()) return 1;
         try {
-            return Math.max(1, Integer.parseInt(value.trim()));
+            int capacity = Integer.parseInt(value.trim());
+            if (capacity < 1) {
+                throw BusinessException.badRequest("可入住人数必须是正整数");
+            }
+            return capacity;
         } catch (NumberFormatException ex) {
             throw BusinessException.badRequest("可入住人数必须是正整数");
         }
@@ -381,9 +432,21 @@ public class RoomService {
     }
 
     private Attendee resolveAttendee(Long meetingId, TableRow row) {
+        String attendeeCode = row.get("参会码", "attendeeCode", "code");
+        if (attendeeCode != null && !attendeeCode.isBlank()) {
+            List<Attendee> matched = attendeeRepository.findByMeetingIdAndAttendeeCodeIgnoreCase(meetingId, attendeeCode.trim());
+            if (matched.size() == 1) {
+                return matched.get(0);
+            }
+            if (matched.isEmpty()) {
+                throw BusinessException.notFound("未找到参会码对应参会人: " + attendeeCode);
+            }
+            throw BusinessException.conflict("参会码匹配到多名参会人，请检查数据");
+        }
         String phone = row.get("手机号", "手机", "电话", "phone", "mobile");
-        if (phone != null && !phone.isBlank()) {
-            return attendeeRepository.findByMeetingIdAndPhone(meetingId, phone.trim())
+        if (phone != null && !phone.isBlank() && !isMaskedPhone(phone)) {
+            String normalizedPhone = phone.replaceAll("[\\s-]", "");
+            return attendeeRepository.findByMeetingIdAndPhone(meetingId, normalizedPhone)
                     .orElseThrow(() -> BusinessException.notFound("未找到手机号对应参会人: " + phone));
         }
         String identityNo = row.get("证件号", "身份证号", "身份证", "identityNo", "idcard", "idno");
@@ -414,15 +477,35 @@ public class RoomService {
         return value.trim();
     }
 
+    private String requiredMaxLength(TableRow row, int maxLength, String... aliases) {
+        String value = required(row, aliases);
+        return requireMaxLength(value, maxLength, aliases[0]);
+    }
+
+    private String requireMaxLength(String value, int maxLength, String label) {
+        if (value.length() > maxLength) {
+            throw BusinessException.badRequest(label + "不能超过 " + maxLength + " 个字符");
+        }
+        return value;
+    }
+
+    private String optionalMaxLength(String value, int maxLength, String label) {
+        return value == null ? null : requireMaxLength(value, maxLength, label);
+    }
+
+    private boolean isMaskedPhone(String phone) {
+        return phone.indexOf('*') >= 0;
+    }
+
     private Object nullable(Object value) {
         return value == null ? "" : value;
     }
 
-    private String exportPhone(String phone) {
+    private String exportPhone(String phone, boolean masked) {
         if (phone == null) {
             return "";
         }
-        return systemSettingsService.maskSensitiveEnabled() ? SensitiveDataMasker.maskPhone(phone) : phone;
+        return masked ? SensitiveDataMasker.maskPhone(phone) : phone;
     }
 
     private void recordRoomChange(Attendee attendee, String oldRoomNo, String newRoomNo, String source, String remark) {

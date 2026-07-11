@@ -191,13 +191,13 @@ class DinnerServiceTest {
 
         ExportTable table = dinnerService.exportDinnerTable(1L);
 
-        assertThat(table.headers()).containsExactly("姓名", "手机号", "单位", "职务", "参会类型", "桌号", "晚宴地点", "晚宴时间", "备注");
+        assertThat(table.headers()).containsExactly("姓名", "手机号", "参会码", "单位", "职务", "参会类型", "桌号", "晚宴地点", "晚宴时间", "备注");
         assertThat(table.rows()).hasSize(1);
         assertThat(table.rows().get(0)).isEqualTo(List.of(
-                "张三", "13800000000", "示例公司", "总监", AttendeeType.VIP, "3号桌", "三层宴会厅", "18:30", "主桌"
+                "张三", "13800000000", "FORUM-11", "示例公司", "总监", AttendeeType.VIP, "3号桌", "三层宴会厅", "18:30", "主桌"
         ));
         try (XSSFWorkbook workbook = new XSSFWorkbook(new java.io.ByteArrayInputStream(SpreadsheetFiles.toXlsx(List.of(table))))) {
-            assertThat(workbook.getSheet("晚宴安排").getRow(1).getCell(4).getStringCellValue()).isEqualTo("VIP");
+            assertThat(workbook.getSheet("晚宴安排").getRow(1).getCell(5).getStringCellValue()).isEqualTo("VIP");
         } catch (java.io.IOException ex) {
             throw new AssertionError("晚宴导出 XLSX 读取失败", ex);
         }
@@ -320,7 +320,6 @@ class DinnerServiceTest {
         assertReadCommitted("deleteTable", Long.class, Long.class);
         assertReadCommitted("assign", DinnerAssignRequest.class);
         assertReadCommitted("clear", Long.class);
-        assertReadCommitted("importAssignments", Long.class, MultipartFile.class);
     }
 
     @Test
@@ -357,6 +356,7 @@ class DinnerServiceTest {
         attendee.setTitle("职务");
         attendee.setAttendeeType(AttendeeType.NORMAL);
         attendee.setReviewStatus(reviewStatus);
+        attendee.setAttendeeCode("FORUM-" + id);
         return attendee;
     }
 

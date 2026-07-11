@@ -4,6 +4,11 @@ server:
 spring:
   application:
     name: meetingos-backend
+  servlet:
+    multipart:
+      max-file-size: 10MB
+      # multipart 边界和字段会占少量空间，文件本身仍由业务层严格限制为 10MB。
+      max-request-size: 11MB
   profiles:
     active: local
   datasource:

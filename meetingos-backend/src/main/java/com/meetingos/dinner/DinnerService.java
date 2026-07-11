@@ -6,7 +6,9 @@ import com.meetingos.attendee.ReviewStatus;
 import com.meetingos.common.BusinessException;
 import com.meetingos.common.ExportTable;
 import com.meetingos.common.ImportFailure;
+import com.meetingos.common.ImportProgressListener;
 import com.meetingos.common.ImportResult;
+import com.meetingos.common.ImportRowTransactionRunner;
 import com.meetingos.common.SensitiveDataMasker;
 import com.meetingos.common.TableFileReader;
 import com.meetingos.common.TableRow;
@@ -15,6 +17,7 @@ import com.meetingos.meeting.MeetingRepository;
 import com.meetingos.operationlog.OperationLogService;
 import com.meetingos.security.SecurityUtils;
 import com.meetingos.settings.SystemSettingsService;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Isolation;
 import org.springframework.transaction.annotation.Transactional;
@@ -35,6 +38,7 @@ public class DinnerService {
     private final DinnerTableRepository dinnerTableRepository;
     private final OperationLogService operationLogService;
     private final SystemSettingsService systemSettingsService;
+    private final ImportRowTransactionRunner importRowTransactionRunner;
 
     public DinnerService(MeetingRepository meetingRepository,
                          AttendeeRepository attendeeRepository,
@@ -42,12 +46,32 @@ public class DinnerService {
                          DinnerTableRepository dinnerTableRepository,
                          OperationLogService operationLogService,
                          SystemSettingsService systemSettingsService) {
+        this(
+                meetingRepository,
+                attendeeRepository,
+                dinnerAssignmentRepository,
+                dinnerTableRepository,
+                operationLogService,
+                systemSettingsService,
+                ImportRowTransactionRunner.direct()
+        );
+    }
+
+    @Autowired
+    public DinnerService(MeetingRepository meetingRepository,
+                         AttendeeRepository attendeeRepository,
+                         DinnerAssignmentRepository dinnerAssignmentRepository,
+                         DinnerTableRepository dinnerTableRepository,
+                         OperationLogService operationLogService,
+                         SystemSettingsService systemSettingsService,
+                         ImportRowTransactionRunner importRowTransactionRunner) {
         this.meetingRepository = meetingRepository;
         this.attendeeRepository = attendeeRepository;
         this.dinnerAssignmentRepository = dinnerAssignmentRepository;
         this.dinnerTableRepository = dinnerTableRepository;
         this.operationLogService = operationLogService;
         this.systemSettingsService = systemSettingsService;
+        this.importRowTransactionRunner = importRowTransactionRunner;
     }
 
     @Transactional(readOnly = true)
@@ -188,30 +212,54 @@ public class DinnerService {
         recordDinnerChange(attendee, oldTableNo, null, "MANUAL_CLEAR", null);
     }
 
-    @Transactional(isolation = Isolation.READ_COMMITTED)
     public ImportResult importAssignments(Long meetingId, MultipartFile file) {
-        // 整批导入持有会议锁，避免按文件行顺序累计多张桌锁时与另一批导入形成反向锁序。
-        Meeting meeting = lockMeetingForDinnerChange(meetingId);
+        meetingRepository.findById(meetingId)
+                .orElseThrow(() -> BusinessException.notFound("会议不存在"));
         List<TableRow> rows = TableFileReader.read(file);
+        return importAssignmentRows(meetingId, rows, ImportProgressListener.NOOP);
+    }
+
+    public ImportResult importAssignmentRows(Long meetingId, List<TableRow> rows, ImportProgressListener progressListener) {
+        meetingRepository.findById(meetingId)
+                .orElseThrow(() -> BusinessException.notFound("会议不存在"));
         List<ImportFailure> failures = new ArrayList<>();
         int imported = 0;
 
         for (TableRow row : rows) {
             try {
-                Attendee attendee = resolveAttendee(meetingId, row);
-                String tableNo = required(row, "桌号", "餐桌号", "桌位", "tableNo", "table");
-                attendee = lockAttendeeForDinnerChange(attendee.getId());
-                String venue = row.get("晚宴地点", "用餐地点", "宴会厅", "餐厅", "venue", "dinnerVenue");
-                String dinnerTime = row.get("晚宴时间", "用餐时间", "时间", "dinnerTime", "time");
-                String remark = row.get("备注", "晚宴备注", "用餐备注", "remark", "dinnerRemark");
-                backfillDinnerSettingsIfBlank(meeting, venue, dinnerTime);
-                upsertAssignment(attendee, tableNo, remark, "IMPORT");
+                importRowTransactionRunner.execute(() -> {
+                    // 每行统一先锁会议，避免自动建桌、容量校验与其他晚宴写操作形成反向锁序。
+                    Meeting meeting = lockMeetingForDinnerChange(meetingId);
+                    Attendee attendee = resolveAttendee(meetingId, row);
+                    String tableNo = requiredMaxLength(row, 80, "桌号", "餐桌号", "桌位", "tableNo", "table");
+                    attendee = lockAttendeeForDinnerChange(attendee.getId());
+                    String venue = optionalMaxLength(
+                            row.get("晚宴地点", "用餐地点", "宴会厅", "餐厅", "venue", "dinnerVenue"),
+                            160,
+                            "晚宴地点"
+                    );
+                    String dinnerTime = optionalMaxLength(
+                            row.get("晚宴时间", "用餐时间", "时间", "dinnerTime", "time"),
+                            120,
+                            "晚宴时间"
+                    );
+                    String remark = optionalMaxLength(
+                            row.get("备注", "晚宴备注", "用餐备注", "remark", "dinnerRemark"),
+                            500,
+                            "备注"
+                    );
+                    upsertAssignment(attendee, tableNo, remark, "IMPORT");
+                    // 只有分配和容量校验成功后才允许用旧模板补齐会议级设置。
+                    backfillDinnerSettingsIfBlank(meeting, venue, dinnerTime);
+                    return null;
+                });
                 imported++;
             } catch (BusinessException ex) {
                 failures.add(new ImportFailure(row.rowNumber(), ex.getMessage()));
             } catch (RuntimeException ex) {
                 failures.add(new ImportFailure(row.rowNumber(), "晚宴分配数据格式不正确，请检查该行字段"));
             }
+            progressListener.onProgress(imported + failures.size(), imported, failures.size());
         }
         return ImportResult.of(rows.size(), imported, failures, "晚宴分配");
     }
@@ -230,12 +278,14 @@ public class DinnerService {
     public ExportTable exportDinnerTable(Long meetingId) {
         Meeting meeting = meetingRepository.findById(meetingId)
                 .orElseThrow(() -> BusinessException.notFound("会议不存在"));
+        boolean masked = systemSettingsService.maskSensitiveEnabled();
         var rows = dinnerAssignmentRepository.findWithAttendeeByMeetingIdOrderByTableNoAscIdAsc(meetingId).stream()
                 .map(assignment -> {
                     Attendee attendee = assignment.getAttendee();
                     return List.of(
                             attendee.getName(),
-                            exportPhone(attendee.getPhone()),
+                            exportPhone(attendee.getPhone(), masked),
+                            nullable(attendee.getAttendeeCode()),
                             nullable(attendee.getOrganization()),
                             nullable(attendee.getTitle()),
                             attendee.getAttendeeType(),
@@ -248,7 +298,7 @@ public class DinnerService {
                 .toList();
         return new ExportTable(
                 "晚宴安排",
-                List.of("姓名", "手机号", "单位", "职务", "参会类型", "桌号", "晚宴地点", "晚宴时间", "备注"),
+                List.of("姓名", "手机号", "参会码", "单位", "职务", "参会类型", "桌号", "晚宴地点", "晚宴时间", "备注"),
                 rows
         );
     }
@@ -267,9 +317,10 @@ public class DinnerService {
         assignment.setMeeting(attendee.getMeeting());
         assignment.setAttendee(attendee);
         assignment.setTableNo(normalizedTableNo);
-        assignment.setRemark(limit(blankToNull(remark), 500));
+        assignment.setRemark(optionalMaxLength(blankToNull(remark), 500, "备注"));
         assignment.setAssignedBy(SecurityUtils.currentUsernameOrSystem());
         DinnerAssignment saved = dinnerAssignmentRepository.save(assignment);
+        dinnerAssignmentRepository.flush();
         recordDinnerChange(attendee, oldTableNo, normalizedTableNo, source, saved.getRemark());
         return saved;
     }
@@ -439,9 +490,21 @@ public class DinnerService {
     }
 
     private Attendee resolveAttendee(Long meetingId, TableRow row) {
+        String attendeeCode = row.get("参会码", "attendeeCode", "code");
+        if (attendeeCode != null && !attendeeCode.isBlank()) {
+            List<Attendee> matched = attendeeRepository.findByMeetingIdAndAttendeeCodeIgnoreCase(meetingId, attendeeCode.trim());
+            if (matched.size() == 1) {
+                return matched.get(0);
+            }
+            if (matched.isEmpty()) {
+                throw BusinessException.notFound("未找到参会码对应参会人: " + attendeeCode);
+            }
+            throw BusinessException.conflict("参会码匹配到多名参会人，请检查数据");
+        }
         String phone = row.get("手机号", "手机", "电话", "phone", "mobile");
-        if (phone != null && !phone.isBlank()) {
-            return attendeeRepository.findByMeetingIdAndPhone(meetingId, phone.trim())
+        if (phone != null && !phone.isBlank() && !isMaskedPhone(phone)) {
+            String normalizedPhone = phone.replaceAll("[\\s-]", "");
+            return attendeeRepository.findByMeetingIdAndPhone(meetingId, normalizedPhone)
                     .orElseThrow(() -> BusinessException.notFound("未找到手机号对应参会人: " + phone));
         }
         String identityNo = row.get("证件号", "身份证号", "身份证", "identityNo", "idcard", "idno");
@@ -472,12 +535,16 @@ public class DinnerService {
         return value.trim();
     }
 
+    private String requiredMaxLength(TableRow row, int maxLength, String... aliases) {
+        return requireMaxLength(required(row, aliases), maxLength, aliases[0]);
+    }
+
     private String requiredText(String value, String message, int maxLength) {
         String text = blankToNull(value);
         if (text == null) {
             throw BusinessException.badRequest(message);
         }
-        return limit(text, maxLength);
+        return requireMaxLength(text, maxLength, message.replace("不能为空", ""));
     }
 
     private int normalizedCapacity(Integer capacity) {
@@ -496,15 +563,30 @@ public class DinnerService {
         return value.substring(0, maxLength);
     }
 
+    private String requireMaxLength(String value, int maxLength, String label) {
+        if (value.length() > maxLength) {
+            throw BusinessException.badRequest(label + "不能超过 " + maxLength + " 个字符");
+        }
+        return value;
+    }
+
+    private String optionalMaxLength(String value, int maxLength, String label) {
+        return value == null ? null : requireMaxLength(value, maxLength, label);
+    }
+
+    private boolean isMaskedPhone(String phone) {
+        return phone.indexOf('*') >= 0;
+    }
+
     private Object nullable(Object value) {
         return value == null ? "" : value;
     }
 
-    private String exportPhone(String phone) {
+    private String exportPhone(String phone, boolean masked) {
         if (phone == null) {
             return "";
         }
-        return systemSettingsService.maskSensitiveEnabled() ? SensitiveDataMasker.maskPhone(phone) : phone;
+        return masked ? SensitiveDataMasker.maskPhone(phone) : phone;
     }
 
     private void recordDinnerChange(Attendee attendee, String oldTableNo, String newTableNo, String source, String remark) {

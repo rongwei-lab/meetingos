@@ -24,12 +24,12 @@ public record TableRow(
         return new LinkedHashMap<>(values);
     }
 
-    static String normalizeHeader(String header) {
+    public static String normalizeHeader(String header) {
         return header == null
                 ? ""
                 : header.trim()
                         .replace("\uFEFF", "")
                         .replaceAll("[\\s_\\-（）()：:]", "")
-                        .toLowerCase();
+                        .toLowerCase(java.util.Locale.ROOT);
     }
 }

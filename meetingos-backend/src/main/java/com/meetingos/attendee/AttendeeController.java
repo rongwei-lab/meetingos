@@ -1,9 +1,10 @@
 package com.meetingos.attendee;
 
 import com.meetingos.common.ApiResponse;
-import com.meetingos.common.CsvFiles;
 import com.meetingos.common.ImportResult;
 import com.meetingos.common.PageResponse;
+import com.meetingos.common.SpreadsheetFiles;
+import com.meetingos.exporttask.ExportFile;
 import com.meetingos.exporttask.ExportTaskService;
 import com.meetingos.operationlog.AuditLog;
 import com.meetingos.publicapi.PublicQueryHistoryRepository;
@@ -201,9 +202,10 @@ public class AttendeeController {
     @PreAuthorize("@meetingAccess.canManage(#meetingId)")
     @AuditLog(action = "ATTENDEE_EXPORT", targetType = "ATTENDEE")
     public ResponseEntity<byte[]> export(@RequestParam Long meetingId,
-                                         @RequestParam(defaultValue = "attendees") String type) {
-        exportTaskService.assertDownloadAllowed(meetingId, type);
-        return CsvFiles.download("meetingos-attendees.csv", attendeeService.exportCsv(meetingId, type));
+                                         @RequestParam(defaultValue = "attendees") String type,
+                                         @RequestParam(defaultValue = "xlsx") String format) {
+        ExportFile file = exportTaskService.build(meetingId, type, format, null, null);
+        return SpreadsheetFiles.download(file.filename(), file.content(), file.contentType());
     }
 
     private AttendeeResponse response(Attendee attendee, boolean masked) {

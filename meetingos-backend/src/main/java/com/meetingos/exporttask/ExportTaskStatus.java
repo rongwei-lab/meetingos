@@ -6,5 +6,6 @@ public enum ExportTaskStatus {
     APPROVED,
     REJECTED,
     COMPLETED,
-    FAILED
+    FAILED,
+    EXPIRED
 }

@@ -15,16 +15,44 @@
       >
         批量拒绝
       </n-button>
-      <n-button @click="exportAttendees">导出参会人</n-button>
+      <n-button :loading="attendeeExporting" :disabled="attendeeExporting" @click="exportAttendees">导出参会人 XLSX</n-button>
+      <n-button secondary @click="downloadAttendeeImportTemplate">导入模板</n-button>
+      <n-button secondary @click="importHistoryVisible = true">
+        <template #icon><n-icon :component="TimeOutline" /></template>
+        导入记录
+      </n-button>
       <n-button secondary @click="openNameplatePrint">打印席签</n-button>
       <n-upload
         :show-file-list="false"
         accept=".xlsx"
+        :disabled="importing"
         :custom-request="importAttendees"
       >
         <n-button type="primary" :loading="importing">导入参会人</n-button>
       </n-upload>
     </page-header>
+
+    <import-task-feedback
+      v-if="importFeedbackVisible"
+      v-model:show="importResultVisible"
+      label="参会人导入"
+      :filename="importFileName"
+      :task="importTask"
+      :busy="importing"
+      :uploading-file="uploadingImportFile"
+      :progress="importProgress"
+      :flow-error="importFlowError"
+      :refresh-warning="importRefreshWarning"
+      :downloading-failures="downloadingImportFailures"
+      @open-result="openImportResult"
+      @download-failures="downloadImportFailures"
+    />
+
+    <import-task-history-modal
+      v-model:show="importHistoryVisible"
+      :meeting-id="routeMeetingId || store.currentMeetingId || ''"
+      :type-options="attendeeImportHistoryTypes"
+    />
 
     <n-card class="surface" :bordered="false">
       <div class="filters">
@@ -523,19 +551,25 @@
 <script setup lang="ts">
 import type { SelectOption, UploadCustomRequestOptions } from "naive-ui";
 import { NButton, NDataTable, NDynamicTags, NForm, NFormItem, NModal, NSpace, NTag, NUpload, useDialog, useMessage } from "naive-ui";
+import { TimeOutline } from "@vicons/ionicons5";
 import { computed, defineAsyncComponent, h, nextTick, onBeforeUnmount, onMounted, ref, watch } from "vue";
 import { useRoute } from "vue-router";
 import { isRequestCanceled } from "@/api/http";
+import ImportTaskFeedback from "@/components/ImportTaskFeedback.vue";
+import ImportTaskHistoryModal from "@/components/ImportTaskHistoryModal.vue";
 import PageHeader from "@/components/PageHeader.vue";
 import StatusTag from "@/components/StatusTag.vue";
+import { useExportTaskDownload } from "@/composables/useExportTaskDownload";
+import { useImportTaskFlow } from "@/composables/useImportTaskFlow";
 import { useRouteMeeting } from "@/composables/useRouteMeeting";
 import { useIsMobile } from "@/composables/useResponsive";
-import type { ImportResultDto, MeetingPrintFieldSettingsDto, TduckFieldMappingDto } from "@/stores/meeting";
+import type { MeetingPrintFieldSettingsDto, TduckFieldMappingDto } from "@/stores/meeting";
 import { useMeetingStore } from "@/stores/meeting";
 import { attendeeFieldLabel, normalizedAttendeeFieldText } from "@/utils/attendeeFields";
 import { attendeeTypeLabel, formatDateLikeValue, formatDateTimeLabel, seatTypeLabel } from "@/utils/meetingDisplay";
 import { isAllowedUploadImage, sanitizeImageUrl } from "@/utils/safeUrl";
 import type { Attendee, AuditStatus, DinnerTable } from "@/utils/types";
+import { downloadXlsxTemplate } from "@/utils/xlsxTemplate";
 
 const store = useMeetingStore();
 const route = useRoute();
@@ -549,7 +583,36 @@ const hasSeat = ref<boolean | null>(null);
 const selectedTags = ref<string[]>([]);
 const remoteFilteredAttendees = ref<Attendee[] | null>(null);
 const checkedKeys = ref<string[]>([]);
-const importing = ref(false);
+const {
+  importing,
+  uploadingFile: uploadingImportFile,
+  selectedFileName: importFileName,
+  task: importTask,
+  flowError: importFlowError,
+  refreshWarning: importRefreshWarning,
+  resultVisible: importResultVisible,
+  downloadingFailures: downloadingImportFailures,
+  hasFeedback: importFeedbackVisible,
+  progress: importProgress,
+  handleUpload: importAttendees,
+  downloadFailures: downloadImportFailures,
+  openResult: openImportResult,
+  cancelAndReset: cancelAttendeeImport
+} = useImportTaskFlow({
+  type: "attendees",
+  label: "参会人导入",
+  refresh: async (meetingId) => {
+    await store.loadAttendees(meetingId);
+    store.refreshMeetingCounters();
+  }
+});
+const {
+  exporting: attendeeExporting,
+  runExport: runAttendeeExport,
+  cancelAndReset: cancelAttendeeExport
+} = useExportTaskDownload();
+const importHistoryVisible = ref(false);
+const attendeeImportHistoryTypes = [{ label: "参会人", value: "attendees" }] as const;
 const tagModalVisible = ref(false);
 const editingAttendee = ref<Attendee | null>(null);
 const editingTags = ref<string[]>([]);
@@ -1054,21 +1117,23 @@ watch(nameplateModalVisible, (visible) => {
 });
 
 watch(routeMeetingId, (meetingId, previousMeetingId) => {
-  if (meetingId && meetingId !== previousMeetingId) {
-    attendeeFilterGeneration += 1;
-    if (attendeeFilterTimer !== null) {
-      window.clearTimeout(attendeeFilterTimer);
-      attendeeFilterTimer = null;
-    }
-    store.cancelAttendeeSearch(previousMeetingId);
-    remoteFilteredAttendees.value = null;
-    checkedKeys.value = [];
-    fieldVisibilityInitialized = false;
-    visibleFieldKeys.value = [];
-    nameplateTemplateUrl.value = "";
-    selectedNameplateFieldSettings.value = [defaultNameplateFieldSetting("name")];
-    void loadAttendeePageData();
+  if (meetingId === previousMeetingId) return;
+  cancelAttendeeImport();
+  cancelAttendeeExport();
+  importHistoryVisible.value = false;
+  attendeeFilterGeneration += 1;
+  if (attendeeFilterTimer !== null) {
+    window.clearTimeout(attendeeFilterTimer);
+    attendeeFilterTimer = null;
   }
+  store.cancelAttendeeSearch(previousMeetingId);
+  remoteFilteredAttendees.value = null;
+  checkedKeys.value = [];
+  fieldVisibilityInitialized = false;
+  visibleFieldKeys.value = [];
+  nameplateTemplateUrl.value = "";
+  selectedNameplateFieldSettings.value = [defaultNameplateFieldSetting("name")];
+  if (meetingId) void loadAttendeePageData();
 });
 
 watch(activeFormMappings, (mappings) => {
@@ -1635,33 +1700,37 @@ function clearRowAuditing(id: string) {
   auditingById.value = next;
 }
 
-function importAttendees(options: UploadCustomRequestOptions) {
-  const file = options.file.file;
-  if (!file) {
-    options.onError();
-    return;
-  }
-  importing.value = true;
-  void store.importAttendees(file)
-    .then((result) => {
-      options.onFinish();
-      showImportResult(result);
-    })
-    .catch((error) => {
-      options.onError();
-      message.error(error instanceof Error ? error.message : "参会人导入失败");
-    })
-    .finally(() => {
-      importing.value = false;
-    });
+function exportAttendees() {
+  if (attendeeExporting.value) return;
+  void runAttendeeExport("attendees").then(() => {
+    message.success("参会人 XLSX 已生成并开始下载");
+  }).catch((error) => {
+    message.error(error instanceof Error ? error.message : "参会人导出失败");
+  });
 }
 
-function exportAttendees() {
-  void store.downloadExport("attendees", { format: "xlsx" }).then(() => {
-    message.success("参会人 XLSX 已开始下载");
-  }).catch((error) => {
-    message.error(error instanceof Error ? error.message : "导出失败，请确认后端服务已启动");
-  });
+function downloadAttendeeImportTemplate() {
+  downloadXlsxTemplate(
+    "参会人导入模板",
+    ["姓名", "手机号", "单位", "职务", "证件号", "邮箱", "参会类型", "是否住宿", "房间号", "房间备注", "备注", "标签", "审核状态"],
+    [],
+    {
+      instructions: [
+        "请在“导入模板”工作表填写数据，不要修改第一行表头名称。",
+        "姓名、手机号为必填；同一会议内手机号不能重复。",
+        "参会类型可填写 VIP、嘉宾、媒体、工作人员、普通参会人；为空时按普通参会人处理。",
+        "是否住宿可填写是/否；填写房间号前请先在住宿管理中创建对应房间。",
+        "审核状态可填写待审核、已通过、已拒绝；为空时按待审核处理。",
+        "手机号、证件号和房间号列已预设为文本格式，请不要改为数值格式。",
+        "系统只读取第一个工作表，第二个“填写示例”工作表不会参与导入。"
+      ],
+      exampleRows: [
+        ["张三", "13800000000", "示例公司", "经理", "110101199001010000", "zhangsan@example.com", "嘉宾", "是", "1801", "靠近电梯", "现场联系人", "主桌", "已通过"]
+      ],
+      textColumnCount: 13
+    }
+  );
+  message.success("参会人导入模板已开始下载");
 }
 
 function openNameplatePrint() {
@@ -2356,16 +2425,6 @@ function escapeHtml(value: string) {
 
 function cssUrlEscape(value: string) {
   return value.replace(/\\/g, "\\\\").replace(/"/g, '\\"').replace(/'/g, "\\'");
-}
-
-function showImportResult(result: ImportResultDto) {
-  const failures = result.failedRows?.slice(0, 3).map((row) => `${row.rowNumber}行：${row.reason}`).join("；");
-  const summary = failures ? `${result.message}；${failures}` : result.message;
-  if (result.skippedRows > 0) {
-    message.warning(summary, { duration: 6000 });
-  } else {
-    message.success(summary);
-  }
 }
 
 function attendeeMappedValue(row: Attendee, mapping: TduckFieldMappingDto) {
