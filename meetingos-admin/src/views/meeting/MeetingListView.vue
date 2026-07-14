@@ -153,10 +153,17 @@ import type { Component } from "vue";
 import { NButton, NDataTable, NDropdown, NSpace, useMessage, type DataTableColumns, type DropdownOption } from "naive-ui";
 import StatusTag from "@/components/StatusTag.vue";
 import { useIsMobile } from "@/composables/useResponsive";
+import { useAuthStore } from "@/stores/auth";
 import { useMeetingStore } from "@/stores/meeting";
 import { meetingSummaryLabel } from "@/utils/meetingDisplay";
+import {
+  DEFAULT_NEW_MEETING_STATUS,
+  isMeetingRestartTransition,
+  meetingStatusActions
+} from "@/utils/meetingLifecycle";
 import type { Meeting } from "@/utils/types";
 
+const auth = useAuthStore();
 const store = useMeetingStore();
 const route = useRoute();
 const router = useRouter();
@@ -165,7 +172,7 @@ const isMobile = useIsMobile();
 const keyword = ref("");
 const status = ref<Meeting["status"] | null>(null);
 const showCreate = ref(false);
-const viewMode = ref<"card" | "table">("card");
+const viewMode = ref<"card" | "table">("table");
 const editingMeeting = ref<Meeting | null>(null);
 const savingMeeting = ref(false);
 const loadingMeetingDetail = ref(false);
@@ -176,7 +183,7 @@ const draft = reactive<Pick<Meeting, "name" | "code" | "organizer" | "venue" | "
   organizer: "主办方",
   venue: "",
   capacity: 300,
-  status: "DRAFT"
+  status: DEFAULT_NEW_MEETING_STATUS
 });
 const icons = [FolderOpenOutline, StatsChartOutline, CubeOutline] as Component[];
 const viewToggleLabel = computed(() => (viewMode.value === "card" ? "表格视图" : "图片视图"));
@@ -198,7 +205,8 @@ const statusOptions = [
   { label: "报名截止", value: "REGISTRATION_CLOSED" },
   { label: "待开始", value: "READY" },
   { label: "进行中", value: "IN_PROGRESS" },
-  { label: "已结束", value: "ENDED" }
+  { label: "已结束", value: "ENDED" },
+  { label: "已归档", value: "ARCHIVED" }
 ];
 
 const filteredMeetings = computed(() =>
@@ -277,7 +285,7 @@ function lastVisitedLabel(meeting: Meeting, index: number) {
 }
 
 function actionOptions(meeting: Meeting): DropdownOption[] {
-  const actions = nextActions(meeting).map((action) => ({
+  const actions = meetingStatusActions(meeting.status, auth.canAccessSystemSettings).map((action) => ({
     label: action.label,
     key: action.status
   }));
@@ -295,7 +303,7 @@ function resetDraft(meeting?: Meeting) {
   draft.organizer = meeting?.organizer || "主办方";
   draft.venue = meeting?.venue || "";
   draft.capacity = meeting?.capacity || 300;
-  draft.status = meeting?.status || "DRAFT";
+  draft.status = meeting?.status || DEFAULT_NEW_MEETING_STATUS;
 }
 
 function openCreateMeeting() {
@@ -362,18 +370,6 @@ function enterWorkspace(meeting: Meeting) {
   });
 }
 
-function nextActions(row: Meeting) {
-  const actions: Partial<Record<Meeting["status"], Array<{ label: string; status: Meeting["status"]; type: "primary" | "warning" | "error" }>>> = {
-    DRAFT: [{ label: "发布报名", status: "REGISTRATION_OPEN", type: "primary" }],
-    REGISTRATION_OPEN: [{ label: "截止报名", status: "REGISTRATION_CLOSED", type: "warning" }],
-    REGISTRATION_CLOSED: [{ label: "准备开始", status: "READY", type: "primary" }],
-    READY: [{ label: "开始会议", status: "IN_PROGRESS", type: "primary" }],
-    IN_PROGRESS: [{ label: "结束会议", status: "ENDED", type: "warning" }],
-    ENDED: [{ label: "归档会议", status: "ARCHIVED", type: "error" }]
-  };
-  return actions[row.status] || [];
-}
-
 function handleActionSelect(meeting: Meeting, key: string | number) {
   if (key === "empty") return;
   if (key === "edit") {
@@ -389,8 +385,16 @@ function handleActionSelect(meeting: Meeting, key: string | number) {
 }
 
 function transition(row: Meeting, status: Meeting["status"]) {
-  void store.transitionMeeting(row.id, status).then(() => {
-    message.success("会议状态已更新");
+  const restarting = isMeetingRestartTransition(row.status, status);
+  if (restarting && !auth.canAccessSystemSettings) {
+    message.error("仅超级管理员可以重新开启已结束或已归档会议");
+    return;
+  }
+  const request = restarting
+    ? store.restartMeeting(row.id)
+    : store.transitionMeeting(row.id, status);
+  void request.then(() => {
+    message.success(restarting ? "会议已重新开启，当前状态为报名中" : "会议状态已更新");
   }).catch((error) => {
     message.error(error instanceof Error ? error.message : "状态更新失败");
   });

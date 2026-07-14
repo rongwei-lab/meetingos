@@ -8,6 +8,7 @@ import com.meetingos.security.AppUserRepository;
 import com.meetingos.security.Role;
 import com.meetingos.security.UserStatus;
 import org.springframework.data.domain.Page;
+import org.springframework.data.domain.Sort;
 import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -29,7 +30,12 @@ public class UserService {
 
     @Transactional(readOnly = true)
     public PageResponse<UserResponse> list(String keyword, UserStatus status, int page, int size) {
-        Page<AppUser> users = userRepository.search(blankToNull(keyword), status, PageRequests.of(page, size));
+        // 用户管理会连续读取全部分页；固定顺序可避免并发新增账号时跨页重复或遗漏。
+        Page<AppUser> users = userRepository.search(
+                blankToNull(keyword),
+                status,
+                PageRequests.of(page, size, Sort.by(Sort.Direction.DESC, "id"))
+        );
         return PageResponse.from(users.map(this::toResponse));
     }
 
@@ -136,13 +142,13 @@ public class UserService {
     private void validatePassword(String password) {
         String value = password == null ? "" : password.trim();
         String normalized = value.toLowerCase(Locale.ROOT);
-        if (value.length() < 12
+        if (value.length() < 6
                 || normalized.equals("123456")
                 || normalized.equals("admin123")
                 || normalized.startsWith("change_me")
                 || normalized.equals("password")
                 || normalized.equals("password123")) {
-            throw BusinessException.badRequest("密码必须至少 12 位，且不能使用默认或常见弱口令");
+            throw BusinessException.badRequest("密码必须至少 6 位，且不能使用默认或常见弱口令");
         }
     }
 

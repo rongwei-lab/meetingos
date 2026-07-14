@@ -699,6 +699,25 @@ class MeetingOsServiceIntegrationTest {
     }
 
     @Test
+    @WithMockUser(roles = {"SUPER_ADMIN"})
+    void superAdminCanRestartEndedMeeting() throws Exception {
+        meetingService.transition(1L, MeetingStatus.READY);
+        meetingService.transition(1L, MeetingStatus.IN_PROGRESS);
+        meetingService.transition(1L, MeetingStatus.ENDED);
+
+        mockMvc.perform(post("/api/admin/meetings/1/restart"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.data.status").value("REGISTRATION_OPEN"));
+    }
+
+    @Test
+    @WithMockUser(username = "admin", roles = {"MEETING_ADMIN"})
+    void meetingAdminCannotRestartMeeting() throws Exception {
+        mockMvc.perform(post("/api/admin/meetings/1/restart"))
+                .andExpect(status().isForbidden());
+    }
+
+    @Test
     void attendeeUpdateTagsAndCancelArePersisted() {
         attendeeService.updateTags(1L, "VIP,接待");
         attendeeService.cancel(1L, "行程取消");

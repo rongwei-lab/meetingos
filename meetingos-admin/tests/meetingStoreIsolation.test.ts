@@ -77,6 +77,50 @@ describe("meeting store 会议隔离", () => {
     expect(localStorage.getItem("meetingos.currentMeetingId")).toBeNull();
   });
 
+  it("会议列表读取全部分页并为每页复用同一取消信号", async () => {
+    const meetingPages = [
+      {
+        content: [{ id: 201, code: "NEW201", name: "最新会议", status: "REGISTRATION_OPEN" }],
+        page: 0,
+        size: 200,
+        totalElements: 2,
+        totalPages: 2
+      },
+      {
+        content: [{ id: 1, code: "OLD001", name: "历史归档会议", status: "ARCHIVED" }],
+        page: 1,
+        size: 200,
+        totalElements: 2,
+        totalPages: 2
+      }
+    ];
+    const get = vi.spyOn(http, "get").mockImplementation(async (_url, config) => {
+      const page = Number((config?.params as { page?: number } | undefined)?.page || 0);
+      return {
+        data: {
+          success: true,
+          code: "OK",
+          message: "success",
+          timestamp: "2026-07-13T00:00:00Z",
+          data: meetingPages[page]
+        }
+      } as never;
+    });
+    const store = useMeetingStore();
+
+    await store.loadMeetings();
+
+    expect(get.mock.calls.map(([, config]) => config?.params)).toEqual([
+      { page: 0, size: 200 },
+      { page: 1, size: 200 }
+    ]);
+    expect(get.mock.calls[1]?.[1]?.signal).toBe(get.mock.calls[0]?.[1]?.signal);
+    expect(store.meetings.map((meeting) => ({ id: meeting.id, status: meeting.status }))).toEqual([
+      { id: "201", status: "REGISTRATION_OPEN" },
+      { id: "1", status: "ARCHIVED" }
+    ]);
+  });
+
   it("参会人搜索不再向后端发送参会类型筛选", async () => {
     const get = vi.spyOn(http, "get").mockResolvedValue({
       data: {

@@ -11,7 +11,7 @@ import java.util.Set;
 public record CreateUserRequest(
         @NotBlank @Size(max = 64) String username,
         @NotBlank @Size(max = 120) String displayName,
-        @NotBlank @Size(min = 12, max = 120) String password,
+        @NotBlank @Size(min = 6, max = 120) String password,
         UserStatus status,
         @NotEmpty Set<Role> roles
 ) {

@@ -8,13 +8,18 @@ import com.meetingos.security.AppUserRepository;
 import com.meetingos.seating.SeatAssignmentRepository;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.EnumSource;
 
 import java.util.List;
 import java.util.Optional;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
+import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.never;
+import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 class MeetingServiceTest {
@@ -37,8 +42,82 @@ class MeetingServiceTest {
 
         meeting = new Meeting();
         meeting.setId(2L);
+        meeting.setCode("MEET202607130001");
+        meeting.setPublicQueryToken("pq_test_meeting_service");
         meeting.setName("数字经济论坛");
         when(meetingRepository.findById(2L)).thenReturn(Optional.of(meeting));
+        when(meetingRepository.findByIdForUpdate(2L)).thenReturn(Optional.of(meeting));
+    }
+
+    @Test
+    void createDefaultsToRegistrationOpenWhenStatusIsMissing() {
+        MeetingRequest request = mock(MeetingRequest.class);
+        when(request.name()).thenReturn("新建会议");
+        when(meetingRepository.save(any(Meeting.class))).thenAnswer(invocation -> invocation.getArgument(0));
+
+        Meeting created = meetingService.create(request);
+
+        assertThat(created.getStatus()).isEqualTo(MeetingStatus.REGISTRATION_OPEN);
+    }
+
+    @Test
+    void createKeepsExplicitInitialStatus() {
+        MeetingRequest request = mock(MeetingRequest.class);
+        when(request.name()).thenReturn("草稿会议");
+        when(request.status()).thenReturn(MeetingStatus.DRAFT);
+        when(meetingRepository.save(any(Meeting.class))).thenAnswer(invocation -> invocation.getArgument(0));
+
+        Meeting created = meetingService.create(request);
+
+        assertThat(created.getStatus()).isEqualTo(MeetingStatus.DRAFT);
+    }
+
+    @ParameterizedTest
+    @EnumSource(value = MeetingStatus.class, names = {"ENDED", "ARCHIVED"})
+    void updateDoesNotChangeTerminalStatus(MeetingStatus currentStatus) {
+        meeting.setStatus(currentStatus);
+        MeetingRequest request = mock(MeetingRequest.class);
+        when(request.name()).thenReturn("更新后的会议名称");
+        when(request.status()).thenReturn(MeetingStatus.REGISTRATION_OPEN);
+
+        Meeting updated = meetingService.update(2L, request);
+
+        assertThat(updated.getName()).isEqualTo("更新后的会议名称");
+        assertThat(updated.getStatus()).isEqualTo(currentStatus);
+        verify(meetingRepository).findByIdForUpdate(2L);
+        verify(meetingRepository, never()).findById(2L);
+    }
+
+    @ParameterizedTest
+    @EnumSource(value = MeetingStatus.class, names = {"ENDED", "ARCHIVED"})
+    void restartReopensEndedOrArchivedMeeting(MeetingStatus currentStatus) {
+        meeting.setStatus(currentStatus);
+
+        Meeting restarted = meetingService.restart(2L);
+
+        assertThat(restarted.getStatus()).isEqualTo(MeetingStatus.REGISTRATION_OPEN);
+        verify(meetingRepository).findByIdForUpdate(2L);
+        verify(meetingRepository, never()).findById(2L);
+    }
+
+    @Test
+    void restartRejectsMeetingThatIsNotEndedOrArchived() {
+        meeting.setStatus(MeetingStatus.IN_PROGRESS);
+
+        assertThatThrownBy(() -> meetingService.restart(2L))
+                .isInstanceOf(BusinessException.class)
+                .hasMessageContaining("只有已结束或已归档");
+    }
+
+    @Test
+    void genericTransitionStillRejectsRestartingArchivedMeeting() {
+        meeting.setStatus(MeetingStatus.ARCHIVED);
+
+        assertThatThrownBy(() -> meetingService.transition(2L, MeetingStatus.REGISTRATION_OPEN))
+                .isInstanceOf(BusinessException.class)
+                .hasMessageContaining("不能从 ARCHIVED");
+        verify(meetingRepository).findByIdForUpdate(2L);
+        verify(meetingRepository, never()).findById(2L);
     }
 
     @Test

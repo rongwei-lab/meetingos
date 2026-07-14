@@ -143,6 +143,13 @@ public class MeetingController {
         return ApiResponse.ok(meetingService.transition(id, MeetingStatus.REGISTRATION_OPEN));
     }
 
+    @PostMapping("/{id}/restart")
+    @PreAuthorize("hasRole('SUPER_ADMIN')")
+    @AuditLog(action = "MEETING_RESTART", targetType = "MEETING")
+    public ApiResponse<Meeting> restart(@PathVariable Long id) {
+        return ApiResponse.ok(meetingService.restart(id));
+    }
+
     @PostMapping("/{id}/close-registration")
     @PreAuthorize("@meetingAccess.canManage(#id)")
     @AuditLog(action = "MEETING_CLOSE_REGISTRATION", targetType = "MEETING")

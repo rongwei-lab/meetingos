@@ -7,6 +7,8 @@ import com.meetingos.security.Role;
 import com.meetingos.security.UserStatus;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.ValueSource;
 import org.springframework.data.domain.PageImpl;
 import org.springframework.security.crypto.password.PasswordEncoder;
 
@@ -110,6 +112,77 @@ class UserServiceTest {
 
         assertThat(response.content()).hasSize(1);
         assertThat(response.content().get(0).username()).isEqualTo("operator");
+    }
+
+    @Test
+    void createAcceptsSixCharacterPassword() {
+        when(userRepository.findByUsername("operator")).thenReturn(Optional.empty());
+        when(userRepository.save(any(AppUser.class))).thenAnswer(invocation -> invocation.getArgument(0));
+
+        UserResponse response = userService.create(new CreateUserRequest(
+                "operator",
+                "操作员",
+                "A1b2c3",
+                UserStatus.ACTIVE,
+                Set.of(Role.VIEWER)
+        ));
+
+        assertThat(response.username()).isEqualTo("operator");
+    }
+
+    @Test
+    void createRejectsPasswordShorterThanSixCharacters() {
+        assertThatThrownBy(() -> userService.create(new CreateUserRequest(
+                "operator",
+                "操作员",
+                "A1b2c",
+                UserStatus.ACTIVE,
+                Set.of(Role.VIEWER)
+        )))
+                .isInstanceOf(BusinessException.class)
+                .hasMessageContaining("至少 6 位");
+    }
+
+    @ParameterizedTest
+    @ValueSource(strings = {
+            "123456",
+            "admin123",
+            "ADMIN123",
+            "change_me_before_use",
+            "password",
+            "Password123"
+    })
+    void createRejectsCommonWeakPassword(String password) {
+        assertThatThrownBy(() -> userService.create(new CreateUserRequest(
+                "operator",
+                "操作员",
+                password,
+                UserStatus.ACTIVE,
+                Set.of(Role.VIEWER)
+        )))
+                .isInstanceOf(BusinessException.class)
+                .hasMessageContaining("不能使用默认或常见弱口令");
+    }
+
+    @Test
+    void resetPasswordAcceptsSixCharacters() {
+        AppUser user = user("operator", "操作员", UserStatus.ACTIVE, Set.of(Role.VIEWER));
+        when(userRepository.findById(10L)).thenReturn(Optional.of(user));
+
+        UserResponse response = userService.resetPassword(10L, new ResetPasswordRequest("A1b2c3"));
+
+        assertThat(response.username()).isEqualTo("operator");
+        assertThat(user.getPasswordHash()).isEqualTo("encoded-password");
+    }
+
+    @Test
+    void resetPasswordRejectsCommonWeakPassword() {
+        AppUser user = user("operator", "操作员", UserStatus.ACTIVE, Set.of(Role.VIEWER));
+        when(userRepository.findById(10L)).thenReturn(Optional.of(user));
+
+        assertThatThrownBy(() -> userService.resetPassword(10L, new ResetPasswordRequest("123456")))
+                .isInstanceOf(BusinessException.class)
+                .hasMessageContaining("不能使用默认或常见弱口令");
     }
 
     private AppUser user(String username, String displayName, UserStatus status, Set<Role> roles) {

@@ -107,17 +107,21 @@
         </n-card>
       </n-tab-pane>
 
-      <n-tab-pane name="access" tab="用户与授权">
+      <n-tab-pane name="access" tab="用户管理">
         <section class="access-shell">
           <div class="access-toolbar">
             <div>
-              <h2>用户与会议授权</h2>
-              <span>集中维护后台账号，以及当前会议的可访问人员</span>
+              <h2>用户管理</h2>
+              <span>集中维护后台账号、全局角色和各会议权限</span>
             </div>
             <n-space class="access-toolbar-actions">
               <n-button :loading="loadingSecurity" @click="loadSecurityData">刷新</n-button>
             </n-space>
           </div>
+
+          <n-alert v-if="securityLoadError" type="error" :bordered="false" class="access-load-error">
+            {{ securityLoadError }}。数据完整加载前不能新增或修改用户授权。
+          </n-alert>
 
           <div class="access-overview-grid">
             <div class="access-overview-card">
@@ -126,61 +130,36 @@
               <small>{{ activeUserCount }} 个启用账号</small>
             </div>
             <div class="access-overview-card">
-              <span>会议授权</span>
-              <strong>{{ permissions.length }}</strong>
-              <small>{{ authorizedUserCount }} 个已授权用户</small>
+              <span>已授权用户</span>
+              <strong>{{ authorizedUserCount }}</strong>
+              <small>{{ permissions.length }} 项逐会议授权</small>
             </div>
-            <div class="access-overview-card access-meeting-card">
-              <span>当前会议</span>
-              <strong>{{ currentMeetingName }}</strong>
-              <small>{{ currentMeetingMeta }}</small>
+            <div class="access-overview-card">
+              <span>可授权会议</span>
+              <strong>{{ authorizableMeetings.length }}</strong>
+              <small>在用户编辑中逐项配置</small>
             </div>
           </div>
 
           <n-card class="surface section-card access-tabs-card" :bordered="false">
-            <n-tabs v-model:value="activeAccessTab" type="line" animated class="access-sub-tabs">
-              <n-tab-pane name="users" tab="后台用户">
-                <div class="access-tab-header">
-                  <div>
-                    <h3>基础用户管理</h3>
-                    <span>维护后台登录账号、角色和密码重置</span>
-                  </div>
-                  <n-button type="primary" @click="showCreateUser = true">新增用户</n-button>
-                </div>
-                <div class="mobile-scroll-table">
-                  <n-data-table
-                    class="access-table"
-                    :columns="userColumns"
-                    :data="users"
-                    :loading="loadingSecurity"
-                    :pagination="{ pageSize: 8 }"
-                    :scroll-x="720"
-                    size="small"
-                  />
-                </div>
-              </n-tab-pane>
-
-              <n-tab-pane name="permissions" tab="会议授权">
-                <div class="access-tab-header">
-                  <div>
-                    <h3>会议授权</h3>
-                    <span>为用户授予当前会议的管理、签到、住宿或查看权限</span>
-                  </div>
-                  <n-button type="primary" secondary @click="showGrantPermission = true">授予权限</n-button>
-                </div>
-                <div class="mobile-scroll-table">
-                  <n-data-table
-                    class="access-table"
-                    :columns="permissionColumns"
-                    :data="permissions"
-                    :loading="loadingSecurity"
-                    :pagination="{ pageSize: 8 }"
-                    :scroll-x="820"
-                    size="small"
-                  />
-                </div>
-              </n-tab-pane>
-            </n-tabs>
+            <div class="access-tab-header">
+              <div>
+                <h3>后台用户</h3>
+                <span>在新增或编辑用户时一并维护会议权限</span>
+              </div>
+              <n-button type="primary" :disabled="!securityDataReady" @click="openCreateUser">新增用户</n-button>
+            </div>
+            <div class="mobile-scroll-table">
+              <n-data-table
+                class="access-table"
+                :columns="userColumns"
+                :data="users"
+                :loading="loadingSecurity"
+                :pagination="{ pageSize: 8 }"
+                :scroll-x="980"
+                size="small"
+              />
+            </div>
           </n-card>
         </section>
       </n-tab-pane>
@@ -191,20 +170,33 @@
       preset="card"
       title="新增后台用户"
       class="settings-modal"
-      style="width: min(560px, calc(100vw - 32px))"
+      style="width: min(680px, calc(100vw - 32px))"
     >
       <n-form class="modal-form" label-placement="top">
         <n-form-item label="用户名"><n-input v-model:value="createUserForm.username" placeholder="请输入登录用户名" /></n-form-item>
         <n-form-item label="显示名"><n-input v-model:value="createUserForm.displayName" placeholder="请输入后台显示名称" /></n-form-item>
         <n-form-item label="初始密码">
-          <n-input v-model:value="createUserForm.password" type="password" show-password-on="click" placeholder="请输入至少 12 位密码" />
+          <n-input v-model:value="createUserForm.password" type="password" show-password-on="click" placeholder="请输入至少 6 位密码" />
         </n-form-item>
         <n-form-item label="全局角色"><n-select v-model:value="createUserForm.roles" :options="roleOptions" multiple placeholder="请选择全局角色" /></n-form-item>
+        <n-form-item v-if="isCreatingSuperAdmin" label="会议授权">
+          <n-alert type="info" :bordered="false">
+            超级管理员自动拥有全部会议权限，无需单独选择。
+          </n-alert>
+        </n-form-item>
+        <n-form-item v-else label="会议授权">
+          <meeting-authorization-picker
+            v-if="showCreateUser"
+            v-model="createUserForm.meetingIds"
+            :meetings="authorizableMeetings"
+            :disabled="!securityDataReady"
+          />
+        </n-form-item>
       </n-form>
       <template #footer>
         <n-space justify="end">
           <n-button @click="showCreateUser = false">取消</n-button>
-          <n-button type="primary" :loading="savingUser" @click="createUser">创建</n-button>
+          <n-button type="primary" :loading="savingUser" :disabled="!securityDataReady" @click="createUser">创建</n-button>
         </n-space>
       </template>
     </n-modal>
@@ -214,7 +206,7 @@
       preset="card"
       title="编辑后台用户"
       class="settings-modal"
-      style="width: min(560px, calc(100vw - 32px))"
+      style="width: min(680px, calc(100vw - 32px))"
     >
       <n-form class="modal-form" label-placement="top">
         <n-form-item label="用户名">
@@ -229,11 +221,24 @@
         <n-form-item label="全局角色">
           <n-select v-model:value="editUserForm.roles" :options="roleOptions" multiple :disabled="isEditingLastActiveSuperAdmin" placeholder="请选择全局角色" />
         </n-form-item>
+        <n-form-item v-if="isEditingSuperAdmin" label="会议授权">
+          <n-alert type="info" :bordered="false">
+            超级管理员自动拥有全部会议权限，无需单独选择。
+          </n-alert>
+        </n-form-item>
+        <n-form-item v-else label="会议授权">
+          <meeting-authorization-picker
+            v-if="showEditUser"
+            v-model="editUserForm.meetingIds"
+            :meetings="authorizableMeetings"
+            :disabled="!securityDataReady"
+          />
+        </n-form-item>
       </n-form>
       <template #footer>
         <n-space justify="end">
           <n-button @click="showEditUser = false">取消</n-button>
-          <n-button type="primary" :loading="savingUser" @click="submitEditUser">保存</n-button>
+          <n-button type="primary" :loading="savingUser" :disabled="!securityDataReady" @click="submitEditUser">保存</n-button>
         </n-space>
       </template>
     </n-modal>
@@ -247,7 +252,7 @@
     >
       <n-form class="modal-form" label-placement="top">
         <n-form-item label="用户">{{ resettingUser?.displayName || resettingUser?.username }}</n-form-item>
-        <n-form-item label="新密码"><n-input v-model:value="resetPassword" type="password" show-password-on="click" placeholder="请输入至少 12 位新密码" /></n-form-item>
+        <n-form-item label="新密码"><n-input v-model:value="resetPassword" type="password" show-password-on="click" placeholder="请输入至少 6 位新密码" /></n-form-item>
       </n-form>
       <template #footer>
         <n-space justify="end">
@@ -257,31 +262,6 @@
       </template>
     </n-modal>
 
-    <n-modal
-      v-model:show="showGrantPermission"
-      preset="card"
-      title="授予会议权限"
-      class="settings-modal"
-      style="width: min(560px, calc(100vw - 32px))"
-    >
-      <n-form class="modal-form" label-placement="top">
-        <n-form-item label="会议">
-          <n-select v-model:value="grantForm.meetingId" :options="meetingOptions" placeholder="请选择会议" />
-        </n-form-item>
-        <n-form-item label="用户">
-          <n-select v-model:value="grantForm.userId" :options="userOptions" filterable placeholder="请选择后台用户" />
-        </n-form-item>
-        <n-form-item label="会议角色">
-          <n-select v-model:value="grantForm.role" :options="meetingPermissionOptions" placeholder="请选择会议角色" />
-        </n-form-item>
-      </n-form>
-      <template #footer>
-        <n-space justify="end">
-          <n-button @click="showGrantPermission = false">取消</n-button>
-          <n-button type="primary" :loading="savingPermission" @click="grantPermission">保存</n-button>
-        </n-space>
-      </template>
-    </n-modal>
   </div>
 </template>
 
@@ -289,25 +269,27 @@
 import type { UploadCustomRequestOptions } from "naive-ui";
 import { computed, h, onMounted, reactive, ref } from "vue";
 import { NButton, NDataTable, NSpace, NTag, NUpload, useMessage, type DataTableColumns } from "naive-ui";
+import MeetingAuthorizationPicker from "@/components/MeetingAuthorizationPicker.vue";
 import PageHeader from "@/components/PageHeader.vue";
 import { useMeetingStore, type AdminUserDto, type MeetingUserPermissionDto } from "@/stores/meeting";
+import { hasGlobalMeetingAccess, planMeetingAuthorizationChanges } from "@/utils/meetingPermissions";
 import { assertSafeImageUrl, isAllowedUploadImage, sanitizeImageUrl } from "@/utils/safeUrl";
 
 const store = useMeetingStore();
 const message = useMessage();
 const users = ref<AdminUserDto[]>([]);
 const permissions = ref<MeetingUserPermissionDto[]>([]);
+const authorizableMeetings = ref<Array<{ id: string; name: string; code: string }>>([]);
 const loadingSecurity = ref(false);
+const securityDataReady = ref(false);
+const securityLoadError = ref("");
 const loadingSettings = ref(false);
 const savingSettings = ref(false);
 const savingUser = ref(false);
-const savingPermission = ref(false);
 const activeSettingsTab = ref<"branding" | "integration" | "security" | "access">("branding");
-const activeAccessTab = ref<"users" | "permissions">("users");
 const showCreateUser = ref(false);
 const showEditUser = ref(false);
 const showResetPassword = ref(false);
-const showGrantPermission = ref(false);
 const editingUser = ref<AdminUserDto | null>(null);
 const resettingUser = ref<AdminUserDto | null>(null);
 const resetPassword = ref("");
@@ -319,19 +301,15 @@ const createUserForm = reactive({
   displayName: "",
   password: "",
   status: "ACTIVE",
-  roles: ["MEETING_ADMIN"] as string[]
+  roles: ["MEETING_ADMIN"] as string[],
+  meetingIds: [] as string[]
 });
 
 const editUserForm = reactive({
   displayName: "",
   status: "ACTIVE",
-  roles: ["MEETING_ADMIN"] as string[]
-});
-
-const grantForm = reactive({
-  meetingId: "",
-  userId: "",
-  role: "VIEWER"
+  roles: ["MEETING_ADMIN"] as string[],
+  meetingIds: [] as string[]
 });
 
 const settings = reactive({
@@ -361,18 +339,12 @@ const userStatusOptions = [
   { label: "停用", value: "DISABLED" }
 ];
 
-const meetingPermissionOptions = [
-  { label: "会议管理员", value: "MANAGER" },
-  { label: "签到", value: "CHECKIN" },
-  { label: "住宿", value: "ROOM" },
-  { label: "查看", value: "VIEWER" }
-];
-
 const roleLabelMap = new Map(roleOptions.map((item) => [item.value, item.label]));
-const meetingPermissionLabelMap = new Map(meetingPermissionOptions.map((item) => [item.value, item.label]));
 
 const activeUserCount = computed(() => users.value.filter((user) => isActiveStatus(user.status)).length);
 const isEditingLastActiveSuperAdmin = computed(() => isLastActiveSuperAdmin(editingUser.value));
+const isCreatingSuperAdmin = computed(() => hasGlobalMeetingAccess(createUserForm.roles));
+const isEditingSuperAdmin = computed(() => hasGlobalMeetingAccess(editUserForm.roles));
 
 const authorizedUserCount = computed(() => {
   const userIds = new Set(
@@ -380,26 +352,11 @@ const authorizedUserCount = computed(() => {
       .map((item) => String(item.userId || item.username || item.displayName || item.id || ""))
       .filter(Boolean)
   );
+  users.value
+    .filter((user) => hasGlobalMeetingAccess(user.roles))
+    .forEach((user) => userIds.add(String(user.id)));
   return userIds.size;
 });
-
-const currentMeetingName = computed(() => store.currentMeeting?.name || "未选择会议");
-
-const currentMeetingMeta = computed(() => {
-  const meeting = store.currentMeeting;
-  if (!meeting) return "请选择会议后再维护授权";
-  return meeting.code ? `会议编号：${meeting.code}` : `会议 ID：${meeting.id}`;
-});
-
-const userOptions = computed(() => users.value.map((user) => ({
-  label: `${user.displayName || user.username}（${user.username}）`,
-  value: String(user.id)
-})));
-
-const meetingOptions = computed(() => store.meetings.map((meeting) => ({
-  label: `${meeting.name}（${meeting.code}）`,
-  value: meeting.id
-})));
 
 const userColumns: DataTableColumns<AdminUserDto> = [
   { title: "用户名", key: "username", minWidth: 140 },
@@ -409,6 +366,12 @@ const userColumns: DataTableColumns<AdminUserDto> = [
     key: "roles",
     minWidth: 240,
     render: (row: AdminUserDto) => renderTagList(row.roles || [], (role) => roleLabelMap.get(role) || role, roleTagType)
+  },
+  {
+    title: "授权会议",
+    key: "meetingPermissions",
+    minWidth: 300,
+    render: (row: AdminUserDto) => renderUserMeetingPermissions(row)
   },
   {
     title: "状态",
@@ -424,84 +387,42 @@ const userColumns: DataTableColumns<AdminUserDto> = [
     render: (row: AdminUserDto) =>
       h(NSpace, { justify: "end", size: 12 }, {
         default: () => [
-          h(NButton, { text: true, type: "primary", onClick: () => openEditUser(row) }, { default: () => "编辑" }),
+          h(NButton, { text: true, type: "primary", disabled: !securityDataReady.value, onClick: () => openEditUser(row) }, { default: () => "编辑" }),
           h(NButton, { text: true, type: "primary", onClick: () => openResetPassword(row) }, { default: () => "重置密码" })
         ]
       })
   }
 ];
 
-const permissionColumns: DataTableColumns<MeetingUserPermissionDto> = [
-  {
-    title: "用户",
-    key: "username",
-    minWidth: 150,
-    render: (row: MeetingUserPermissionDto) => renderUserIdentity(row)
-  },
-  {
-    title: "会议",
-    key: "meetingId",
-    minWidth: 230,
-    render: (row: MeetingUserPermissionDto) => renderPermissionMeeting(row)
-  },
-  {
-    title: "角色",
-    key: "role",
-    minWidth: 110,
-    render: (row: MeetingUserPermissionDto) =>
-      h(NTag, { size: "small", type: permissionRoleTagType(row.role || row.permission) }, { default: () => meetingPermissionLabel(row.role || row.permission) })
-  },
-  {
-    title: "权限范围",
-    key: "permissions",
-    minWidth: 150,
-    render: (row: MeetingUserPermissionDto) => {
-      const items = row.permissions || (row.permission ? [row.permission] : []);
-      return renderTagList(items, meetingPermissionLabel, () => "info");
-    }
-  },
-  {
-    title: "状态",
-    key: "status",
-    width: 90,
-    render: (row: MeetingUserPermissionDto) => renderStatusTag(row.status)
-  },
-  {
-    title: "操作",
-    key: "actions",
-    width: 82,
-    align: "right",
-    render: (row: MeetingUserPermissionDto) =>
-      h(NButton, { text: true, type: "error", disabled: row.id == null, onClick: () => revokePermission(row) }, { default: () => "撤销" })
-  }
-];
-
 onMounted(() => {
-  grantForm.meetingId = store.currentMeetingId;
   void loadSettings();
   void loadSecurityData();
 });
 
-function loadSecurityData() {
+async function loadSecurityData() {
   loadingSecurity.value = true;
-  void Promise.all([store.loadAdminUsers(), store.loadMeetingUserPermissions()])
-    .then(([loadedUsers, loadedPermissions]) => {
-      users.value = loadedUsers;
-      permissions.value = loadedPermissions;
-      if (!grantForm.userId && loadedUsers[0]) grantForm.userId = String(loadedUsers[0].id);
-      if (!grantForm.meetingId) grantForm.meetingId = store.currentMeetingId;
-    })
-    .catch((error) => {
-      message.error(error instanceof Error ? error.message : "用户与授权信息加载失败");
-    })
-    .finally(() => {
-      loadingSecurity.value = false;
-    });
-}
-
-function meetingPermissionLabel(value?: string) {
-  if (!value) return "-";
-  return meetingPermissionLabelMap.get(value) || value;
+  securityDataReady.value = false;
+  securityLoadError.value = "";
+  try {
+    const [loadedUsers, loadedPermissions, loadedMeetings] = await Promise.all([
+      store.loadAdminUsers(),
+      store.loadMeetingUserPermissions(),
+      store.loadAuthorizableMeetings()
+    ]);
+    users.value = loadedUsers;
+    permissions.value = loadedPermissions;
+    authorizableMeetings.value = loadedMeetings.map((meeting) => ({
+      id: meeting.id,
+      name: meeting.name,
+      code: meeting.code
+    }));
+    securityDataReady.value = true;
+  } catch (error) {
+    securityLoadError.value = error instanceof Error ? error.message : "用户与授权信息加载失败";
+    message.error(securityLoadError.value);
+  } finally {
+    loadingSecurity.value = false;
+  }
 }
 
 function roleTagType(role?: string): TagType {
@@ -509,13 +430,6 @@ function roleTagType(role?: string): TagType {
   if (role === "MEETING_ADMIN") return "info";
   if (role === "CHECKIN_STAFF") return "success";
   if (role === "ROOM_STAFF") return "warning";
-  return "default";
-}
-
-function permissionRoleTagType(role?: string): TagType {
-  if (role === "MANAGER" || role === "SUPER_ADMIN" || role === "MEETING_ADMIN") return "info";
-  if (role === "CHECKIN" || role === "CHECKIN_STAFF") return "success";
-  if (role === "ROOM" || role === "ROOM_STAFF") return "warning";
   return "default";
 }
 
@@ -549,18 +463,28 @@ function renderTagList(items: string[], label: (value: string) => string, type: 
   );
 }
 
-function renderUserIdentity(row: MeetingUserPermissionDto) {
-  const primary = row.displayName || row.username || row.userId || "-";
-  const secondary = row.displayName && row.username ? row.username : row.userId ? `用户 ID：${row.userId}` : "";
-  return h("div", { class: "identity-cell" }, [h("strong", primary), secondary ? h("span", secondary) : null]);
+function permissionMeetingName(row: MeetingUserPermissionDto) {
+  const meetingId = row.meetingId == null ? "" : String(row.meetingId);
+  const meeting = authorizableMeetings.value.find((item) => item.id === meetingId)
+    || store.meetings.find((item) => item.id === meetingId);
+  return meeting?.name || row.meetingName || row.meetingCode || (meetingId ? `会议 ${meetingId}` : "未知会议");
 }
 
-function renderPermissionMeeting(row: MeetingUserPermissionDto) {
-  const meetingId = row.meetingId == null ? "" : String(row.meetingId);
-  const meeting = store.meetings.find((item) => item.id === meetingId);
-  const primary = meeting?.name || (meetingId ? `会议 ${meetingId}` : currentMeetingName.value);
-  const secondary = meeting?.code ? `编号：${meeting.code}` : meetingId ? `ID：${meetingId}` : currentMeetingMeta.value;
-  return h("div", { class: "identity-cell" }, [h("strong", primary), h("span", secondary)]);
+function renderUserMeetingPermissions(user: AdminUserDto) {
+  if (hasGlobalMeetingAccess(user.roles)) {
+    return h(NTag, { size: "small", type: "success" }, { default: () => "全部会议" });
+  }
+  const userPermissions = permissions.value.filter((item) => String(item.userId) === String(user.id));
+  if (!userPermissions.length) return "-";
+  return h(
+    "div",
+    { class: "tag-list" },
+    userPermissions.map((item) => h(
+      NTag,
+      { key: String(item.id || item.meetingId), size: "small", type: "info" },
+      { default: () => permissionMeetingName(item) }
+    ))
+  );
 }
 
 function loadSettings() {
@@ -666,45 +590,71 @@ async function uploadBrandImage(options: UploadCustomRequestOptions, apply: (url
   }
 }
 
-function createUser() {
-  if (!createUserForm.username.trim() || !createUserForm.displayName.trim() || createUserForm.password.length < 12) {
-    message.warning("请填写用户名、显示名和至少 12 位初始密码");
+function openCreateUser() {
+  if (!securityDataReady.value) {
+    message.warning("请先刷新并完整加载用户与授权数据");
+    return;
+  }
+  createUserForm.username = "";
+  createUserForm.displayName = "";
+  createUserForm.password = "";
+  createUserForm.status = "ACTIVE";
+  createUserForm.roles = ["MEETING_ADMIN"];
+  createUserForm.meetingIds = [];
+  showCreateUser.value = true;
+}
+
+async function createUser() {
+  if (!securityDataReady.value) {
+    message.warning("授权数据尚未完整加载，暂不能创建用户");
+    return;
+  }
+  if (!createUserForm.username.trim() || !createUserForm.displayName.trim() || createUserForm.password.length < 6) {
+    message.warning("请填写用户名、显示名和至少 6 位初始密码");
     return;
   }
   savingUser.value = true;
-  void store.createAdminUser({
-    username: createUserForm.username.trim(),
-    displayName: createUserForm.displayName.trim(),
-    password: createUserForm.password,
-    status: createUserForm.status,
-    roles: createUserForm.roles
-  })
-    .then(() => {
-      message.success("用户已创建");
-      showCreateUser.value = false;
-      createUserForm.username = "";
-      createUserForm.displayName = "";
-      createUserForm.password = "";
-      createUserForm.roles = ["MEETING_ADMIN"];
-      return loadSecurityData();
-    })
-    .catch((error) => {
-      message.error(error instanceof Error ? error.message : "用户创建失败");
-    })
-    .finally(() => {
-      savingUser.value = false;
+  try {
+    const createdUser = await store.createAdminUser({
+      username: createUserForm.username.trim(),
+      displayName: createUserForm.displayName.trim(),
+      password: createUserForm.password,
+      status: createUserForm.status,
+      roles: createUserForm.roles
     });
+    const permissionResult = await syncMeetingPermissions(createdUser.id, createUserForm.meetingIds, createUserForm.roles);
+    showCreateUser.value = false;
+    await loadSecurityData();
+    if (permissionResult.failureCount > 0) {
+      message.warning(`用户已创建，但有 ${permissionResult.failureCount} 项会议授权保存失败，请编辑用户后重试`);
+    } else {
+      message.success(isCreatingSuperAdmin.value ? "用户已创建，超级管理员自动拥有全部会议权限" : "用户及会议授权已保存");
+    }
+  } catch (error) {
+    message.error(error instanceof Error ? error.message : "用户创建失败");
+  } finally {
+    savingUser.value = false;
+  }
 }
 
 function openEditUser(user: AdminUserDto) {
+  if (!securityDataReady.value) {
+    message.warning("请先刷新并完整加载用户与授权数据");
+    return;
+  }
   editingUser.value = user;
   editUserForm.displayName = user.displayName || user.name || user.username;
   editUserForm.status = normalizeUserStatus(user.status);
   editUserForm.roles = user.roles?.length ? [...user.roles] : ["MEETING_ADMIN"];
+  editUserForm.meetingIds = meetingIdsForUser(user.id);
   showEditUser.value = true;
 }
 
-function submitEditUser() {
+async function submitEditUser() {
+  if (!securityDataReady.value) {
+    message.warning("授权数据尚未完整加载，暂不能保存");
+    return;
+  }
   if (!editingUser.value) {
     return;
   }
@@ -725,27 +675,61 @@ function submitEditUser() {
     editUserForm.roles = ensureRole(editUserForm.roles, "SUPER_ADMIN");
   }
   savingUser.value = true;
-  void store.updateAdminUser(editingUser.value.id, {
-    /*
-     * 后端当前只允许更新显示名、状态和角色；用户名作为登录标识保持只读，
-     * 避免改名后已有授权、审计日志和当前会话出现难以追踪的身份变更。
-     */
-    displayName: editUserForm.displayName.trim(),
-    status: editUserForm.status,
-    roles: editUserForm.roles
-  })
-    .then(() => {
-      message.success("用户信息已保存");
-      showEditUser.value = false;
-      editingUser.value = null;
-      return loadSecurityData();
-    })
-    .catch((error) => {
-      message.error(error instanceof Error ? error.message : "用户信息保存失败");
-    })
-    .finally(() => {
-      savingUser.value = false;
+  try {
+    const userId = editingUser.value.id;
+    await store.updateAdminUser(userId, {
+      /*
+       * 后端当前只允许更新显示名、状态和角色；用户名作为登录标识保持只读，
+       * 避免改名后已有授权、审计日志和当前会话出现难以追踪的身份变更。
+       */
+      displayName: editUserForm.displayName.trim(),
+      status: editUserForm.status,
+      roles: editUserForm.roles
     });
+    const permissionResult = await syncMeetingPermissions(userId, editUserForm.meetingIds, editUserForm.roles);
+    showEditUser.value = false;
+    editingUser.value = null;
+    await loadSecurityData();
+    if (permissionResult.failureCount > 0) {
+      message.warning(`用户信息已保存，但有 ${permissionResult.failureCount} 项会议授权保存失败，请重新编辑后重试`);
+    } else {
+      message.success(isEditingSuperAdmin.value ? "用户信息已保存，超级管理员自动拥有全部会议权限" : "用户及会议授权已保存");
+    }
+  } catch (error) {
+    message.error(error instanceof Error ? error.message : "用户信息保存失败");
+  } finally {
+    savingUser.value = false;
+  }
+}
+
+function meetingIdsForUser(userId: string | number) {
+  return permissions.value
+    .filter((permission) => String(permission.userId) === String(userId) && permission.meetingId != null)
+    .map((permission) => String(permission.meetingId));
+}
+
+async function syncMeetingPermissions(userId: string | number, meetingIds: string[], roles: string[]) {
+  if (!securityDataReady.value) {
+    throw new Error("授权数据尚未完整加载，请刷新后重试");
+  }
+  const changes = planMeetingAuthorizationChanges(
+    userId,
+    authorizableMeetings.value.map((meeting) => meeting.id),
+    meetingIds,
+    permissions.value,
+    roles
+  );
+  const operations = changes.map((change) =>
+    change.type === "grant"
+      ? store.grantMeetingUserPermission({ meetingId: change.meetingId, userId, role: change.role })
+      : store.deleteMeetingUserPermission(change.permissionId)
+  );
+
+  const results = await Promise.allSettled(operations);
+  return {
+    successCount: results.filter((result) => result.status === "fulfilled").length,
+    failureCount: results.filter((result) => result.status === "rejected").length
+  };
 }
 
 function normalizeUserStatus(status?: string) {
@@ -772,8 +756,8 @@ function openResetPassword(user: AdminUserDto) {
 }
 
 function submitResetPassword() {
-  if (!resettingUser.value || resetPassword.value.length < 12) {
-    message.warning("新密码至少 12 位");
+  if (!resettingUser.value || resetPassword.value.length < 6) {
+    message.warning("新密码至少 6 位");
     return;
   }
   savingUser.value = true;
@@ -790,41 +774,6 @@ function submitResetPassword() {
     });
 }
 
-function grantPermission() {
-  if (!grantForm.meetingId || !grantForm.userId || !grantForm.role) {
-    message.warning("请选择会议、用户和权限角色");
-    return;
-  }
-  savingPermission.value = true;
-  void store.grantMeetingUserPermission({ ...grantForm })
-    .then(() => {
-      message.success("会议权限已保存");
-      showGrantPermission.value = false;
-      return loadSecurityData();
-    })
-    .catch((error) => {
-      message.error(error instanceof Error ? error.message : "会议权限保存失败");
-    })
-    .finally(() => {
-      savingPermission.value = false;
-    });
-}
-
-function revokePermission(row: MeetingUserPermissionDto) {
-  if (row.id == null) return;
-  savingPermission.value = true;
-  void store.deleteMeetingUserPermission(row.id)
-    .then(() => {
-      message.success("会议权限已撤销");
-      return loadSecurityData();
-    })
-    .catch((error) => {
-      message.error(error instanceof Error ? error.message : "会议权限撤销失败");
-    })
-    .finally(() => {
-      savingPermission.value = false;
-    });
-}
 </script>
 
 <style scoped>
@@ -978,6 +927,7 @@ function revokePermission(row: MeetingUserPermissionDto) {
 }
 
 .access-shell {
+  min-width: 0;
   display: grid;
   gap: 14px;
 }
@@ -1031,17 +981,14 @@ function revokePermission(row: MeetingUserPermissionDto) {
   white-space: nowrap;
 }
 
-.access-meeting-card strong {
-  font-size: 18px;
-  line-height: 30px;
-}
-
 .access-tabs-card :deep(.n-card__content) {
+  min-width: 0;
   padding: 16px 20px 20px;
 }
 
-.access-sub-tabs :deep(.n-tab-pane) {
-  padding-top: 16px;
+.access-tabs-card {
+  min-width: 0;
+  max-width: 100%;
 }
 
 .access-tab-header {
@@ -1124,15 +1071,23 @@ function revokePermission(row: MeetingUserPermissionDto) {
   margin-top: 16px;
 }
 
-.settings-modal :deep(.n-card-header) {
+:global(.settings-modal .n-card-header) {
+  flex: 0 0 auto;
   padding: 22px 24px 10px;
 }
 
-.settings-modal :deep(.n-card__content) {
-  padding: 8px 24px 4px;
+:global(.settings-modal) {
+  max-height: calc(100vh - 32px);
 }
 
-.settings-modal :deep(.n-card__footer) {
+:global(.settings-modal .n-card__content) {
+  min-height: 0;
+  padding: 8px 24px 4px;
+  overflow-y: auto;
+}
+
+:global(.settings-modal .n-card__footer) {
+  flex: 0 0 auto;
   padding: 12px 24px 22px;
 }
 
@@ -1200,11 +1155,9 @@ function revokePermission(row: MeetingUserPermissionDto) {
     width: 100%;
   }
 
-  .access-sub-tabs :deep(.n-tabs-nav) {
-    overflow-x: auto;
-  }
-
   .mobile-scroll-table {
+    min-width: 0;
+    max-width: 100%;
     width: 100%;
     overflow-x: auto;
   }

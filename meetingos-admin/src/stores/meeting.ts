@@ -3,6 +3,7 @@ import { canUseDemoFallback, extractErrorMessage, http, type PagePayload, isAuth
 import { mockAttendees, mockDinnerAssignments, mockMeetings, mockRooms, mockSeats, mockSyncLogs } from "@/utils/mockData";
 import { updateMeetingCounters } from "@/utils/meetingCounters";
 import { formatDateTimeLabel } from "@/utils/meetingDisplay";
+import { DEFAULT_NEW_MEETING_STATUS } from "@/utils/meetingLifecycle";
 import { RequestRuntime, type LatestRequestToken } from "@/utils/requestControl";
 import { sanitizeImageUrl } from "@/utils/safeUrl";
 import type {
@@ -622,6 +623,8 @@ export interface BrandingDto {
 export interface MeetingUserPermissionDto {
   id?: string | number;
   meetingId?: string | number;
+  meetingCode?: string;
+  meetingName?: string;
   userId?: string | number;
   username?: string;
   displayName?: string;
@@ -747,7 +750,7 @@ function meetingRequestFrom(meeting: Partial<Meeting>, fallback?: Meeting) {
     coverImageUrl: blankToUndefined(meeting.coverImageUrl ?? fallback?.coverImageUrl),
     contactName: blankToUndefined(meeting.contactName ?? fallback?.contactName),
     contactPhone: blankToUndefined(meeting.contactPhone ?? fallback?.contactPhone),
-    status: meeting.status || fallback?.status || "DRAFT",
+    status: meeting.status || fallback?.status || DEFAULT_NEW_MEETING_STATUS,
     seatQueryEnabled: meeting.seatQueryEnabled ?? fallback?.seatQueryEnabled ?? false,
     roomQueryEnabled: meeting.roomQueryEnabled ?? fallback?.roomQueryEnabled ?? false,
     dinnerQueryEnabled: meeting.dinnerQueryEnabled ?? fallback?.dinnerQueryEnabled ?? false,
@@ -770,6 +773,16 @@ function emptyPage<T>(page = 0, size = 20): PagePayload<T> {
     totalElements: 0,
     totalPages: 0
   };
+}
+
+async function loadAllPageContent<T>(loadPage: (page: number) => Promise<PagePayload<T>>) {
+  const firstPage = await loadPage(0);
+  const remainingPages = Array.from(
+    { length: Math.max(0, firstPage.totalPages - 1) },
+    (_, index) => index + 1
+  );
+  const extraPages = await Promise.all(remainingPages.map(loadPage));
+  return [firstPage, ...extraPages].flatMap((page) => page.content);
 }
 
 const defaultQueryFieldOptions: MeetingQuerySettings["fieldOptions"] = [
@@ -1057,14 +1070,16 @@ export const useMeetingStore = defineStore("meeting", {
       const request = requestRuntime.requests.begin("meeting-list");
       this.loading = true;
       try {
-        const page = unwrapApi(
-          await http.get<PagePayload<MeetingSummaryDto>>("/admin/meetings", {
-            params: { page: 0, size: 100 },
-            signal: request.signal
-          })
+        const meetings = await loadAllPageContent<MeetingSummaryDto>(async (page) =>
+          unwrapApi(
+            await http.get<PagePayload<MeetingSummaryDto>>("/admin/meetings", {
+              params: { page, size: 200 },
+              signal: request.signal
+            })
+          )
         );
         if (!requestRuntime.requests.isCurrent(request)) return;
-        this.meetings = page.content.map(mapMeetingSummary);
+        this.meetings = meetings.map(mapMeetingSummary);
         if (!this.meetings.some((meeting) => meeting.id === this.currentMeetingId)) {
           this.setCurrentMeetingId(this.meetings[0]?.id || "");
         }
@@ -2056,6 +2071,21 @@ export const useMeetingStore = defineStore("meeting", {
         return meeting;
       }
     },
+    async restartMeeting(meetingId: string) {
+      try {
+        const updated = unwrapApi(await http.post<MeetingDetailDto["meeting"]>(`/admin/meetings/${backendId(meetingId)}/restart`));
+        const meeting = mapMeetingEntity(updated);
+        this.upsertMeeting({ ...this.meetings.find((item) => item.id === meeting.id), ...meeting } as Meeting);
+        await this.loadMeetingDetail(meeting.id);
+        return meeting;
+      } catch (error) {
+        if (!canUseDemoFallback(error)) throw new Error(extractErrorMessage(error, "会议重新开启失败"));
+        const meeting = this.meetings.find((item) => item.id === meetingId);
+        if (!meeting) throw new Error("会议不存在");
+        meeting.status = DEFAULT_NEW_MEETING_STATUS;
+        return meeting;
+      }
+    },
     async loadTduckBinding(meetingId?: string) {
       const targetMeetingId = meetingId || this.currentMeetingId;
       const meeting = this.meetings.find((item) => item.id === targetMeetingId);
@@ -2794,27 +2824,62 @@ export const useMeetingStore = defineStore("meeting", {
     },
     async loadAdminUsers() {
       try {
-        // 系统设置页需要完整判断“最后一个启用的超级管理员”，不能只读取后端默认的前 20 条。
-        const users = unwrapApi(await http.get<AdminUserDto[] | PagePayload<AdminUserDto>>("/admin/users", {
-          params: { page: 0, size: 200 }
-        }));
-        return Array.isArray(users) ? users : users.content;
-      } catch {
-        // 用户/权限模块属于 MVP 后续增强；接口不可用时展示占位数据，不影响系统设置页进入。
-        return getLocalAdminUsers();
+        // 系统设置页需要完整判断“最后一个启用的超级管理员”，必须读取全部分页。
+        return await loadAllPageContent(async (page) => {
+          const users = unwrapApi(await http.get<AdminUserDto[] | PagePayload<AdminUserDto>>("/admin/users", {
+            params: { page, size: 200 }
+          }));
+          if (Array.isArray(users)) {
+            return {
+              content: users,
+              page: 0,
+              size: users.length || 1,
+              totalElements: users.length,
+              totalPages: 1
+            };
+          }
+          return users;
+        });
+      } catch (error) {
+        // 仅开发演示模式允许占位数据；生产环境必须暴露加载失败，避免管理员对假数据执行授权。
+        if (canUseDemoFallback(error)) return getLocalAdminUsers();
+        throw error;
       }
     },
-    async loadMeetingUserPermissions() {
-      const meetingId = requireMeetingId(this.currentMeetingId);
+    async loadAuthorizableMeetings() {
+      try {
+        const meetings = await loadAllPageContent(async (page) =>
+          unwrapApi(
+            await http.get<PagePayload<MeetingSummaryDto>>("/admin/meetings", {
+              params: { page, size: 200 }
+            })
+          )
+        );
+        return meetings.map(mapMeetingSummary);
+      } catch (error) {
+        if (canUseDemoFallback(error)) return [...this.meetings];
+        throw error;
+      }
+    },
+    async loadMeetingUserPermissions(filters: { meetingId?: string | number; userId?: string | number } = {}) {
+      const meetingId = idOf(filters.meetingId);
+      const userId = idOf(filters.userId);
       try {
         const permissions = unwrapApi(
           await http.get<MeetingUserPermissionDto[] | PagePayload<MeetingUserPermissionDto>>("/admin/permissions/meeting-users", {
-            params: { meetingId: backendId(meetingId) }
+            params: {
+              meetingId: meetingId ? backendId(meetingId) : undefined,
+              userId: userId ? backendId(userId) : undefined
+            }
           })
         );
         return Array.isArray(permissions) ? permissions : permissions.content;
-      } catch {
-        return getLocalMeetingUserPermissions(meetingId);
+      } catch (error) {
+        if (!canUseDemoFallback(error)) throw error;
+        const fallbackMeetingId = meetingId || this.currentMeetingId;
+        if (!fallbackMeetingId) return [];
+        const permissions = getLocalMeetingUserPermissions(fallbackMeetingId);
+        return userId ? permissions.filter((permission) => String(permission.userId) === userId) : permissions;
       }
     },
     async createAdminUser(payload: CreateAdminUserPayload) {

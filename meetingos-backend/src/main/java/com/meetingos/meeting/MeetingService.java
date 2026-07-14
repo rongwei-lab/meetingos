@@ -17,6 +17,7 @@ import com.meetingos.security.Role;
 import com.meetingos.seating.SeatAssignmentRepository;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.PageRequest;
+import org.springframework.data.domain.Sort;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.util.StringUtils;
@@ -77,6 +78,7 @@ public class MeetingService {
         meeting.setCode(generateMeetingCode());
         meeting.setPublicQueryToken(generatePublicQueryToken());
         applyRequest(meeting, request);
+        meeting.setStatus(request.status() == null ? MeetingStatus.REGISTRATION_OPEN : request.status());
         meeting.setCreatedBy(SecurityUtils.currentUsernameOrSystem());
         Meeting saved = meetingRepository.save(meeting);
         grantCreatorManagerPermission(saved);
@@ -85,15 +87,16 @@ public class MeetingService {
 
     @Transactional
     public Meeting update(Long id, MeetingRequest request) {
-        Meeting meeting = meetingRepository.findById(id)
+        Meeting meeting = meetingRepository.findByIdForUpdate(id)
                 .orElseThrow(() -> BusinessException.notFound("会议不存在"));
+        // 状态只能通过状态机或超级管理员重启入口修改，避免普通编辑接口绕过流转和权限约束。
         applyRequest(meeting, request);
         return meeting;
     }
 
     @Transactional
     public Meeting transition(Long id, MeetingStatus targetStatus) {
-        Meeting meeting = meetingRepository.findById(id)
+        Meeting meeting = meetingRepository.findByIdForUpdate(id)
                 .orElseThrow(() -> BusinessException.notFound("会议不存在"));
         ensureTransitionAllowed(meeting.getStatus(), targetStatus);
         meeting.setStatus(targetStatus);
@@ -107,9 +110,21 @@ public class MeetingService {
         return transition(id, MeetingStatus.ARCHIVED);
     }
 
+    @Transactional
+    public Meeting restart(Long id) {
+        Meeting meeting = meetingRepository.findByIdForUpdate(id)
+                .orElseThrow(() -> BusinessException.notFound("会议不存在"));
+        if (meeting.getStatus() != MeetingStatus.ENDED && meeting.getStatus() != MeetingStatus.ARCHIVED) {
+            throw BusinessException.badRequest("只有已结束或已归档的会议可以重新开启");
+        }
+        meeting.setStatus(MeetingStatus.REGISTRATION_OPEN);
+        return meeting;
+    }
+
     @Transactional(readOnly = true)
     public PageResponse<MeetingSummary> list(String keyword, MeetingStatus status, int page, int size) {
-        PageRequest pageRequest = PageRequests.of(page, size);
+        // 授权页会连续读取全部分页；固定按 ID 倒序，避免并发新增时无序分页出现重复或遗漏。
+        PageRequest pageRequest = PageRequests.of(page, size, Sort.by(Sort.Direction.DESC, "id"));
         Page<Meeting> meetings = searchVisibleMeetings(keyword, status, pageRequest);
         List<Meeting> content = meetings.getContent();
         if (content.isEmpty()) {
@@ -276,7 +291,6 @@ public class MeetingService {
         meeting.setCoverImageUrl(request.coverImageUrl());
         meeting.setContactName(request.contactName());
         meeting.setContactPhone(request.contactPhone());
-        meeting.setStatus(request.status() == null ? MeetingStatus.DRAFT : request.status());
         if (request.seatQueryEnabled() != null) {
             meeting.setSeatQueryEnabled(request.seatQueryEnabled());
         }
