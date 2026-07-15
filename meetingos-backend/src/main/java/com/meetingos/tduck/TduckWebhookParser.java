@@ -59,6 +59,10 @@ public class TduckWebhookParser {
                                 firstNonBlank(asString(dataContainer.get("dataId")), asString(dataContainer.get("id")))
                         )
                 ),
+                firstNonBlank(
+                        asMetadataString(payload.get("extValue")),
+                        asMetadataString(dataContainer.get("extValue"))
+                ),
                 data,
                 payload
         );
@@ -94,6 +98,20 @@ public class TduckWebhookParser {
 
     private String asString(Object value) {
         return value == null ? null : String.valueOf(value);
+    }
+
+    private String asMetadataString(Object value) {
+        if (value == null) {
+            return null;
+        }
+        if (value instanceof String text) {
+            return text;
+        }
+        try {
+            return objectMapper.writeValueAsString(value);
+        } catch (JsonProcessingException ex) {
+            return String.valueOf(value);
+        }
     }
 
     private String firstNonBlank(String first, String second) {

@@ -62,6 +62,43 @@ Webhook 优先校验基于原始 body 的 `X-TDuck-Signature`，兼容 `X-Meetin
 3. 若可报名，跳转 `/tduck/s/{formKey}`。
 4. 若不可报名，展示报名未开始、已截止或会议不存在提示。
 
+## 邀请函与渠道归因
+
+管理接口统一使用会议级权限：查看和统计要求 `canView`，创建、设计、发布、渠道和素材操作要求
+`canManage`。
+
+| 方法 | 路径 | 说明 |
+| --- | --- | --- |
+| `GET` / `POST` | `/api/admin/meetings/{meetingId}/invitations` | 查询或创建邀请方案 |
+| `GET` | `/api/admin/meetings/{meetingId}/invitations/{invitationId}` | 查询草稿和最新发布版本 |
+| `PUT` | `/api/admin/meetings/{meetingId}/invitations/{invitationId}/draft` | 按 `expectedRevision` 乐观锁保存草稿 |
+| `POST` | `/api/admin/meetings/{meetingId}/invitations/{invitationId}/copy` | 复制为新草稿 |
+| `POST` | `/api/admin/meetings/{meetingId}/invitations/{invitationId}/publish` | 创建不可变发布版本 |
+| `POST` | `/api/admin/meetings/{meetingId}/invitations/{invitationId}/unpublish` | 下线全部公开链接 |
+| `POST` | `/api/admin/meetings/{meetingId}/invitations/{invitationId}/archive` | 归档并保留历史数据 |
+| `GET` / `POST` | `/api/admin/meetings/{meetingId}/invitations/{invitationId}/share-links` | 查询或新增渠道链接 |
+| `PUT` | `/api/admin/meetings/{meetingId}/invitations/{invitationId}/share-links/{shareLinkId}` | 修改渠道、启停或失效时间 |
+| `GET` / `POST` | `/api/admin/meetings/{meetingId}/invitations/assets` | 查询或上传会议级图片素材 |
+| `GET` | `/api/admin/meetings/{meetingId}/invitations/analytics` | 按日期和方案查询 PV、UV、点击与报名转化 |
+| `GET` | `/api/admin/meetings/{meetingId}/invitations/{invitationId}/attributions` | 查询脱敏报名归因明细 |
+| `GET` | `/api/public/invitations/{shareToken}` | 获取当前有效发布版本、引用素材和实时 `publicQueryToken` |
+| `POST` | `/api/public/invitations/{shareToken}/views` | 页面可见后按客户端 UUID 幂等记录访问 |
+| `POST` | `/api/public/invitations/{shareToken}/registration-intents` | 记录报名点击并生成限时归因 token |
+
+公开分享入口为 `/i/{shareToken}`。每个邀请方案可以同时维护多个预置或自定义渠道，渠道停用后旧链接
+不可访问，但历史事件和报名归因不删除。草稿绑定会议最新字段；发布时保存会议快照，后续会议资料变更
+必须重新发布才会影响公开内容。
+
+报名按钮继续经过 `/r/{meetingCode}` 的报名开放校验。归因 token 使用 URL fragment `mos_at` 传给
+TDuck 前端，部署补丁将其放入答卷 `extValue`，Webhook 和补偿拉取再写入 MeetingOS 归因表。token
+无效、过期或会议/表单不匹配只影响归因，不能阻断报名同步。管理员复制链接或下载二维码只代表生成
+分享材料，不计作真实触达。
+
+H5 还可配置独立签到按钮和单目标查询按钮。签到进入 `/public/checkin`，查询可选择公开入口、综合、座位、
+住宿或晚宴页面，均使用响应中的随机 `publicQueryToken`，不会调用报名意图接口或计入报名 CTA。二维码
+同样可选择报名或上述查询用途；报名二维码携带渠道 `shareToken` 到 `/r/{meetingCode}` 换取 `mos_at`，
+查询二维码不参与报名归因。设计 JSON 只保存用途枚举，不保存查询 token 或任意 URL。
+
 ## 参会人接口
 
 | 方法 | 路径 | 说明 |

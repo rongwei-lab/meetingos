@@ -31,9 +31,25 @@ cp .env.example .env
 chmod 600 .env
 ```
 
-2. 修改 `.env` 中所有 `CHANGE_ME`、域名、镜像名、JWT Secret、`TDUCK_WEBHOOK_TOKEN`、数据库密码和管理员初始密码。
+2. 修改 `.env` 中所有 `CHANGE_ME`、域名、镜像名、JWT Secret、`TDUCK_WEBHOOK_TOKEN`、
+   `MEETINGOS_INVITATION_TRACKING_SECRET`、数据库密码和管理员初始密码。邀请函归因密钥必须是
+   独立的 32 字节以上强随机值，不能与 JWT 或 Webhook 密钥复用。
 
 3. 构建或拉取 MeetingOS 后端、MeetingOS 前端镜像。
+
+邀请函使用高德地图组件时，必须同时配置 `MEETINGOS_INVITATION_AMAP_KEY`、`VITE_AMAP_KEY`
+和 `VITE_AMAP_SECURITY_CODE`，且前后端 Key 必须一致；未使用地图时三项都留空。前端镜像需要在
+构建阶段固化 Vite 配置。请从仓库根目录执行：
+
+```bash
+./deploy/scripts/check-env.sh .env
+docker compose --env-file .env -f deploy/docker-compose.yml \
+  build meetingos-frontend
+```
+
+Compose 会直接从 `.env` 读取高德配置和 `MEETINGOS_FRONTEND_IMAGE` 标签，不要求也不建议把整个
+`.env` `source` 到当前 shell。后端读取 `MEETINGOS_INVITATION_AMAP_KEY` 做发布校验，避免发布包含
+地图但线上无法加载的邀请函。
 
 4. 启动 MeetingOS 基础服务：
 
@@ -124,6 +140,9 @@ TDUCK_ADMIN_PASSWORD=your-password \
 - `TDUCK_WEBHOOK_TOKEN` 是 MeetingOS 校验 TDuck 回调的唯一密钥来源，只在 `.env` 中配置，不在后台系统设置页展示或轮换。轮换时修改 `.env` 后重启 MeetingOS 后端，并确保 TDuck Webhook 回调继续携带同一个 token。
 - Webhook 回调优先使用 `X-TDuck-Signature` 或 `X-MeetingOS-Webhook-Token`。如果 TDuck 社区版无法设置请求头，只能把 query token 写入 `MEETINGOS_WEBHOOK_INTERNAL_URL`，并且应限制为容器内网地址，避免公网代理日志记录密钥。
 - TDuck 前端挂在 `/tduck/` 子路径下，`tduck-front/Dockerfile` 会在镜像构建阶段把 `publicPath`、Vue Router `base` 和 `VUE_APP_API_ROOT` 调整为 `/tduck/`、`/tduck/`、`/tduck-api`，不修改 `vendor/tduck-front` 源码。只改 `publicPath` 会导致 `/tduck/s/{formKey}` 进入 TDuck SPA 后匹配不到 `/s/:key` 路由，从而显示 TDuck 404。
+- 邀请函报名归因依赖同一构建补丁把 URL fragment 中的 `mos_at` 写入 TDuck `extValue`。构建后的
+  `/tduck/meetingos-capabilities.json` 必须包含 `meetingosAttributionExtValue: "v1"`；使用未经补丁的外部
+  TDuck 前端时，邀请函仍可展示和报名，但无法可靠关联渠道转化。
 - TDuck 后端使用官方镜像 `tduckcloud/tduck-platform`，通过 `spring.datasource.*` 环境变量连接本 compose 的 MySQL。
 - 如果 MySQL volume 已存在，`mysql/init` 不会再次执行；请用 `scripts/import-tduck-schema.sh` 显式导入 TDuck 官方初始化 SQL。
 - MeetingOS 不直接写 TDuck 业务表，只保存表单绑定、字段映射、同步快照和同步日志。
@@ -143,6 +162,7 @@ TDUCK_ADMIN_PASSWORD=your-password \
 | `/api/` | MeetingOS 后端 | 后端 API |
 | `/actuator/health` | MeetingOS 后端 | 健康检查 |
 | `/r/{meetingCode}` | MeetingOS 前端或后端 | 报名二维码中转入口 |
+| `/i/{shareToken}` | MeetingOS 前端 | 邀请函 H5 渠道入口 |
 | `/tduck/` | TDuck 前端 | TDuck 后台和表单页 |
 | `/tduck-api/` | TDuck 后端 | TDuck API |
 
@@ -151,6 +171,9 @@ TDUCK_ADMIN_PASSWORD=your-password \
 - 已替换所有默认密码和弱密钥。
 - TDuck 默认管理员密码已修改。
 - `TDUCK_WEBHOOK_TOKEN` 已启用并保持强随机值，TDuck 回调配置已同步；Nginx/后端日志中避免明文输出。
+- `MEETINGOS_INVITATION_TRACKING_SECRET` 已替换为独立强随机值，邀请函事件保留期符合隐私策略。
+- 使用邀请函地图时，后端 Key、前端 Key 和安全码均已配置，且前后端 Key 一致；不使用时三项均为空。
+- 使用渠道归因时，`/tduck/meetingos-capabilities.json` 已声明 `meetingosAttributionExtValue: "v1"`。
 - MySQL 和两个本地上传数据卷已纳入备份；可选 Redis/MinIO 启用后，其数据卷也必须纳入备份。
 - 导出接口已做权限控制和敏感字段脱敏。
 - Nginx 已配置 HTTPS 证书、上传大小限制和必要限流。

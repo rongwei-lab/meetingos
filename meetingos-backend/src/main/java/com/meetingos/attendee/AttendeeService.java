@@ -77,6 +77,7 @@ public class AttendeeService {
     private final RoomService roomService;
     private final ImportRowTransactionRunner importRowTransactionRunner;
     private final AttendeeCodeGenerator attendeeCodeGenerator;
+    private final AttendeeAttributionStateSynchronizer attributionStateSynchronizer;
 
     public AttendeeService(AttendeeRepository attendeeRepository,
                            MeetingRepository meetingRepository,
@@ -98,7 +99,35 @@ public class AttendeeService {
                 dinnerAssignmentRepository,
                 roomService,
                 ImportRowTransactionRunner.direct(),
-                new AttendeeCodeGenerator(attendeeRepository)
+                new AttendeeCodeGenerator(attendeeRepository),
+                AttendeeAttributionStateSynchronizer.NOOP
+        );
+    }
+
+    public AttendeeService(AttendeeRepository attendeeRepository,
+                           MeetingRepository meetingRepository,
+                           MeetingAccessService meetingAccessService,
+                           SystemSettingsService systemSettingsService,
+                           TduckFieldMappingRepository tduckFieldMappingRepository,
+                           PublicQueryHistoryRepository publicQueryHistoryRepository,
+                           SeatAssignmentRepository seatAssignmentRepository,
+                           DinnerAssignmentRepository dinnerAssignmentRepository,
+                           RoomService roomService,
+                           ImportRowTransactionRunner importRowTransactionRunner,
+                           AttendeeCodeGenerator attendeeCodeGenerator) {
+        this(
+                attendeeRepository,
+                meetingRepository,
+                meetingAccessService,
+                systemSettingsService,
+                tduckFieldMappingRepository,
+                publicQueryHistoryRepository,
+                seatAssignmentRepository,
+                dinnerAssignmentRepository,
+                roomService,
+                importRowTransactionRunner,
+                attendeeCodeGenerator,
+                AttendeeAttributionStateSynchronizer.NOOP
         );
     }
 
@@ -113,7 +142,8 @@ public class AttendeeService {
                            DinnerAssignmentRepository dinnerAssignmentRepository,
                            RoomService roomService,
                            ImportRowTransactionRunner importRowTransactionRunner,
-                           AttendeeCodeGenerator attendeeCodeGenerator) {
+                           AttendeeCodeGenerator attendeeCodeGenerator,
+                           AttendeeAttributionStateSynchronizer attributionStateSynchronizer) {
         this.attendeeRepository = attendeeRepository;
         this.meetingRepository = meetingRepository;
         this.meetingAccessService = meetingAccessService;
@@ -125,6 +155,7 @@ public class AttendeeService {
         this.roomService = roomService;
         this.importRowTransactionRunner = importRowTransactionRunner;
         this.attendeeCodeGenerator = attendeeCodeGenerator;
+        this.attributionStateSynchronizer = attributionStateSynchronizer;
     }
 
     @Transactional(isolation = Isolation.READ_COMMITTED)
@@ -195,6 +226,7 @@ public class AttendeeService {
                 .orElseThrow(() -> BusinessException.notFound("参会人不存在"));
         meetingAccessService.requireManage(attendee.getMeeting().getId());
         applyReview(attendee, request.reviewStatus(), request.reason(), request.remark());
+        synchronizeAttributionState(attendee, request.reviewStatus() == ReviewStatus.APPROVED);
         return attendee;
     }
 
@@ -214,9 +246,14 @@ public class AttendeeService {
                 .flatMap(Optional::stream)
                 .toList();
         attendees.forEach(attendee -> meetingAccessService.requireManage(attendee.getMeeting().getId()));
-        return (int) attendees.stream()
-                .filter(attendee -> applyReview(attendee, request.reviewStatus(), request.reason(), request.remark()))
-                .count();
+        int updated = 0;
+        for (Attendee attendee : attendees) {
+            if (applyReview(attendee, request.reviewStatus(), request.reason(), request.remark())) {
+                updated++;
+            }
+            synchronizeAttributionState(attendee, request.reviewStatus() == ReviewStatus.APPROVED);
+        }
+        return updated;
     }
 
     @Transactional
@@ -250,6 +287,7 @@ public class AttendeeService {
         attendee.setReviewReason(reason == null || reason.isBlank() ? "管理员取消参会" : reason);
         attendee.setReviewedAt(LocalDateTime.now());
         attendee.setReviewedBy(SecurityUtils.currentUsernameOrSystem());
+        synchronizeAttributionState(attendee, false);
         return attendee;
     }
 
@@ -435,6 +473,10 @@ public class AttendeeService {
         attendee.setReviewedAt(LocalDateTime.now());
         attendee.setReviewedBy(SecurityUtils.currentUsernameOrSystem());
         return true;
+    }
+
+    private void synchronizeAttributionState(Attendee attendee, boolean active) {
+        attributionStateSynchronizer.synchronize(attendee.getMeeting().getId(), attendee.getId(), active);
     }
 
     private boolean canApplyReview(ReviewStatus currentStatus, ReviewStatus targetStatus) {

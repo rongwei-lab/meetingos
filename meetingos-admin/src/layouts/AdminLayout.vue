@@ -107,6 +107,26 @@
             返回会议选择页
           </n-tooltip>
 
+          <n-tooltip v-if="showHomeButton" trigger="hover">
+            <template #trigger>
+              <n-button
+                tag="a"
+                href="/tduck/home"
+                target="_blank"
+                rel="noopener noreferrer"
+                secondary
+                size="small"
+                class="form-home-button"
+              >
+                <template #icon>
+                  <n-icon :component="DocumentTextOutline" />
+                </template>
+                SORL 表单
+              </n-button>
+            </template>
+            前往 SORL 表单首页
+          </n-tooltip>
+
           <n-dropdown
             trigger="manual"
             placement="bottom-start"
@@ -235,12 +255,14 @@ import {
   ChevronBackOutline,
   ChevronDown,
   ChevronForwardOutline,
+  DocumentTextOutline,
   DownloadOutline,
   GridOutline,
   HomeOutline,
   ListOutline,
   LogOutOutline,
   MenuOutline,
+  MailOpenOutline,
   PeopleOutline,
   ReaderOutline,
   RestaurantOutline,
@@ -288,6 +310,7 @@ interface NavItem extends NavLocationItem {
 const navItems: NavItem[] = [
   { key: "workspace", label: "工作区", routeName: "meeting-workspace", scope: "meeting", icon: GridOutline },
   { key: "registration", label: "报名配置", routeName: "meeting-registration", scope: "meeting", icon: ReaderOutline },
+  { key: "invitations", label: "邀请函", routeName: "meeting-invitations", scope: "meeting", icon: MailOpenOutline },
   { key: "attendees", label: "参会人管理", routeName: "meeting-attendees", scope: "meeting", icon: PeopleOutline },
   { key: "seating", label: "座位管理", routeName: "meeting-seating", scope: "meeting", icon: BusinessOutline },
   { key: "rooms", label: "住宿管理", routeName: "meeting-rooms", scope: "meeting", icon: BedOutline },
@@ -926,7 +949,8 @@ onMounted(() => {
   width: 260px;
 }
 
-.home-button {
+.home-button,
+.form-home-button {
   flex: 0 0 auto;
 }
 
@@ -1137,6 +1161,7 @@ onMounted(() => {
 
   .search-input,
   .home-button,
+  .form-home-button,
   .user-chip div {
     display: none;
   }

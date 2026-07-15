@@ -2,9 +2,14 @@ package com.meetingos.integration;
 
 import com.meetingos.attendee.Attendee;
 import com.meetingos.attendee.AttendeeRepository;
+import com.meetingos.attendee.AttendeeService;
 import com.meetingos.attendee.AttendeeType;
 import com.meetingos.attendee.CheckinStatus;
+import com.meetingos.attendee.ReviewRequest;
 import com.meetingos.attendee.ReviewStatus;
+import com.meetingos.invitation.RegistrationAttribution;
+import com.meetingos.invitation.RegistrationAttributionRepository;
+import com.meetingos.invitation.RegistrationAttributionStatus;
 import com.meetingos.meeting.Meeting;
 import com.meetingos.meeting.MeetingRepository;
 import com.meetingos.tduck.SyncStatus;
@@ -48,6 +53,10 @@ class TduckTransactionIntegrationTest {
     private TduckSyncLogRepository syncLogRepository;
     @Autowired
     private AttendeeRepository attendeeRepository;
+    @Autowired
+    private AttendeeService attendeeService;
+    @Autowired
+    private RegistrationAttributionRepository attributionRepository;
     @Autowired
     private MeetingRepository meetingRepository;
     @Autowired
@@ -154,6 +163,59 @@ class TduckTransactionIntegrationTest {
         }
     }
 
+    @Test
+    void attendeeReviewAndAttributionActiveRollbackOrCommitTogether() {
+        String phone = "13900009006";
+        String dataId = "data-admin-review-atomic";
+        Meeting meeting = meetingRepository.findByCode("NDEF2026").orElseThrow();
+        TransactionTemplate transaction = new TransactionTemplate(transactionManager);
+        Long attendeeId = transaction.execute(status -> {
+            Attendee saved = attendeeRepository.saveAndFlush(
+                    attendee(meeting, phone, "ADMIN-REVIEW-ATOMIC", dataId)
+            );
+            RegistrationAttribution attribution = new RegistrationAttribution();
+            attribution.setMeeting(meeting);
+            attribution.setAttendee(saved);
+            attribution.setAttributionStatus(RegistrationAttributionStatus.DIRECT_UNATTRIBUTED);
+            attribution.setFormKey("ndef2026");
+            attribution.setTduckDataId(dataId);
+            attribution.setActive(true);
+            attribution.setAttributedAt(LocalDateTime.now());
+            attributionRepository.saveAndFlush(attribution);
+            return saved.getId();
+        });
+
+        try {
+            assertThatThrownBy(() -> transaction.executeWithoutResult(status -> {
+                attendeeService.review(
+                        attendeeId,
+                        new ReviewRequest(ReviewStatus.REJECTED, "事务回滚验证", null, null)
+                );
+                throw new RollbackProbeException();
+            })).isInstanceOf(RollbackProbeException.class);
+
+            transaction.executeWithoutResult(status -> {
+                assertThat(attendeeRepository.findById(attendeeId).orElseThrow().getReviewStatus())
+                        .isEqualTo(ReviewStatus.APPROVED);
+                assertThat(attributionRepository.findForUpdate(meeting.getId(), dataId).orElseThrow().isActive())
+                        .isTrue();
+            });
+
+            attendeeService.review(
+                    attendeeId,
+                    new ReviewRequest(ReviewStatus.REJECTED, "最终拒绝", null, null)
+            );
+            transaction.executeWithoutResult(status -> {
+                assertThat(attendeeRepository.findById(attendeeId).orElseThrow().getReviewStatus())
+                        .isEqualTo(ReviewStatus.REJECTED);
+                assertThat(attributionRepository.findForUpdate(meeting.getId(), dataId).orElseThrow().isActive())
+                        .isFalse();
+            });
+        } finally {
+            cleanup("event-admin-review-atomic", phone);
+        }
+    }
+
     private TduckWebhookResult invokeAfter(CountDownLatch start, String rawBody) throws InterruptedException {
         start.await();
         return tduckService.handleWebhook(rawBody, null, "test-webhook-secret");
@@ -204,7 +266,14 @@ class TduckTransactionIntegrationTest {
         TransactionTemplate transaction = new TransactionTemplate(transactionManager);
         transaction.executeWithoutResult(status -> {
             syncLogRepository.deleteAll(syncLogRepository.findAllByEventId(eventId));
-            attendeeRepository.findByMeetingIdAndPhone(1L, phone).ifPresent(attendeeRepository::delete);
+            attendeeRepository.findByMeetingIdAndPhone(1L, phone).ifPresent(attendee -> {
+                if (attendee.getTduckDataId() != null) {
+                    attributionRepository.findForUpdate(1L, attendee.getTduckDataId())
+                            .ifPresent(attributionRepository::delete);
+                    attributionRepository.flush();
+                }
+                attendeeRepository.delete(attendee);
+            });
         });
     }
 

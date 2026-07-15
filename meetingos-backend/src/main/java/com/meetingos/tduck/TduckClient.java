@@ -193,9 +193,11 @@ public class TduckClient {
         }
         String formKey = firstNonBlank(firstText(formData, "formKey"), firstText(details, "formKey"));
         String resolvedDataId = firstNonBlank(firstText(formData, "id", "dataId"), dataId.trim());
+        String extValue = firstNonBlank(firstText(formData, "extValue"), firstText(details, "extValue"));
         return new TduckFormDataDetails(
                 formKey,
                 resolvedDataId,
+                extValue,
                 new LinkedHashMap<>(formData),
                 details
         );

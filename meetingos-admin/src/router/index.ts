@@ -32,6 +32,11 @@ const router = createRouter({
       component: () => import("@/views/public/RegistrationRedirectView.vue")
     },
     {
+      path: "/i/:shareToken",
+      name: "public-invitation",
+      component: () => import("@/views/public/PublicInvitationView.vue")
+    },
+    {
       path: "/",
       component: () => import("@/layouts/AdminLayout.vue"),
       meta: { requiresAuth: true },
@@ -57,6 +62,18 @@ const router = createRouter({
           name: "meeting-registration",
           meta: { requiresMeeting: true },
           component: () => import("@/views/registration/RegistrationConfigView.vue")
+        },
+        {
+          path: "meetings/:meetingId/invitations",
+          name: "meeting-invitations",
+          meta: { requiresMeeting: true },
+          component: () => import("@/views/invitation/InvitationWorkspaceView.vue")
+        },
+        {
+          path: "meetings/:meetingId/invitations/:invitationId/design",
+          name: "meeting-invitation-designer",
+          meta: { requiresMeeting: true },
+          component: () => import("@/views/invitation/InvitationDesignerView.vue")
         },
         {
           path: "meetings/:meetingId/attendees",
@@ -108,6 +125,7 @@ const router = createRouter({
         },
         { path: "dashboard", redirect: redirectToCurrentMeeting("workspace") },
         { path: "registration", redirect: redirectToCurrentMeeting("registration") },
+        { path: "invitations", redirect: redirectToCurrentMeeting("invitations") },
         { path: "attendees", redirect: redirectToCurrentMeeting("attendees") },
         { path: "seating", redirect: redirectToCurrentMeeting("seating") },
         { path: "rooms", redirect: redirectToCurrentMeeting("rooms") },

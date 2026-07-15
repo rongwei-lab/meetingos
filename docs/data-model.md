@@ -288,6 +288,37 @@ TDuck 同步日志。
 | `remark` | varchar(500) | 备注 |
 | `created_at` | datetime | 创建时间 |
 
+## 邀请函与渠道归因
+
+### meeting_invitations 与 meeting_invitation_versions
+
+邀请方案表保存会议、名称、`DRAFT/PUBLISHED/UNPUBLISHED/ARCHIVED` 状态、草稿领域 JSON、草稿修订号
+和当前发布版本。发布版本表保存不可变的 H5/海报设计 JSON 与会议字段快照；同一方案按
+`invitation_id + version_no` 唯一，已有渠道链接始终指向最新发布版本。
+
+设计文档固定为版本 1，包含 375px 宽的可滚动 H5 画布和 1080×1920 海报画布。每画布最多 200 个
+白名单元素，图片只引用 `invitation_assets.id`，不保存 Fabric JSON、Base64、任意 HTML/CSS 或脚本。
+H5 白名单包含报名、签到和单目标查询按钮；签到/查询按钮不得进入海报画布。二维码通过 `purpose` 保存
+报名、查询入口、综合、座位、住宿、晚宴或历史渠道邀请函用途，`label` 保存可编辑说明；查询目标和
+二维码都不持久化 `publicQueryToken`、绝对 URL 或渠道链接 ID。
+
+### invitation_assets 与 invitation_share_links
+
+`invitation_assets` 是会议级图片素材索引，记录公开 URL、真实 MIME、尺寸、大小和创建人；发布接口会
+验证素材归属。`invitation_share_links` 保存邀请方案、当前版本、渠道类型/名称、随机公开 token、启停
+状态和可选失效时间。渠道记录只停用不物理删除，以保留报表口径。
+
+### invitation_events 与 registration_attributions
+
+访问和报名点击写入 `invitation_events`，保存事件类型、客户端幂等 UUID、不可逆匿名访客 HMAC、粗粒度
+设备类型和来源域名；不保存原始访客 Cookie、IP 或完整 User-Agent。点击事件额外保存公开 click ID
+及失效时间。
+
+`registration_attributions` 以 `meeting_id + tduck_data_id` 唯一，保存 `ATTRIBUTED`、
+`DIRECT_UNATTRIBUTED`、`INVALID_TOKEN`、`LEGACY_UNATTRIBUTED` 状态及可选方案、版本、渠道、点击和
+参会人关联。同一 TDuck `dataId` 后续更新不改变首次来源；取消报名仅把归因置为非活动，累计转化仍保留。
+访问/点击事件在会议结束 180 天后清理，报名归因永久保留。
+
 ## 权限模型
 
 MVP 可以从角色权限起步：

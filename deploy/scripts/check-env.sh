@@ -98,10 +98,27 @@ require_distinct_values() {
   [ "$left_value" != "$right_value" ] || fail "$left_name and $right_name must use different values"
 }
 
+require_amap_configuration() {
+  backend_key="$(read_env MEETINGOS_INVITATION_AMAP_KEY)"
+  frontend_key="$(read_env VITE_AMAP_KEY)"
+  security_code="$(read_env VITE_AMAP_SECURITY_CODE)"
+
+  # 未使用地图时允许三项全部留空；启用时必须同时配置，避免后端允许发布但公开页无法加载地图。
+  if [ -z "$backend_key" ] && [ -z "$frontend_key" ] && [ -z "$security_code" ]; then
+    return
+  fi
+
+  [ -n "$backend_key" ] || fail "MEETINGOS_INVITATION_AMAP_KEY is required when invitation maps are enabled"
+  [ -n "$frontend_key" ] || fail "VITE_AMAP_KEY is required when invitation maps are enabled"
+  [ -n "$security_code" ] || fail "VITE_AMAP_SECURITY_CODE is required when invitation maps are enabled"
+  [ "$backend_key" = "$frontend_key" ] || fail "MEETINGOS_INVITATION_AMAP_KEY and VITE_AMAP_KEY must match"
+}
+
 require_secure_file_permissions
 
 require_strong_secret JWT_SECRET 32
 require_strong_secret TDUCK_WEBHOOK_TOKEN 32
+require_strong_secret MEETINGOS_INVITATION_TRACKING_SECRET 32
 require_strong_secret MYSQL_ROOT_PASSWORD 32
 require_strong_secret MYSQL_PASSWORD 32
 require_strong_secret SPRING_DATASOURCE_PASSWORD 32
@@ -111,6 +128,12 @@ require_strong_secret MINIO_ROOT_PASSWORD 32
 require_strong_secret MINIO_SECRET_KEY 32
 require_strong_secret MEETINGOS_INIT_ADMIN_PASSWORD 32
 require_strong_secret TDUCK_ADMIN_PASSWORD 16
+
+# 邀请函访客标识和点击令牌必须使用独立密钥，避免一个集成密钥泄漏后扩大影响范围。
+require_distinct_values MEETINGOS_INVITATION_TRACKING_SECRET JWT_SECRET
+require_distinct_values MEETINGOS_INVITATION_TRACKING_SECRET TDUCK_WEBHOOK_TOKEN
+
+require_amap_configuration
 
 # Compose 同时向 MySQL 和应用传入数据库密码别名；部署前确保它们没有因手工编辑而漂移。
 require_matching_values MYSQL_PASSWORD SPRING_DATASOURCE_PASSWORD

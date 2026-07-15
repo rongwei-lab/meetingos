@@ -207,6 +207,7 @@ import { useRouteMeeting } from "@/composables/useRouteMeeting";
 import { useMeetingStore, type TduckBindingDto, type TduckFieldMappingDto, type TduckFieldSyncItemDto, type TduckFormOptionDto } from "@/stores/meeting";
 import { attendeeFieldOptions, inferAttendeeField } from "@/utils/attendeeFields";
 import { formatDateTimeLabel } from "@/utils/meetingDisplay";
+import { closeTduckLaunchTab, navigateTduckLaunchTab, openTduckLaunchTab } from "@/utils/tduckNavigation";
 import type { SyncLog } from "@/utils/types";
 
 type BindingValidationStatus = "VALID" | "INVALID" | "UNKNOWN" | "";
@@ -656,14 +657,21 @@ function openRegistrationEntry() {
 }
 
 function handleCreateTduckFormSelect(key: string | number) {
-  void openTduckCreation(key === "ai" ? "ai" : "blank");
-}
-
-async function openTduckCreation(action: CreateTduckFormAction) {
   if (!currentMeeting.value) {
     message.warning("请先选择会议");
     return;
   }
+  const targetWindow = openTduckTargetWindow();
+  if (targetWindow) void openTduckCreation(key === "ai" ? "ai" : "blank", targetWindow);
+}
+
+async function openTduckCreation(action: CreateTduckFormAction, targetWindow: Window) {
+  if (!currentMeeting.value) {
+    message.warning("请先选择会议");
+    closeTduckLaunchTab(targetWindow);
+    return;
+  }
+  const meeting = currentMeeting.value;
   openingTduck.value = true;
   try {
     await ensureTduckBrowserSession();
@@ -673,10 +681,10 @@ async function openTduckCreation(action: CreateTduckFormAction) {
        * 部署侧 TDuck 前端会识别 aiCreate=1 并自动打开该抽屉；如果未来 TDuck 官方提供独立路由，
        * 这里只需要替换目标 URL，不影响 MeetingOS 绑定流程。
        */
-      window.location.href = `${tduckFrontBaseUrl.value}/project/my?aiCreate=1`;
+      navigateTduckTarget(targetWindow, `${tduckFrontBaseUrl.value}/project/my?aiCreate=1`);
       return;
     }
-    const form = await store.createTduckForm(currentMeeting.value.id, `${currentMeeting.value.name} 报名表`);
+    const form = await store.createTduckForm(meeting.id, `${meeting.name} 报名表`);
     formOptions.value = mergeFormOptions(formOptions.value, form);
     if (canEditBinding.value) {
       selectedFormKey.value = form.formKey;
@@ -687,8 +695,9 @@ async function openTduckCreation(action: CreateTduckFormAction) {
      * /project/form 是 TDuck 编辑器父路由，缺少 key 时会请求 formKey=undefined 并弹出
      * “must not be blank”。因此新建后必须用 TDuck 返回的 formKey 直达编辑器。
      */
-    window.location.href = `${tduckFrontBaseUrl.value}/project/form/editor?key=${encodeURIComponent(form.formKey)}`;
+    navigateTduckTarget(targetWindow, `${tduckFrontBaseUrl.value}/project/form/editor?key=${encodeURIComponent(form.formKey)}`);
   } catch (error) {
+    closeTduckLaunchTab(targetWindow);
     message.error(extractErrorMessage(error, "创建 TDuck 表单失败"));
   } finally {
     openingTduck.value = false;
@@ -700,22 +709,31 @@ async function openTduckEditor() {
     message.warning("请先选择或绑定 TDuck 表单");
     return;
   }
-  await openTduckAfterSession(tduckEditorUrl.value, openingTduckEditor);
+  const targetWindow = openTduckTargetWindow();
+  if (targetWindow) await openTduckAfterSession(tduckEditorUrl.value, openingTduckEditor, targetWindow);
 }
 
-async function openTduckAfterSession(targetUrl: string, loading: typeof openingTduck) {
+async function openTduckAfterSession(targetUrl: string, loading: typeof openingTduck, targetWindow: Window) {
   loading.value = true;
   try {
     await ensureTduckBrowserSession();
-    /*
-     * 先打开 about:blank 再异步改地址在部分浏览器/内置 WebView 中会打断原页面请求，
-     * 导致 TDuck 登录态还没写入就停在空白页。这里改为会话同步完成后当前页跳转，
-     * 保证 TDuck 首次加载时已经能读取 localStorage.token。
-     */
-    window.location.href = targetUrl;
+    navigateTduckTarget(targetWindow, targetUrl);
+  } catch {
+    closeTduckLaunchTab(targetWindow);
   } finally {
     loading.value = false;
   }
+}
+
+function openTduckTargetWindow() {
+  const targetWindow = openTduckLaunchTab();
+  if (!targetWindow) message.warning("浏览器阻止了新标签页，请允许本站打开新页面后重试");
+  return targetWindow;
+}
+
+function navigateTduckTarget(targetWindow: Window, targetUrl: string) {
+  if (navigateTduckLaunchTab(targetWindow, targetUrl)) return;
+  message.warning("新标签页已关闭，请重新操作");
 }
 
 async function ensureTduckBrowserSession() {

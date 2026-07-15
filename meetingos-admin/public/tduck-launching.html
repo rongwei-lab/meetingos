@@ -1,0 +1,18 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>正在打开 SORL 表单</title>
+    <style>
+      * { box-sizing: border-box; }
+      body { min-height: 100vh; margin: 0; display: grid; place-items: center; color: #263b32; background: #f5f8f6; font: 14px system-ui, sans-serif; }
+      main { display: flex; align-items: center; gap: 12px; }
+      span { width: 18px; height: 18px; border: 2px solid #b8d5c8; border-top-color: #08784f; border-radius: 50%; animation: spin .8s linear infinite; }
+      @keyframes spin { to { transform: rotate(360deg); } }
+    </style>
+  </head>
+  <body>
+    <main aria-live="polite"><span aria-hidden="true"></span><strong>正在打开 SORL 表单...</strong></main>
+  </body>
+</html>

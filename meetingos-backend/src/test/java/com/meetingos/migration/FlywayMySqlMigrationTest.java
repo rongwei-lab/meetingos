@@ -3,6 +3,9 @@ package com.meetingos.migration;
 import org.flywaydb.core.Flyway;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.condition.EnabledIfEnvironmentVariable;
+import org.springframework.jdbc.datasource.DriverManagerDataSource;
+import org.springframework.orm.jpa.LocalContainerEntityManagerFactoryBean;
+import org.springframework.orm.jpa.vendor.HibernateJpaVendorAdapter;
 
 import java.sql.Connection;
 import java.sql.DriverManager;
@@ -11,6 +14,7 @@ import java.sql.SQLException;
 import java.sql.Statement;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Map;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertTrue;
@@ -36,6 +40,7 @@ class FlywayMySqlMigrationTest {
 
         flyway.migrate();
         flyway.validate();
+        validateJpaMappings(url, username, password);
 
         try (Connection connection = DriverManager.getConnection(url, username, password);
              Statement statement = connection.createStatement();
@@ -53,10 +58,36 @@ class FlywayMySqlMigrationTest {
                 }
             }
 
-            assertEquals(List.of("1", "2", "3", "4", "5"), versions,
+            assertEquals(List.of("1", "2", "3", "4", "5", "6"), versions,
                 "CI 必须从 V1 完整迁移到仓库当前最新版本");
             assertEquals(PRODUCTION_V1_CHECKSUM, v1Checksum,
                 "V1 必须与生产库已经记录的 Flyway checksum 完全一致");
+        }
+    }
+
+    private void validateJpaMappings(String url, String username, String password) {
+        DriverManagerDataSource dataSource = new DriverManagerDataSource(url, username, password);
+        HibernateJpaVendorAdapter vendorAdapter = new HibernateJpaVendorAdapter();
+        vendorAdapter.setDatabasePlatform("org.hibernate.dialect.MySQLDialect");
+
+        LocalContainerEntityManagerFactoryBean entityManagerFactory =
+            new LocalContainerEntityManagerFactoryBean();
+        entityManagerFactory.setDataSource(dataSource);
+        entityManagerFactory.setPackagesToScan("com.meetingos");
+        entityManagerFactory.setJpaVendorAdapter(vendorAdapter);
+        entityManagerFactory.setJpaPropertyMap(Map.of(
+            "hibernate.hbm2ddl.auto", "validate",
+            "hibernate.implicit_naming_strategy",
+            "org.springframework.boot.orm.jpa.hibernate.SpringImplicitNamingStrategy",
+            "hibernate.physical_naming_strategy",
+            "org.hibernate.boot.model.naming.CamelCaseToUnderscoresNamingStrategy"
+        ));
+
+        try {
+            // Flyway 成功并不代表实体映射与真实 MySQL 类型一致，必须显式触发 Hibernate 校验。
+            entityManagerFactory.afterPropertiesSet();
+        } finally {
+            entityManagerFactory.destroy();
         }
     }
 

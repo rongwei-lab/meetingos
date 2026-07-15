@@ -14,6 +14,7 @@
 - 扫码签到、搜索签到、补签、重复签到
 - 统计、权限、操作日志
 - Docker Compose 和 Nginx 部署
+- 邀请函设计、发布、渠道分享、TDuck 报名归因和效果统计
 
 ## 测试环境
 
@@ -61,6 +62,67 @@ docker compose --env-file ../.env --profile tduck up -d
 - 使用错误 Token 推送，应返回未授权并记录安全日志。
 - 推送缺少手机号的数据，应进入失败同步日志。
 - 推送重复手机号，应按策略更新或标记重复待处理。
+
+### 邀请函与归因
+
+以下标记说明执行方式，不代表当前版本已经通过。自动化结果、浏览器截图/网络记录和真实 TDuck
+联调记录必须来自同一待发布版本；缺少前置环境导致的跳过不能作为准出证据。
+
+- `[自动化]` 前端执行 `cd meetingos-admin && npm test && npm run typecheck && npm run build`。重点确认
+  Fabric 文本自然高度变化后领域坐标不漂移、公开页 PV/CTA 重试复用客户端事件 UUID、渠道状态和
+  DOM 渲染回归均通过。Vitest 只能覆盖输入后的回写逻辑，不能替代真实中文输入法验收。
+- `[Playwright E2E]` 按 `meetingos-admin/e2e/README.md` 配置外部测试数据并执行
+  `npm run test:e2e`。移动公开页和桌面设计器分别按分享 token、会议/方案 ID 门控；真实 TDuck 测试
+  还必须显式设置 `E2E_TDUCK_ATTRIBUTION=true`，缺少环境变量造成的 skipped 不计为验收通过。
+- `[自动化]` 后端执行 `cd meetingos-backend && ./mvnw test`。重点确认事件 UUID 幂等及并发冲突、
+  访客 Cookie、访客 HMAC、归因 token 篡改/过期、Webhook 重放、补偿同步、更新/取消后的归因状态，
+  以及归因写入故障不改变已成功的报名同步结果。
+- `[MySQL 8.4 专项]` 在一次性空库上设置
+  `MEETINGOS_MYSQL_MIGRATION_TEST_URL`、`MEETINGOS_MYSQL_MIGRATION_TEST_USERNAME` 和
+  `MEETINGOS_MYSQL_MIGRATION_TEST_PASSWORD`，执行
+  `cd meetingos-backend && ./mvnw -Dtest=MigrationChecksumTest,FlywayMySqlMigrationTest test`。
+  必须同时看到 V1→V6 全部成功、`flyway validate` 成功、V1 Flyway checksum 与生产基线一致，且
+  SHA-256 清单无漂移；未设置 URL 时 `FlywayMySqlMigrationTest` 会跳过，不算通过。checksum 不一致时
+  必须阻断发布并核对生产迁移历史，禁止修改 V1 或使用 `flyway repair` 掩盖问题。
+- 创建两份邀请方案，分别保存 H5/海报草稿并同时发布，确认渠道链接互不混淆。
+- 使用过期修订号保存草稿应返回冲突，发布版本不受后续草稿修改影响。
+- 新建二维码默认报名用途，切换各查询用途后 DOM、Fabric 和 PNG 编码同一目标；自定义说明同步渲染，清空后隐藏。
+- 新建签到/查询按钮，逐项切换查询入口、综合、座位、住宿和晚宴目标；公开点击不得调用报名意图接口，海报保存应拒绝互动按钮。
+- 上传本会议图片成功；跨会议素材、伪造 MIME、超大图片和不安全媒体 URL 应失败。
+- `[人工/桌面 Chrome]` 在 375px H5 画布双击文本，使用系统中文 IME 输入
+  “中文内联编辑 · 会议邀请”，完成选词后退出编辑、保存并强制重载。文字不得丢失、重复或出现未完成
+  拼音；重载前后 `x/y/width/height` 误差均不超过 1 个逻辑像素、旋转误差不超过 0.1°。同时验证拖拽、
+  累计缩放、中心旋转、多选、撤销/重做和保存重载不改变最终几何数据。
+- `[人工/海报]` 发布方案并选择一个已启用且未过期的渠道，导出正式 PNG；用
+  `sips -g pixelWidth -g pixelHeight <海报文件>` 或等价工具确认恰好为 1080×1920，抽查非背景像素
+  确认画面非空。二维码
+  外框必须保持正方形，并使用独立扫码器、ZXing 或 `zbarimg` 解码；报名用途应进入带当前渠道
+  `mos_inv` 的报名中转，查询用途应进入带随机 `publicQueryToken` 的白名单公开路由。草稿样张还必须
+  带“预览”标识，不能冒充正式导出。
+- `[人工/移动浏览器]` 在 320、375、390px 视口和至少一台真机打开 `/i/{shareToken}`，验证正文可
+  纵向滚动、`document.documentElement.scrollWidth === window.innerWidth`、元素与固定报名按钮不遮挡，
+  倒计时、轮播、视频封面、手动音乐、地图降级和 CTA 可操作。页面不可见时不得发送 PV；恢复可见后
+  只记录一个逻辑 PV，瞬时失败重试仍复用同一事件 UUID。
+- PAGE_VIEW 仅在页面可见后发送；同一客户端事件 UUID 重试只记录一次。
+- `[人工/隐私]` 检查公开邀请接口响应的 `MOS_INV_VISITOR`：必须为随机值并带 `HttpOnly`、
+  `SameSite=Lax`、`Path=/`；生产 HTTPS 环境还必须带 `Secure`。查询 `invitation_events` 表结构和实际
+  事件，只允许保存 `visitor_hash`、粗粒度 `device_type` 和 `referrer_host`，不得出现原始 Cookie、IP
+  或完整 User-Agent；两次携带同一 Cookie 的请求应得到相同访客哈希。
+- `[真实 TDuck E2E]` 使用部署补丁构建的 TDuck 前端，先执行
+  `curl -fsS "$BASE_URL/tduck/meetingos-capabilities.json" | jq -e '.schemaVersion == 1 and .capabilities.meetingosAttributionExtValue == "v1"'`。
+  随后从已发布渠道的
+  `/i/{shareToken}` 点击报名，确认 `/r` 保留合法 `mos_at` fragment；TDuck 读取后清理地址栏、写入
+  当前表单对应的 `sessionStorage`，真实提交请求体中的 `extValue` 必须与该 token 完全一致。
+- `[真实 TDuck E2E]` 等待真实 Webhook 后按 TDuck `dataId` 查询参会人和归因明细，必须落到原方案、
+  版本和渠道；再执行补偿拉取，结果不得重复计数或改写首次来源。仅直接构造 Webhook/提交 API 不能
+  替代这项浏览器端 E2E。当前环境若未提供上述 capability JSON，本项保持未通过，后台应明确提示归因
+  不可用，但用户仍能完成 TDuck 报名。
+- 测试篡改、过期、跨会议和跨表单 token，报名仍成功但归因状态明确。
+- 重放新增和更新 Webhook 不重复计数、不改首次渠道；删除事件只把归因置为非活动。
+- `[故障注入]` 让归因/统计持久化抛错后重放一笔有效 TDuck 报名，Webhook 和参会人同步仍应成功并
+  可按 `dataId` 幂等重试；故障只影响归因状态并可观测，不能回滚或阻断正常报名。恢复后不得制造第二名
+  参会人或重复累计转化。
+- 核对 PV、UV、点击、独立点击访客、累计转化、当前有效转化和未归因口径。
 
 ### 参会人
 

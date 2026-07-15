@@ -162,6 +162,141 @@ function patchWritePageSupportText() {
   fs.writeFileSync(file, source);
 }
 
+function patchWritePageAttribution() {
+  const file = "src/views/form/write/index.vue";
+  let source = fs.readFileSync(file, "utf8");
+
+  if (!source.includes("meetingOsAttributionToken: ''")) {
+    const dataBefore =
+      "      formKey: '',\n" +
+      "      writePassword: '',\n";
+    const dataAfter =
+      "      formKey: '',\n" +
+      "      meetingOsAttributionToken: '',\n" +
+      "      writePassword: '',\n";
+
+    if (!source.includes(dataBefore)) {
+      throw new Error("TDuck write page attribution data shape changed");
+    }
+    source = source.replace(dataBefore, dataAfter);
+  }
+
+  if (!source.includes("    this.captureMeetingOsAttribution()\n")) {
+    const createdBefore =
+      "  async created() {\n" +
+      "    this.formKey = this.$route.query.key || this.$route.params.key\n";
+    const createdAfter =
+      "  async created() {\n" +
+      "    this.formKey = this.$route.query.key || this.$route.params.key\n" +
+      "    this.captureMeetingOsAttribution()\n";
+
+    if (!source.includes(createdBefore)) {
+      throw new Error("TDuck write page attribution created hook shape changed");
+    }
+    source = source.replace(createdBefore, createdAfter);
+  }
+
+  if (!source.includes("captureMeetingOsAttribution() {")) {
+    const methodsBefore = "  methods: {\n";
+    const attributionMethods = String.raw`  methods: {
+    captureMeetingOsAttribution() {
+      const storageKey = 'meetingos:attribution:' + this.formKey
+      const hashParams = new URLSearchParams(window.location.hash.replace(/^#/, ''))
+      if (hashParams.has('mos_at')) {
+        const token = hashParams.get('mos_at') || ''
+        /*
+         * 归因 token 只允许 URL-safe 字符且受 TDuck extValue(255) 长度约束。
+         * fragment 不会进入代理日志；读取后立即清理地址栏，并仅在当前标签页内暂存，
+         * 以便微信 OAuth 回跳或用户刷新页面后仍能完成同一次报名。
+         */
+        this.meetingOsAttributionToken = /^[A-Za-z0-9._~-]{1,255}$/.test(token) ? token : ''
+        try {
+          if (this.meetingOsAttributionToken) {
+            window.sessionStorage.setItem(storageKey, this.meetingOsAttributionToken)
+          } else {
+            window.sessionStorage.removeItem(storageKey)
+          }
+        } catch (error) {
+          // 浏览器禁用存储时仍可完成当前页面报名，不让归因能力影响主流程。
+        }
+        hashParams.delete('mos_at')
+        const remainingHash = hashParams.toString()
+        try {
+          window.history.replaceState(
+            window.history.state,
+            document.title,
+            window.location.pathname + window.location.search + (remainingHash ? '#' + remainingHash : '')
+          )
+        } catch (error) {
+          // 地址栏清理受限时仍继续报名；fragment 不会发送给服务器或进入代理日志。
+        }
+        return
+      }
+      try {
+        const storedToken = window.sessionStorage.getItem(storageKey) || ''
+        this.meetingOsAttributionToken = /^[A-Za-z0-9._~-]{1,255}$/.test(storedToken) ? storedToken : ''
+      } catch (error) {
+        this.meetingOsAttributionToken = ''
+      }
+    },
+    clearMeetingOsAttribution() {
+      try {
+        window.sessionStorage.removeItem('meetingos:attribution:' + this.formKey)
+      } catch (error) {
+        // 清理失败只会让 token 保留到标签页关闭，不影响提交结果。
+      }
+      this.meetingOsAttributionToken = ''
+    },
+`;
+
+    if (!source.includes(methodsBefore)) {
+      throw new Error("TDuck write page attribution methods shape changed");
+    }
+    source = source.replace(methodsBefore, attributionMethods);
+  }
+
+  if (!source.includes("      this.submitFormData.extValue = this.meetingOsAttributionToken || null\n")) {
+    const submitBefore = "      this.submitFormData.originalData = data.formModel\n";
+    const submitAfter =
+      "      this.submitFormData.originalData = data.formModel\n" +
+      "      this.submitFormData.extValue = this.meetingOsAttributionToken || null\n";
+
+    if (!source.includes(submitBefore)) {
+      throw new Error("TDuck write page attribution submit shape changed");
+    }
+    source = source.replace(submitBefore, submitAfter);
+  }
+
+  if (!source.includes("      this.clearMeetingOsAttribution()\n")) {
+    const successBefore = "      this.submitResult = data\n";
+    const successAfter =
+      "      this.submitResult = data\n" +
+      "      this.clearMeetingOsAttribution()\n";
+
+    if (!source.includes(successBefore)) {
+      throw new Error("TDuck write page attribution success shape changed");
+    }
+    source = source.replace(successBefore, successAfter);
+  }
+
+  fs.writeFileSync(file, source);
+}
+
+function assertWritePageAttributionPatch() {
+  const source = fs.readFileSync("src/views/form/write/index.vue", "utf8");
+  const requiredMarkers = [
+    "captureMeetingOsAttribution() {",
+    "window.sessionStorage.setItem(storageKey, this.meetingOsAttributionToken)",
+    "this.submitFormData.extValue = this.meetingOsAttributionToken || null",
+    "this.clearMeetingOsAttribution()"
+  ];
+  for (const marker of requiredMarkers) {
+    if (!source.includes(marker)) {
+      throw new Error("TDuck attribution patch self-check failed: " + marker);
+    }
+  }
+}
+
 function patchHomeFooterCopyright() {
   const file = "src/views/home/index.vue";
   let source = fs.readFileSync(file, "utf8");
@@ -781,6 +916,8 @@ function patchAppSystemNameTitle() {
 
 patchProjectMyAiCreate();
 patchWritePageSupportText();
+patchWritePageAttribution();
+assertWritePageAttributionPatch();
 patchHomeFooterCopyright();
 patchHomeSystemNameBranding();
 patchFormSystemNameBranding();

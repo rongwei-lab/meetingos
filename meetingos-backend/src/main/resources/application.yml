@@ -62,6 +62,10 @@ meetingos:
     captcha-enabled: ${PUBLIC_QUERY_CAPTCHA_ENABLED:false}
     captcha-ttl-seconds: ${PUBLIC_QUERY_CAPTCHA_TTL_SECONDS:300}
     trust-forward-headers: ${PUBLIC_QUERY_TRUST_FORWARD_HEADERS:false}
+  invitation:
+    tracking-secret: "${MEETINGOS_INVITATION_TRACKING_SECRET:change-this-invitation-tracking-secret-at-least-32-bytes}"
+    event-retention-days: ${MEETINGOS_INVITATION_EVENT_RETENTION_DAYS:180}
+    amap-key: "${MEETINGOS_INVITATION_AMAP_KEY:}"
   init-admin:
     username: "${MEETINGOS_INIT_ADMIN_USERNAME:admin}"
     password: "${MEETINGOS_INIT_ADMIN_PASSWORD:}"

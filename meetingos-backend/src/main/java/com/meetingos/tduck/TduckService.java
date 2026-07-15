@@ -9,11 +9,14 @@ import com.meetingos.common.BusinessException;
 import com.meetingos.common.ErrorCode;
 import com.meetingos.common.PageRequests;
 import com.meetingos.common.PageResponse;
+import com.meetingos.invitation.InvitationAttributionService;
 import com.meetingos.meeting.Meeting;
 import com.meetingos.meeting.MeetingRepository;
 import com.meetingos.meeting.MeetingStatus;
 import com.meetingos.publicapi.RegistrationInfo;
 import com.meetingos.settings.SystemSettingsService;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.data.domain.Sort;
 import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -40,6 +43,7 @@ import java.util.function.Supplier;
 @Service
 public class TduckService {
 
+    private static final Logger log = LoggerFactory.getLogger(TduckService.class);
     private static final String HMAC_ALGORITHM = "HmacSHA256";
     private static final String REBINDING_DISABLED_REASON = "当前会议已绑定 TDuck 表单，不能选择其他表单";
     private static final String TDUCK_CANCEL_REASON = "TDuck 报名删除或撤回";
@@ -58,6 +62,7 @@ public class TduckService {
     private final TduckWebhookParser webhookParser;
     private final TduckTransactionRunner transactionRunner;
     private final AttendeeCodeGenerator attendeeCodeGenerator;
+    private final InvitationAttributionService invitationAttributionService;
 
     public TduckService(MeetingRepository meetingRepository,
                         TduckFormBindingRepository bindingRepository,
@@ -69,7 +74,8 @@ public class TduckService {
                         TduckClient tduckClient,
                         TduckSyncLogService syncLogService,
                         TduckWebhookParser webhookParser,
-                        TduckTransactionRunner transactionRunner) {
+                        TduckTransactionRunner transactionRunner,
+                        InvitationAttributionService invitationAttributionService) {
         this(
                 meetingRepository,
                 bindingRepository,
@@ -82,7 +88,8 @@ public class TduckService {
                 syncLogService,
                 webhookParser,
                 transactionRunner,
-                new AttendeeCodeGenerator(attendeeRepository)
+                new AttendeeCodeGenerator(attendeeRepository),
+                invitationAttributionService
         );
     }
 
@@ -98,7 +105,8 @@ public class TduckService {
                         TduckSyncLogService syncLogService,
                         TduckWebhookParser webhookParser,
                         TduckTransactionRunner transactionRunner,
-                        AttendeeCodeGenerator attendeeCodeGenerator) {
+                        AttendeeCodeGenerator attendeeCodeGenerator,
+                        InvitationAttributionService invitationAttributionService) {
         this.meetingRepository = meetingRepository;
         this.bindingRepository = bindingRepository;
         this.mappingRepository = mappingRepository;
@@ -111,6 +119,7 @@ public class TduckService {
         this.webhookParser = webhookParser;
         this.transactionRunner = transactionRunner;
         this.attendeeCodeGenerator = attendeeCodeGenerator;
+        this.invitationAttributionService = invitationAttributionService;
     }
 
     @Transactional
@@ -483,11 +492,12 @@ public class TduckService {
 
     private TduckWebhookResult runVerifiedWebhook(TduckWebhookRequest request, String rawBody) {
         String eventId = normalizeEventId(request, rawBody);
-        return runIdempotentTransaction(
+        TduckWebhookResult result = runIdempotentTransaction(
                 eventId,
                 "重复 Webhook 已忽略",
                 () -> handleVerifiedWebhook(request, eventId)
         );
+        return applyInvitationAttribution(request, result);
     }
 
     private TduckWebhookResult handleVerifiedWebhook(TduckWebhookRequest request, String eventId) {
@@ -552,6 +562,7 @@ public class TduckService {
                 "PULL_SYNC",
                 binding.getFormKey(),
                 details.dataId(),
+                details.extValue(),
                 details.formData(),
                 Map.of("source", "pull-sync", "dataId", details.dataId(), "data", details.formData(), "raw", details.raw())
         );
@@ -582,6 +593,7 @@ public class TduckService {
                         "PULL_SYNC",
                         binding.getFormKey(),
                         details.dataId(),
+                        details.extValue(),
                         details.formData(),
                         Map.of("source", "batch-pull-sync", "dataId", details.dataId(), "data", details.formData(), "raw", details.raw())
                 );
@@ -769,11 +781,54 @@ public class TduckService {
 
     private TduckWebhookResult runTrustedSync(TduckWebhookRequest request, String source) {
         String eventId = normalizeEventId(request, source + ":" + request.formKey() + ":" + request.dataId());
-        return runIdempotentTransaction(
+        TduckWebhookResult result = runIdempotentTransaction(
                 eventId,
                 "重复补偿同步已忽略",
                 () -> syncTrusted(request, source)
         );
+        return applyInvitationAttribution(request, result);
+    }
+
+    private TduckWebhookResult applyInvitationAttribution(TduckWebhookRequest request, TduckWebhookResult result) {
+        if (result == null
+                || result.status() != SyncStatus.SUCCESS
+                || result.attendeeId() == null
+                || request == null
+                || !StringUtils.hasText(request.formKey())
+                || !StringUtils.hasText(request.dataId())) {
+            return result;
+        }
+
+        try {
+            Optional<Long> meetingId = bindingRepository.findMeetingIdByFormKey(request.formKey());
+            if (meetingId.isEmpty()) {
+                return result;
+            }
+            if (isCancellationEvent(request.eventType())) {
+                invitationAttributionService.markInactive(meetingId.get(), request.dataId());
+            } else {
+                invitationAttributionService.attributeFirstSubmission(
+                        meetingId.get(),
+                        result.attendeeId(),
+                        request.formKey(),
+                        request.dataId(),
+                        request.extValue()
+                );
+            }
+        } catch (RuntimeException ex) {
+            /*
+             * 渠道统计是报名后的附加能力。归因仓储、签名解析或历史脏数据异常都不能把
+             * 已成功提交的参会人回滚，也不能让 TDuck 把成功 Webhook 误判为失败后反复重试。
+             */
+            log.warn(
+                    "TDuck 报名已同步，但邀请函归因处理失败: formKey={}, dataId={}, eventType={}",
+                    request.formKey(),
+                    safeValue(request.dataId()),
+                    safeEventType(request.eventType()),
+                    ex
+            );
+        }
+        return result;
     }
 
     private TduckWebhookResult runIdempotentTransaction(String eventId,

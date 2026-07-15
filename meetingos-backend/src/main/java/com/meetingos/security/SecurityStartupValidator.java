@@ -1,5 +1,6 @@
 package com.meetingos.security;
 
+import com.meetingos.invitation.InvitationProperties;
 import org.springframework.boot.ApplicationArguments;
 import org.springframework.boot.ApplicationRunner;
 import org.springframework.context.annotation.Profile;
@@ -13,16 +14,25 @@ public class SecurityStartupValidator implements ApplicationRunner {
 
     private final SecurityProperties securityProperties;
     private final TduckProperties tduckProperties;
+    private final InvitationProperties invitationProperties;
 
-    public SecurityStartupValidator(SecurityProperties securityProperties, TduckProperties tduckProperties) {
+    public SecurityStartupValidator(SecurityProperties securityProperties,
+                                    TduckProperties tduckProperties,
+                                    InvitationProperties invitationProperties) {
         this.securityProperties = securityProperties;
         this.tduckProperties = tduckProperties;
+        this.invitationProperties = invitationProperties;
     }
 
     @Override
     public void run(ApplicationArguments args) {
         requireStrongSecret("JWT_SECRET", securityProperties.jwtSecret(), "change-this-secret-to-at-least-32-bytes-before-production");
         requireStrongSecret("TDUCK_WEBHOOK_TOKEN", tduckProperties.webhookSecret(), "change-this-webhook-secret");
+        requireStrongSecret(
+                "MEETINGOS_INVITATION_TRACKING_SECRET",
+                invitationProperties.trackingSecret(),
+                "change-this-invitation-tracking-secret-at-least-32-bytes"
+        );
     }
 
     private void requireStrongSecret(String name, String value, String defaultValue) {

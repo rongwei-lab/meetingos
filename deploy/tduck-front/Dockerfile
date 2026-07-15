@@ -22,9 +22,14 @@ RUN sed -i "s/publicPath: '\\/'/publicPath: '\\/tduck\\/'/" vue.config.js \
       'VUE_APP_SECURITY_JSCODE =' \
       'VUE_APP_WX = OFF' > .env.production \
     && node /tmp/patch-tduck-front.js \
+    && printf '%s\n' \
+      '{"schemaVersion":1,"capabilities":{"meetingosAttributionExtValue":"v1"}}' \
+      > public/meetingos-capabilities.json \
     && npm run build
 
 FROM nginx:1.27-alpine
+
+LABEL org.meetingos.tduck.capabilities="attribution-ext-value-v1"
 
 COPY --from=build /app/dist /usr/share/nginx/html
 

@@ -2,6 +2,7 @@ package com.meetingos.tduck;
 
 import com.meetingos.attendee.AttendeeRepository;
 import com.meetingos.common.BusinessException;
+import com.meetingos.invitation.InvitationAttributionService;
 import com.meetingos.meeting.Meeting;
 import com.meetingos.meeting.MeetingRepository;
 import com.meetingos.settings.SystemSettingsService;
@@ -53,6 +54,9 @@ class TduckServiceBindingGuardTest {
     @Mock
     private TduckTransactionRunner transactionRunner;
 
+    @Mock
+    private InvitationAttributionService invitationAttributionService;
+
     private TduckService tduckService;
     private Meeting meeting;
 
@@ -69,7 +73,8 @@ class TduckServiceBindingGuardTest {
                 tduckClient,
                 syncLogService,
                 webhookParser,
-                transactionRunner
+                transactionRunner,
+                invitationAttributionService
         );
         meeting = new Meeting();
         meeting.setId(1L);
