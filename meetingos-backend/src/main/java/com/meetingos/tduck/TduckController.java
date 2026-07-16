@@ -3,8 +3,12 @@ package com.meetingos.tduck;
 import com.meetingos.common.ApiResponse;
 import com.meetingos.common.PageResponse;
 import com.meetingos.operationlog.AuditLog;
+import com.meetingos.operationlog.OperationLogService;
+import jakarta.servlet.http.HttpServletRequest;
 import jakarta.servlet.http.HttpServletResponse;
 import jakarta.validation.Valid;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.http.HttpHeaders;
 import org.springframework.security.access.prepost.PreAuthorize;
 import org.springframework.web.bind.annotation.GetMapping;
@@ -18,15 +22,21 @@ import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
 
 import java.io.IOException;
+import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Map;
 
 @RestController
 public class TduckController {
 
-    private final TduckService tduckService;
+    private static final Logger log = LoggerFactory.getLogger(TduckController.class);
 
-    public TduckController(TduckService tduckService) {
+    private final TduckService tduckService;
+    private final OperationLogService operationLogService;
+
+    public TduckController(TduckService tduckService, OperationLogService operationLogService) {
         this.tduckService = tduckService;
+        this.operationLogService = operationLogService;
     }
 
     @PostMapping({"/api/tduck/bindings", "/api/admin/tduck/bindings"})
@@ -136,8 +146,18 @@ public class TduckController {
     public ApiResponse<TduckWebhookResult> webhook(@RequestHeader(name = "X-TDuck-Signature", required = false) String signature,
                                                    @RequestHeader(name = "X-MeetingOS-Webhook-Token", required = false) String headerToken,
                                                    @RequestParam(name = "token", required = false) String queryToken,
-                                                   @RequestBody String rawBody) {
-        return ApiResponse.ok(tduckService.handleWebhook(rawBody, signature, firstNonBlank(headerToken, queryToken)));
+                                                   @RequestBody String rawBody,
+                                                   HttpServletRequest request) {
+        TduckWebhookResult result;
+        try {
+            result = tduckService.handleWebhook(rawBody, signature, firstNonBlank(headerToken, queryToken));
+        } catch (VerifiedWebhookParseException ex) {
+            // 只有服务层在验签成功后才会抛出该异常，因此可以安全记录固定失败摘要。
+            recordWebhookFailure(request, ex.getSyncLogId(), "TDUCK_WEBHOOK_PARSE_FAILED");
+            throw ex;
+        }
+        recordWebhookSync(request, result);
+        return ApiResponse.ok(result);
     }
 
     @GetMapping("/r/{meetingCode}")
@@ -151,5 +171,59 @@ public class TduckController {
             return first;
         }
         return second;
+    }
+
+    private void recordWebhookSync(HttpServletRequest request, TduckWebhookResult result) {
+        if (result.status() == SyncStatus.DUPLICATE_IGNORED) {
+            // TDuck 可能重试同一事件；重复请求不产生状态变更，也不应放大操作日志。
+            return;
+        }
+        try {
+            /*
+             * Webhook 的原始体、签名和 query token 都可能包含凭据或报名信息。
+             * 不能使用 @AuditLog 直接汇总方法参数，只记录已验签同步结果中的安全标识。
+             * 未通过验签的请求会在 TduckService 拒绝，此处不额外记日志，避免被公网探测刷量。
+             */
+            boolean success = result.status() == SyncStatus.SUCCESS;
+            Map<String, Object> details = new LinkedHashMap<>();
+            details.put("syncLogId", result.syncLogId());
+            details.put("attendeeId", result.attendeeId());
+            details.put("status", result.status().name());
+            if (!success) {
+                details.put("errorCode", "TDUCK_SYNC_FAILED");
+            }
+            recordWebhookAudit(request, result.syncLogId(), success,
+                    success ? "TDuck Webhook 同步成功" : "TDuck Webhook 同步失败", details);
+        } catch (RuntimeException ex) {
+            // Webhook 同步已经完成，操作日志异常不能影响 TDuck 的应答与重试语义。
+            log.warn("TDuck webhook audit log recording failed", ex);
+        }
+    }
+
+    private void recordWebhookFailure(HttpServletRequest request, Long syncLogId, String errorCode) {
+        try {
+            Map<String, Object> details = new LinkedHashMap<>();
+            details.put("syncLogId", syncLogId);
+            details.put("attendeeId", null);
+            details.put("status", SyncStatus.FAILED.name());
+            details.put("errorCode", errorCode);
+            recordWebhookAudit(request, syncLogId, false, "TDuck Webhook 同步失败", details);
+        } catch (RuntimeException ex) {
+            // 解析失败已经有 TDuck 同步日志，补充审计失败也不能改变原有 400 应答。
+            log.warn("TDuck webhook parse audit log recording failed", ex);
+        }
+    }
+
+    private void recordWebhookAudit(HttpServletRequest request, Long syncLogId, boolean success,
+                                    String message, Map<String, Object> details) {
+        operationLogService.record(
+                "TDUCK_WEBHOOK_SYNC",
+                "TDUCK_SYNC",
+                syncLogId == null ? null : syncLogId.toString(),
+                success,
+                message,
+                request,
+                details
+        );
     }
 }

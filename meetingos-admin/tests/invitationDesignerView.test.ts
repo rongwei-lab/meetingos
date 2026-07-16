@@ -148,6 +148,27 @@ vi.mock("@/components/invitation/InvitationDomRenderer.vue", () => ({
   default: { name: "InvitationDomRendererStub", setup: () => () => h("div", { class: "dom-renderer-stub" }) }
 }));
 
+vi.mock("@/components/invitation/InvitationMapPicker.vue", () => ({
+  default: {
+    name: "InvitationMapPickerStub",
+    props: ["show", "address", "longitude", "latitude"],
+    emits: ["update:show", "confirm"],
+    setup: (props: { show: boolean }, { emit }: { emit: (event: string, value: unknown) => void }) => () => props.show
+      ? h("div", { class: "map-picker-stub" }, [
+          h("button", {
+            type: "button",
+            onClick: () => emit("confirm", {
+              address: "上海国际会议中心",
+              longitude: 121.500123,
+              latitude: 31.200456,
+              navigationUrl: "https://uri.amap.com/marker?position=121.500123,31.200456&name=%E4%B8%8A%E6%B5%B7%E5%9B%BD%E9%99%85%E4%BC%9A%E8%AE%AE%E4%B8%AD%E5%BF%83&coordinate=gaode&callnative=0"
+            })
+          }, "确认 mock 选点")
+        ])
+      : null
+  }
+}));
+
 let app: App<Element> | null = null;
 let root: HTMLDivElement | null = null;
 
@@ -162,6 +183,7 @@ beforeEach(() => {
   state.syncMeetingFromRoute.mockReset().mockResolvedValue({ id: 1 });
   Object.values(state.messages).forEach((mock) => mock.mockReset());
   Object.values(state.api).forEach((mock) => mock.mockReset());
+  vi.stubEnv("VITE_AMAP_KEY", "");
   state.api.getInvitation.mockImplementation((_meetingId: string, invitationId: string) => Promise.resolve(detail(Number(invitationId), `方案 ${invitationId}`)));
   state.api.listInvitationAssets.mockResolvedValue([]);
   state.api.listInvitationShareLinks.mockResolvedValue([]);
@@ -177,6 +199,7 @@ afterEach(() => {
   root?.remove();
   app = null;
   root = null;
+  vi.unstubAllEnvs();
 });
 
 describe("邀请函设计器路由与异步状态", () => {
@@ -373,6 +396,71 @@ describe("邀请函设计器路由与异步状态", () => {
     expect(paletteLabels).not.toContain("签到按钮");
     expect(paletteLabels).not.toContain("查询按钮");
   });
+
+  it("图层按钮使用可区分图标，并提供操作提示", async () => {
+    await mountView();
+    clickButton("文本");
+    await nextTick();
+
+    const moveUp = root?.querySelector(".layer-action-button--up-one");
+    const moveDown = root?.querySelector(".layer-action-button--down-one");
+    const bringToTop = root?.querySelector(".layer-action-button--to-top");
+    const sendToBottom = root?.querySelector(".layer-action-button--to-bottom");
+
+    expect(moveUp).not.toBeNull();
+    expect(moveDown).not.toBeNull();
+    expect(bringToTop).not.toBeNull();
+    expect(sendToBottom).not.toBeNull();
+    expect(bringToTop?.querySelector(".layer-boundary-icon.to-top")).not.toBeNull();
+    expect(sendToBottom?.querySelector(".layer-boundary-icon.to-bottom")).not.toBeNull();
+  });
+
+  it("地图属性主流程使用地图选点，坐标只在高级信息中展示", async () => {
+    vi.stubEnv("VITE_AMAP_KEY", "test-key");
+    await mountView();
+
+    clickButton("地图");
+    await vi.waitFor(() => expect(root?.querySelector(".map-picker-stub")).not.toBeNull());
+
+    expect(root?.textContent).toContain("地图选点");
+    expect(root?.textContent).toContain("已选位置");
+    expect(root?.textContent).toContain("高级信息");
+    expect(findInput("经度").readOnly).toBe(true);
+    expect(findInput("纬度").readOnly).toBe(true);
+  });
+
+  it("缺少高德密钥时禁用地图选点并提示发布限制", async () => {
+    await mountView();
+
+    clickButton("地图");
+    await nextTick();
+    await new Promise((resolve) => window.setTimeout(resolve, 0));
+
+    expect(findButton("地图选点", root).disabled).toBe(true);
+    expect(root?.textContent).toContain("当前构建未配置高德地图密钥");
+    expect(state.messages.warning).toHaveBeenCalledWith("当前环境未配置高德地图密钥，暂不能使用地图选点");
+  });
+
+  it("确认地图选点后保存新的地址、坐标和导航链接", async () => {
+    vi.stubEnv("VITE_AMAP_KEY", "test-key");
+    await mountView();
+
+    clickButton("地图");
+    await vi.waitFor(() => expect(root?.querySelector(".map-picker-stub")).not.toBeNull());
+    clickButton("确认 mock 选点");
+    await nextTick();
+    clickButton("保存草稿");
+    await vi.waitFor(() => expect(state.api.saveInvitationDraft).toHaveBeenCalled());
+
+    const savedDocument = state.api.saveInvitationDraft.mock.calls.at(-1)?.[2].document as InvitationDesignDocumentV1;
+    const map = savedDocument.h5.elements.find((item) => item.type === "AMAP");
+    expect(map?.props).toMatchObject({
+      address: "上海国际会议中心",
+      longitude: 121.500123,
+      latitude: 31.200456,
+      navigationUrl: "https://uri.amap.com/marker?position=121.500123,31.200456&name=%E4%B8%8A%E6%B5%B7%E5%9B%BD%E9%99%85%E4%BC%9A%E8%AE%AE%E4%B8%AD%E5%BF%83&coordinate=gaode&callnative=0"
+    });
+  });
 });
 
 async function mountView() {
@@ -386,6 +474,7 @@ async function mountView() {
   app.component("NFormItem", { setup: (_props, { slots }) => () => h("div", slots.default?.()) });
   app.component("NSpace", { setup: (_props, { slots }) => () => h("div", slots.default?.()) });
   app.component("NAlert", { setup: (_props, { slots }) => () => h("div", slots.default?.()) });
+  app.component("NTooltip", { setup: (_props, { slots }) => () => slots.trigger?.() });
   app.component("NInput", {
     inheritAttrs: false,
     props: ["value", "type", "readonly", "maxlength", "placeholder"],

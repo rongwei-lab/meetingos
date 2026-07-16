@@ -2,6 +2,7 @@ package com.meetingos.tduck;
 
 import com.meetingos.attendee.Attendee;
 import com.meetingos.attendee.AttendeeRepository;
+import com.meetingos.common.BusinessException;
 import com.meetingos.invitation.InvitationAttributionService;
 import com.meetingos.meeting.Meeting;
 import com.meetingos.meeting.MeetingRepository;
@@ -91,6 +92,21 @@ class TduckWebhookSecurityTest {
 
         verify(webhookParser, never()).parse(anyString());
         verify(syncLogService).failed(null, null, "Webhook 签名校验失败");
+    }
+
+    @Test
+    void verifiedUnparseablePayloadUsesDedicatedFailureWithoutExposingThePayload() {
+        when(settingsService.webhookToken()).thenReturn("expected-secret");
+        TduckSyncLog failedLog = new TduckSyncLog();
+        failedLog.setId(8L);
+        when(syncLogService.failed(isNull(), isNull(), anyString())).thenReturn(failedLog);
+        when(webhookParser.parse("{not-json")).thenThrow(BusinessException.badRequest("Webhook 请求体不是有效的 JSON 对象"));
+
+        assertThatThrownBy(() -> tduckService.handleWebhook("{not-json", null, "expected-secret"))
+                .isInstanceOf(VerifiedWebhookParseException.class)
+                .hasMessage("Webhook 请求体解析失败");
+
+        verify(syncLogService).failed(null, null, "Webhook 请求体解析失败");
     }
 
     @Test

@@ -131,12 +131,27 @@
             <label v-if="supportsText(selectedElement)">内容<n-input :value="textValue(selectedElement)" type="textarea" :autosize="{ minRows: 2, maxRows: 5 }" @update:value="updateText" /></label>
             <label v-if="selectedElement.type === 'MEETING_FIELD'">会议字段<n-select :value="String(selectedElement.props.field || 'NAME')" :options="meetingFieldOptions" @update:value="updateMeetingField" /></label>
             <label v-if="selectedElement.type === 'BACKGROUND_MUSIC' || selectedElement.type === 'VIDEO'">HTTPS 直链<n-input :value="String(selectedElement.props.url || '')" placeholder="https://" @update:value="updateUrl" /></label>
-            <label v-if="selectedElement.type === 'AMAP'">地址<n-input :value="String(selectedElement.props.address || '')" @update:value="updateProp('address', $event)" /></label>
-            <div v-if="selectedElement.type === 'AMAP'" class="two-column-inputs">
-              <label>经度<n-input-number :value="Number(selectedElement.props.longitude || 0)" :min="-180" :max="180" @update:value="updateProp('longitude', $event || 0)" /></label>
-              <label>纬度<n-input-number :value="Number(selectedElement.props.latitude || 0)" :min="-90" :max="90" @update:value="updateProp('latitude', $event || 0)" /></label>
-            </div>
-            <n-alert v-if="selectedElement.type === 'AMAP' && !amapConfigured" type="warning" :bordered="false">当前构建未配置高德地图密钥，保存草稿不受影响，但发布会被阻止。</n-alert>
+            <template v-if="selectedElement.type === 'AMAP'">
+              <label>地址<n-input :value="String(selectedElement.props.address || '')" @update:value="updateProp('address', $event)" /></label>
+              <div class="map-pick-card">
+                <div>
+                  <span>已选位置</span>
+                  <strong>{{ mapSelectionSummary(selectedElement) }}</strong>
+                </div>
+                <n-button secondary size="small" :disabled="!amapConfigured" @click="openMapPicker(selectedElement)">
+                  <template #icon><n-icon :component="MapOutline" /></template>
+                  地图选点
+                </n-button>
+              </div>
+              <n-alert v-if="!amapConfigured" type="warning" :bordered="false">当前构建未配置高德地图密钥，地图元素可保存草稿但不能发布。</n-alert>
+              <details class="map-advanced-details">
+                <summary>高级信息</summary>
+                <div class="two-column-inputs">
+                  <label>经度<n-input :value="formatMapCoordinate(selectedElement.props.longitude, 0)" :readonly="true" /></label>
+                  <label>纬度<n-input :value="formatMapCoordinate(selectedElement.props.latitude, 0)" :readonly="true" /></label>
+                </div>
+              </details>
+            </template>
             <label v-if="selectedElement.type === 'QUERY_BUTTON'">查询功能<n-select :value="normalizeInvitationQueryTarget(selectedElement.props.queryTarget)" :options="INVITATION_QUERY_TARGET_OPTIONS" @update:value="updateQueryTarget" /></label>
             <n-alert v-if="selectedActionWarning" type="warning" :bordered="false">{{ selectedActionWarning }}</n-alert>
             <template v-if="selectedElement.type === 'CHANNEL_QR_CODE'">
@@ -195,10 +210,10 @@
             <div class="inspector-section layer-actions">
               <p>层级与操作</p>
               <n-button-group>
-                <n-button size="small" aria-label="上移一层" @click="moveLayer(selectedElement, 1)"><template #icon><n-icon :component="ArrowUpOutline" /></template></n-button>
-                <n-button size="small" aria-label="下移一层" @click="moveLayer(selectedElement, -1)"><template #icon><n-icon :component="ArrowDownOutline" /></template></n-button>
-                <n-button size="small" aria-label="置顶" @click="moveLayer(selectedElement, 999)"><template #icon><n-icon :component="ArrowUpOutline" /></template></n-button>
-                <n-button size="small" aria-label="置底" @click="moveLayer(selectedElement, -999)"><template #icon><n-icon :component="ArrowDownOutline" /></template></n-button>
+                <n-tooltip><template #trigger><n-button class="layer-action-button layer-action-button--up-one" size="small" aria-label="上移一层" @click="moveLayer(selectedElement, 1)"><template #icon><n-icon :component="ChevronUpOutline" /></template></n-button></template>上移一层</n-tooltip>
+                <n-tooltip><template #trigger><n-button class="layer-action-button layer-action-button--down-one" size="small" aria-label="下移一层" @click="moveLayer(selectedElement, -1)"><template #icon><n-icon :component="ChevronDownOutline" /></template></n-button></template>下移一层</n-tooltip>
+                <n-tooltip><template #trigger><n-button class="layer-action-button layer-action-button--to-top" size="small" aria-label="置顶" @click="moveLayer(selectedElement, 999)"><template #icon><span class="layer-boundary-icon to-top"><n-icon :component="ArrowUpOutline" /></span></template></n-button></template>置顶</n-tooltip>
+                <n-tooltip><template #trigger><n-button class="layer-action-button layer-action-button--to-bottom" size="small" aria-label="置底" @click="moveLayer(selectedElement, -999)"><template #icon><span class="layer-boundary-icon to-bottom"><n-icon :component="ArrowDownOutline" /></span></template></n-button></template>置底</n-tooltip>
               </n-button-group>
               <div class="action-row"><n-button size="small" secondary @click="duplicateElement(selectedElement)"><template #icon><n-icon :component="CopyOutline" /></template>复制</n-button><n-button size="small" secondary @click="toggleLock(selectedElement)"><template #icon><n-icon :component="selectedElement.locked ? LockOpenOutline : LockClosedOutline" /></template>{{ selectedElement.locked ? "解锁" : "锁定" }}</n-button><n-button size="small" type="error" secondary @click="deleteElement(selectedElement.id)"><template #icon><n-icon :component="TrashOutline" /></template>删除</n-button></div>
             </div>
@@ -247,6 +262,14 @@
       </div>
       <template #footer><n-space justify="end"><n-button @click="showExport = false">取消</n-button><n-button type="primary" :disabled="!exportCanvasReady || !exportLinkId" @click="downloadExportPoster">导出 1080×1920 PNG</n-button></n-space></template>
     </n-modal>
+
+    <InvitationMapPicker
+      v-model:show="showMapPicker"
+      :address="mapPickerAddress"
+      :longitude="mapPickerLongitude"
+      :latitude="mapPickerLatitude"
+      @confirm="applyMapSelection"
+    />
   </div>
 </template>
 
@@ -264,6 +287,7 @@ import {
   ArrowUpOutline,
   BrushOutline,
   ChevronDownOutline,
+  ChevronUpOutline,
   CheckmarkCircleOutline,
   CloudUploadOutline,
   CodeSlashOutline,
@@ -305,6 +329,7 @@ import {
 } from "naive-ui";
 import InvitationFabricCanvas from "@/components/invitation/InvitationFabricCanvas.vue";
 import InvitationDomRenderer from "@/components/invitation/InvitationDomRenderer.vue";
+import InvitationMapPicker from "@/components/invitation/InvitationMapPicker.vue";
 import {
   changeInvitationStatus,
   getInvitation,
@@ -330,6 +355,7 @@ import type {
   InvitationShareLink
 } from "@/types/invitation";
 import { cloneInvitationDocument, createElementId, validateInvitationDocument } from "@/utils/invitationDocument";
+import { createAmapNavigationUrl } from "@/utils/amapNavigation";
 import { INVITATION_SHAPE_OPTIONS, normalizeInvitationShape, type InvitationShapeKind } from "@/utils/invitationShape";
 import { isInvitationShareLinkAvailable } from "@/utils/invitationShareLink";
 import {
@@ -375,6 +401,8 @@ const selectedId = ref("");
 const zoomByMode = reactive<Record<CanvasMode, number>>({ h5: 0.82, poster: 0.34 });
 const showPreview = ref(route.query.preview === "1");
 const showExport = ref(false);
+const showMapPicker = ref(false);
+const mapPickerElementId = ref("");
 const exportLinkId = ref<number | null>(null);
 const exportDocument = ref<InvitationDesignDocumentV1 | null>(null);
 const exportMeetingSnapshot = ref<Partial<InvitationMeetingSnapshot>>({});
@@ -400,6 +428,10 @@ const readOnlyMode = computed(() => isMobile.value || route.query.preview === "1
 const activeCanvas = computed<InvitationCanvasV1>(() => document.value![canvasMode.value]);
 const zoom = computed(() => zoomByMode[canvasMode.value]);
 const selectedElement = computed(() => activeCanvas.value.elements.find((item) => item.id === selectedId.value) || null);
+const mapPickerElement = computed(() => activeCanvas.value.elements.find((item) => item.id === mapPickerElementId.value && item.type === "AMAP") || null);
+const mapPickerAddress = computed(() => String(mapPickerElement.value?.props.address || "会议地点"));
+const mapPickerLongitude = computed(() => numericMapCoordinate(mapPickerElement.value?.props.longitude, 121.49));
+const mapPickerLatitude = computed(() => numericMapCoordinate(mapPickerElement.value?.props.latitude, 31.24));
 const reversedElements = computed(() => [...activeCanvas.value.elements].sort((a, b) => b.zIndex - a.zIndex));
 const invitationPublicationState = computed(() => invitation.value ? [{ id: invitation.value.id, status: invitation.value.status }] : []);
 const firstEnabledShareLink = computed(() => shareLinks.value.find((item) => isInvitationShareLinkAvailable(item, invitationPublicationState.value)));
@@ -691,6 +723,9 @@ function addElement(type: InvitationElementType) {
   const maxZ = Math.max(0, ...activeCanvas.value.elements.map((item) => item.zIndex));
   const position = nextElementPosition();
   const asset = assets.value[0];
+  const defaultMapAddress = meetingSnapshot.value.venueName || meetingSnapshot.value.location || "会议地点";
+  const defaultMapLongitude = 121.49;
+  const defaultMapLatitude = 31.24;
   const definitions: Record<InvitationElementType, Pick<InvitationElementV1, "width" | "height" | "props">> = {
     TEXT: { width: 260, height: 54, props: { text: "双击编辑文字", fontSize: canvasMode.value === "poster" ? 48 : 24, fontWeight: 600, color: "#17261f", textAlign: "left", lineHeight: 1.25 } },
     IMAGE: { width: canvasMode.value === "poster" ? 720 : 300, height: canvasMode.value === "poster" ? 440 : 180, props: { assetId: asset?.id || 0, objectFit: "cover", borderRadius: 4, alt: asset?.originalName || "会议图片" } },
@@ -705,7 +740,7 @@ function addElement(type: InvitationElementType) {
     BACKGROUND_MUSIC: { width: 145, height: 42, props: { url: "https://example.com/meeting-music.mp3", title: "大会背景音乐" } },
     VIDEO: { width: 335, height: 200, props: { url: "https://example.com/meeting-video.mp4", coverAssetId: asset?.id || 0, controls: true } },
     CAROUSEL: { width: 335, height: 210, props: { assetIds: asset ? [asset.id] : [], intervalMs: 4000, autoplay: true, objectFit: "cover" } },
-    AMAP: { width: 335, height: 220, props: { longitude: 121.49, latitude: 31.24, address: meetingSnapshot.value.venueName || meetingSnapshot.value.location || "会议地点", zoom: 15, navigationUrl: "https://uri.amap.com/marker?position=121.49,31.24" } }
+    AMAP: { width: 335, height: 220, props: { longitude: defaultMapLongitude, latitude: defaultMapLatitude, address: defaultMapAddress, zoom: 15, navigationUrl: createAmapNavigationUrl(defaultMapLongitude, defaultMapLatitude, defaultMapAddress) } }
   };
   const definition = definitions[type];
   const width = Math.min(definition.width, activeCanvas.value.width);
@@ -714,6 +749,9 @@ function addElement(type: InvitationElementType) {
   activeCanvas.value.elements.push(next);
   selectedId.value = next.id;
   rightTab.value = "design";
+  if (type === "AMAP") {
+    window.setTimeout(() => openMapPicker(next), 0);
+  }
 }
 
 function addAssetImage(asset: InvitationAsset) {
@@ -772,6 +810,26 @@ function updateMeetingField(value: string) { updateProp("field", value); }
 function updateUrl(value: string) { updateProp("url", value); }
 function updateCarouselAssets(value: number[]) { if (selectedElement.value) selectedElement.value.props.assetIds = value.slice(0, 10); }
 function updateProp(key: string, value: unknown) { if (selectedElement.value && ["string", "number", "boolean"].includes(typeof value)) selectedElement.value.props[key] = value as string | number | boolean; }
+function openMapPicker(element: InvitationElementV1 | null = selectedElement.value) {
+  if (!element || element.type !== "AMAP") return;
+  if (!amapConfigured.value) {
+    message.warning("当前环境未配置高德地图密钥，暂不能使用地图选点");
+    return;
+  }
+  mapPickerElementId.value = element.id;
+  showMapPicker.value = true;
+}
+function applyMapSelection(selection: { address: string; longitude: number; latitude: number; navigationUrl: string }) {
+  const element = mapPickerElement.value;
+  if (!element) return;
+  element.props.address = selection.address;
+  element.props.longitude = selection.longitude;
+  element.props.latitude = selection.latitude;
+  element.props.navigationUrl = selection.navigationUrl;
+  if (!Number.isFinite(Number(element.props.zoom))) element.props.zoom = 15;
+  selectedId.value = element.id;
+  showMapPicker.value = false;
+}
 function updateShapeKind(value: InvitationShapeKind) {
   if (!selectedElement.value || selectedElement.value.type !== "SHAPE") return;
   const shape = normalizeInvitationShape(value);
@@ -905,6 +963,16 @@ function supportsText(element: InvitationElementV1) { return element.type === "T
 function supportsTypography(element: InvitationElementV1) { return ["TEXT", "MEETING_FIELD", "REGISTRATION_BUTTON", "CHECKIN_BUTTON", "QUERY_BUTTON", "COUNTDOWN"].includes(element.type); }
 function textValue(element: InvitationElementV1) { return String(element.props.text || ""); }
 function normalizeColor(value: string) { return /^#[0-9a-f]{6}$/i.test(value) ? value : value.slice(0, 7); }
+function mapSelectionSummary(element: InvitationElementV1) {
+  return `${String(element.props.address || "会议地点")} · ${formatMapCoordinate(element.props.longitude, 0)}, ${formatMapCoordinate(element.props.latitude, 0)}`;
+}
+function formatMapCoordinate(value: unknown, fallback: number) {
+  return String(numericMapCoordinate(value, fallback));
+}
+function numericMapCoordinate(value: unknown, fallback: number) {
+  const numeric = Number(value);
+  return Number.isFinite(numeric) ? Math.round(numeric * 1_000_000) / 1_000_000 : fallback;
+}
 function cloneElement(element: InvitationElementV1) { return JSON.parse(JSON.stringify(element)) as InvitationElementV1; }
 function nextElementPosition() { const offset = activeCanvas.value.elements.length % 8 * 12; return { x: canvasMode.value === "poster" ? 120 + offset : 20 + offset, y: canvasMode.value === "poster" ? 120 + offset : 40 + offset }; }
 function downloadDataUrl(url: string, filename: string) { const anchor = globalThis.document.createElement("a"); anchor.href = url; anchor.download = filename; anchor.click(); }
@@ -984,9 +1052,20 @@ function elementLabel(element: InvitationElementV1) {
 .text-align-control { width: 100%; display: flex; }
 .text-align-control :deep(.n-radio-button) { min-width: 0; flex: 1; }
 .text-align-control :deep(.n-radio-button__content) { width: 100%; text-align: center; }
+.map-pick-card { padding: 10px; border: 1px solid #dce8e2; border-radius: 6px; display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: center; gap: 8px; background: #f7faf8; }
+.map-pick-card div { min-width: 0; display: grid; gap: 2px; }
+.map-pick-card span { color: #718279; font-size: 10px; }
+.map-pick-card strong { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: #173b2d; font-size: 12px; }
+.map-advanced-details { border-top: 1px solid #e8efec; padding-top: 10px; color: #52665c; font-size: 11px; }
+.map-advanced-details summary { cursor: pointer; color: #344b40; font-weight: 700; }
+.map-advanced-details .two-column-inputs { margin-top: 9px; }
 .inspector-section { padding-top: 12px; display: grid; gap: 9px; border-top: 1px solid #e8efec; }
 .inspector-section p { margin: 0; color: #344b40; font-size: 12px; font-weight: 700; }
 .two-column-inputs { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+.layer-boundary-icon { width: 18px; height: 18px; position: relative; display: grid; place-items: center; }
+.layer-boundary-icon::before { width: 14px; height: 2px; position: absolute; left: 2px; border-radius: 1px; content: ""; background: currentColor; }
+.layer-boundary-icon.to-top::before { top: 0; }
+.layer-boundary-icon.to-bottom::before { bottom: 0; }
 .action-row { display: flex; gap: 6px; flex-wrap: wrap; }
 .channel-mini-row { padding: 9px 0; display: grid; grid-template-columns: 8px minmax(0, 1fr) 28px; align-items: center; gap: 8px; border-bottom: 1px solid #e8efec; }
 .channel-mini-row > span { width: 7px; height: 7px; border-radius: 50%; background: #a6b2ac; }

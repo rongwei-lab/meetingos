@@ -32,7 +32,11 @@ public class TduckWebhookParser {
             throw BusinessException.badRequest("Webhook 请求体不能为空");
         }
         try {
-            return toWebhookRequest(objectMapper.readValue(rawBody, MAP_TYPE));
+            Map<String, Object> payload = objectMapper.readValue(rawBody, MAP_TYPE);
+            if (payload == null) {
+                throw BusinessException.badRequest("Webhook 请求体不是有效的 JSON 对象");
+            }
+            return toWebhookRequest(payload);
         } catch (JsonProcessingException ex) {
             throw BusinessException.badRequest("Webhook 请求体不是有效的 JSON 对象");
         }

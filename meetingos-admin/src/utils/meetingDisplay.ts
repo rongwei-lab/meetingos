@@ -18,10 +18,41 @@ const seatTypeLabels: Record<SeatType, string> = {
 };
 
 const operationActionLabels: Record<string, string> = {
+  AUTH_LOGIN: "登录",
+  AUTH_LOGOUT: "退出登录",
+  USER_CREATE: "新建用户",
+  USER_UPDATE: "更新用户",
+  USER_RESET_PASSWORD: "重置用户密码",
+  MEETING_PERMISSION_GRANT: "授予会议权限",
+  MEETING_PERMISSION_DELETE: "移除会议权限",
+  MEETING_CREATE: "创建会议",
+  MEETING_UPDATE: "更新会议",
+  MEETING_QUERY_SETTINGS_UPDATE: "更新查询设置",
+  MEETING_PRINT_SETTINGS_UPDATE: "更新打印设置",
+  MEETING_STATUS_CHANGE: "修改会议状态",
+  MEETING_PUBLISH: "发布会议",
+  MEETING_RESTART: "重新开放会议",
+  MEETING_CLOSE_REGISTRATION: "关闭报名",
+  MEETING_READY: "会议就绪",
+  MEETING_START: "开始会议",
+  MEETING_END: "结束会议",
+  MEETING_ARCHIVE: "归档会议",
+  MEETING_DELETE_ARCHIVE: "删除归档会议",
+  NOTIFICATION_CREATE: "创建通知",
+  ATTENDEE_CREATE: "新增参会人",
+  ATTENDEE_UPDATE: "更新参会人",
   ATTENDEE_REVIEW: "审核报名",
+  ATTENDEE_BATCH_REVIEW: "批量审核报名",
+  ATTENDEE_TAGS_UPDATE: "更新参会人标签",
+  // 兼容早期版本误用的动作码，已有历史日志仍应展示中文名称。
+  ATTENDEE_UPDATE_TAGS: "更新参会人标签",
+  ATTENDEE_REMARK_UPDATE: "更新参会人备注",
+  ATTENDEE_CANCEL: "取消参会人",
   ATTENDEE_IMPORT: "导入参会人",
   ATTENDEE_EXPORT: "导出参会人",
-  ATTENDEE_UPDATE_TAGS: "更新标签",
+  CHECKIN: "签到",
+  CHECKIN_SUPPLEMENT: "补签",
+  PUBLIC_SELF_CHECKIN: "自助签到",
   SEATING_CREATE_LAYOUT: "生成座位图",
   SEATING_DELETE_AREA: "删除座位区域",
   SEATING_AUTO_ASSIGN: "自动排座",
@@ -35,29 +66,96 @@ const operationActionLabels: Record<string, string> = {
   ROOM_UPDATE: "更新房间",
   ROOM_ASSIGN: "分配房间",
   ROOM_CLEAR: "解除房间分配",
+  ROOM_ASSIGNMENT_CLEAR: "解除房间分配",
   ROOM_ASSIGNMENT_CHANGE: "房间分配变更",
-  CHECKIN: "签到",
-  CHECKIN_SUPPLEMENT: "补签",
+  ROOM_IMPORT: "导入房间",
+  ROOM_ASSIGNMENT_IMPORT: "导入房间分配",
+  ROOM_EXPORT: "导出房间",
+  DINNER_SETTINGS_UPDATE: "更新晚宴设置",
+  DINNER_TABLE_CREATE: "新增晚宴桌",
+  DINNER_TABLE_UPDATE: "更新晚宴桌",
+  DINNER_TABLE_DELETE: "删除晚宴桌",
+  DINNER_ASSIGN: "分配晚宴桌",
+  DINNER_ASSIGNMENT_CLEAR: "解除晚宴桌分配",
+  DINNER_ASSIGNMENT_CHANGE: "晚宴桌分配变更",
+  DINNER_ASSIGNMENT_IMPORT: "导入晚宴桌分配",
+  DINNER_EXPORT: "导出晚宴安排",
   TDUCK_BIND_FORM: "绑定 TDuck 表单",
   TDUCK_REBIND_FORM: "更换 TDuck 表单",
-  TDUCK_SYNC_FIELDS: "同步字段",
+  TDUCK_CREATE_FORM: "创建 TDuck 表单",
+  TDUCK_UPDATE_FIELD_MAPPING: "更新 TDuck 字段映射",
+  TDUCK_SYNC_FIELD_MAPPING: "同步 TDuck 字段映射",
+  TDUCK_SYNC_FIELDS: "同步 TDuck 字段",
+  TDUCK_MANUAL_SYNC: "手动同步 TDuck 报名",
+  TDUCK_PULL_SYNC: "拉取同步 TDuck 报名",
+  TDUCK_BATCH_PULL_SYNC: "批量拉取 TDuck 报名",
   TDUCK_REGISTRATION_TOGGLE: "启停报名入口",
+  TDUCK_WEBHOOK_SYNC: "TDuck Webhook 同步",
+  INVITATION_CREATE: "创建邀请函",
+  INVITATION_COPY: "复制邀请函",
+  INVITATION_DRAFT_SAVE: "保存邀请函草稿",
+  INVITATION_PUBLISH: "发布邀请函",
+  INVITATION_UNPUBLISH: "下线邀请函",
+  INVITATION_ARCHIVE: "归档邀请函",
+  INVITATION_SHARE_LINK_CREATE: "创建邀请函渠道链接",
+  INVITATION_SHARE_LINK_UPDATE: "更新邀请函渠道链接",
+  INVITATION_ASSET_UPLOAD: "上传邀请函素材",
+  IMPORT_TASK_CREATE: "创建导入任务",
+  IMPORT_TASK_COMMIT: "提交导入任务",
+  IMPORT_FAILURE_DOWNLOAD: "下载导入失败记录",
   EXPORT_CREATE: "创建导出任务",
-  MEETING_CREATE: "创建会议",
-  MEETING_UPDATE: "更新会议",
-  MEETING_STATUS_CHANGE: "修改会议状态"
+  EXPORT_DOWNLOAD: "下载导出文件",
+  SYSTEM_SETTINGS_UPDATE: "更新系统设置"
 };
 
 const operationTargetLabels: Record<string, string> = {
+  APP_USER: "用户",
+  AUTH_SESSION: "登录会话",
+  MEETING_USER_PERMISSION: "会议用户权限",
+  MEETING: "会议",
+  NOTIFICATION: "通知",
   ATTENDEE: "参会人",
+  CHECKIN: "签到记录",
   SEAT: "座位",
   SEAT_LAYOUT: "座位布局",
   SEAT_ASSIGNMENT: "座位分配",
   ROOM: "房间",
-  CHECKIN: "签到记录",
+  DINNER: "晚宴安排",
+  DINNER_TABLE: "晚宴桌",
   TDUCK_FORM: "TDuck 表单",
+  TDUCK_MAPPING: "TDuck 字段映射",
+  TDUCK_DATA: "TDuck 报名数据",
+  TDUCK_SYNC: "TDuck 同步",
+  MEETING_INVITATION: "邀请函",
+  INVITATION_SHARE_LINK: "邀请函渠道链接",
+  INVITATION_ASSET: "邀请函素材",
+  IMPORT_TASK: "导入任务",
   EXPORT_TASK: "导出任务",
-  MEETING: "会议"
+  SYSTEM_SETTINGS: "系统设置"
+};
+
+export const operationLogCategories = [
+  "ACCOUNT_PERMISSION",
+  "MEETING_CONFIGURATION",
+  "ATTENDEE_CHECKIN",
+  "VENUE_SEATING",
+  "REGISTRATION_TDUCK",
+  "INVITATION",
+  "IMPORT_EXPORT",
+  "SYSTEM"
+] as const;
+
+export type OperationLogCategory = typeof operationLogCategories[number];
+
+const operationLogCategoryLabels: Record<OperationLogCategory, string> = {
+  ACCOUNT_PERMISSION: "账户与权限",
+  MEETING_CONFIGURATION: "会议与配置",
+  ATTENDEE_CHECKIN: "参会人与签到",
+  VENUE_SEATING: "场地与排座",
+  REGISTRATION_TDUCK: "报名与 TDuck",
+  INVITATION: "邀请函",
+  IMPORT_EXPORT: "导入导出",
+  SYSTEM: "系统"
 };
 
 export function meetingTimeLabel(startTime?: string | null) {
@@ -148,6 +246,13 @@ export function seatTypeLabel(value?: string | null) {
 export function operationActionLabel(value?: string | null) {
   const text = value?.trim();
   return text && operationActionLabels[text] ? operationActionLabels[text] : text || "-";
+}
+
+export function operationLogCategoryLabel(value?: string | null) {
+  const text = value?.trim();
+  return text && text in operationLogCategoryLabels
+    ? operationLogCategoryLabels[text as OperationLogCategory]
+    : text || operationLogCategoryLabels.SYSTEM;
 }
 
 export function operationTargetLabel(targetType?: string | null, targetId?: string | null) {

@@ -288,6 +288,8 @@ TDuck 同步日志。
 | `remark` | varchar(500) | 备注 |
 | `created_at` | datetime | 创建时间 |
 
+操作日志按 `created_at` 保留 90 天。后端按部署时区每天执行一次物理清理；早于当前时间 90 天的记录会被删除，恢复仅能依赖数据库备份。
+
 ## 邀请函与渠道归因
 
 ### meeting_invitations 与 meeting_invitation_versions

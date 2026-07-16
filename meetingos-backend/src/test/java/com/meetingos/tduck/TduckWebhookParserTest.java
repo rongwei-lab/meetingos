@@ -1,9 +1,11 @@
 package com.meetingos.tduck;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.meetingos.common.BusinessException;
 import org.junit.jupiter.api.Test;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 class TduckWebhookParserTest {
 
@@ -54,5 +56,12 @@ class TduckWebhookParserTest {
                 .containsEntry("name", "测试参会人")
                 .containsEntry("phone", "13800000001")
                 .doesNotContainKey("extValue");
+    }
+
+    @Test
+    void rejectsJsonNullAsInvalidWebhookObject() {
+        assertThatThrownBy(() -> parser.parse("null"))
+                .isInstanceOf(BusinessException.class)
+                .hasMessage("Webhook 请求体不是有效的 JSON 对象");
     }
 }

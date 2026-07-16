@@ -6,6 +6,7 @@ import com.meetingos.security.PublicQueryProperties;
 import com.meetingos.security.SecurityProperties;
 import com.meetingos.security.TduckProperties;
 import com.meetingos.invitation.InvitationProperties;
+import com.meetingos.operationlog.OperationLogRetentionProperties;
 import org.springframework.boot.context.properties.EnableConfigurationProperties;
 import org.springframework.context.annotation.Configuration;
 
@@ -16,6 +17,7 @@ import org.springframework.context.annotation.Configuration;
         PublicQueryProperties.class,
         AppProperties.class,
         InvitationProperties.class,
+        OperationLogRetentionProperties.class,
         InitialAdminProperties.class
 })
 public class PropertiesConfig {

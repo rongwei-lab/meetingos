@@ -473,8 +473,8 @@ public class TduckService {
             request = webhookParser.parse(rawBody);
         } catch (BusinessException ex) {
             // 已通过鉴权但解析失败时只记录固定摘要，不保存无法确认结构与敏感字段范围的原始数据。
-            failedLog(null, null, "Webhook 请求体解析失败");
-            throw ex;
+            TduckSyncLog log = failedLog(null, null, "Webhook 请求体解析失败");
+            throw new VerifiedWebhookParseException(log.getId());
         }
         return runVerifiedWebhook(request, rawBody);
     }

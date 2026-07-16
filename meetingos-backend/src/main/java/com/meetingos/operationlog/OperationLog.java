@@ -6,6 +6,7 @@ import jakarta.persistence.Column;
 import jakarta.persistence.Convert;
 import jakarta.persistence.Entity;
 import jakarta.persistence.Table;
+import jakarta.persistence.Transient;
 
 import java.util.LinkedHashMap;
 import java.util.Map;
@@ -101,5 +102,13 @@ public class OperationLog extends BaseEntity {
 
     public void setDetails(Map<String, Object> details) {
         this.details = details;
+    }
+
+    /**
+     * 分类是对既有 action 的实时解释，不写入 operation_logs，历史日志也无需回填。
+     */
+    @Transient
+    public OperationLogCategory getCategory() {
+        return OperationLogCategory.fromAction(action);
     }
 }

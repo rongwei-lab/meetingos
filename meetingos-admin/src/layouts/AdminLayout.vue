@@ -110,13 +110,12 @@
           <n-tooltip v-if="showHomeButton" trigger="hover">
             <template #trigger>
               <n-button
-                tag="a"
-                href="/tduck/home"
-                target="_blank"
-                rel="noopener noreferrer"
                 secondary
                 size="small"
                 class="form-home-button"
+                :loading="openingTduckHome"
+                :disabled="openingTduckHome"
+                @click="openTduckHome"
               >
                 <template #icon>
                   <n-icon :component="DocumentTextOutline" />
@@ -247,7 +246,7 @@
 import type { Component } from "vue";
 import { computed, h, nextTick, onMounted, ref, watch } from "vue";
 import { useRoute, useRouter, type RouteRecordName } from "vue-router";
-import { NIcon, type DropdownOption } from "naive-ui";
+import { NIcon, useMessage, type DropdownOption } from "naive-ui";
 import {
   BarChartOutline,
   BedOutline,
@@ -270,14 +269,22 @@ import {
   SettingsOutline
 } from "@vicons/ionicons5";
 import ThemeSwitcher from "@/components/ThemeSwitcher.vue";
+import { extractErrorMessage } from "@/api/http";
 import { useIsMobile } from "@/composables/useResponsive";
 import { useAuthStore } from "@/stores/auth";
 import { useMeetingStore } from "@/stores/meeting";
+import {
+  closeTduckLaunchTab,
+  navigateTduckLaunchTab,
+  openTduckLaunchTab,
+  persistTduckBrowserSession
+} from "@/utils/tduckNavigation";
 
 const route = useRoute();
 const router = useRouter();
 const auth = useAuthStore();
 const meetingStore = useMeetingStore();
+const message = useMessage();
 const collapsed = ref(false);
 const mobileNavVisible = ref(false);
 const expandedNavKeys = ref(new Set<string>());
@@ -285,6 +292,7 @@ const searchFocused = ref(false);
 const searchKeyword = ref("");
 const pageBodyRef = ref<HTMLElement>();
 const pendingNavTarget = ref("");
+const openingTduckHome = ref(false);
 let queuedNavigation: (() => void) | undefined;
 let navUnlockTimer: number | undefined;
 const NAV_UNLOCK_DELAY_MS = 500;
@@ -632,6 +640,35 @@ function navigateNav(item: NavLocationItem) {
 
 function goHome() {
   pushNavTarget("/meetings", () => router.push({ name: "meetings" }));
+}
+
+async function openTduckHome() {
+  const meetingId = meetingStore.currentMeetingId;
+  if (!meetingId) {
+    message.warning("请先进入一个可管理的会议，再打开 SORL 表单");
+    return;
+  }
+
+  // 必须在用户点击的同步阶段打开标签页，否则等待接口返回后会被浏览器当作弹窗拦截。
+  const targetWindow = openTduckLaunchTab();
+  if (!targetWindow) {
+    message.warning("浏览器阻止了新标签页，请允许本站打开新页面后重试");
+    return;
+  }
+
+  openingTduckHome.value = true;
+  try {
+    const session = await meetingStore.loadTduckBrowserSession(meetingId);
+    persistTduckBrowserSession(session);
+    if (!navigateTduckLaunchTab(targetWindow, "/tduck/home")) {
+      message.warning("新标签页已关闭，请重新操作");
+    }
+  } catch (error) {
+    closeTduckLaunchTab(targetWindow);
+    message.error(extractErrorMessage(error, "同步 TDuck 登录态失败，请检查 TDuck 管理员账号配置"));
+  } finally {
+    openingTduckHome.value = false;
+  }
 }
 
 function goSettings() {

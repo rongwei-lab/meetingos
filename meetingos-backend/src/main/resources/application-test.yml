@@ -36,3 +36,5 @@ meetingos:
     tracking-secret: "test-invitation-tracking-secret-at-least-32-bytes"
     event-retention-days: 180
     amap-key: "test-amap-key"
+  operation-log:
+    retention-days: 90

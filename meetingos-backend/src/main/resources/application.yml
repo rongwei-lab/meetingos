@@ -66,6 +66,9 @@ meetingos:
     tracking-secret: "${MEETINGOS_INVITATION_TRACKING_SECRET:change-this-invitation-tracking-secret-at-least-32-bytes}"
     event-retention-days: ${MEETINGOS_INVITATION_EVENT_RETENTION_DAYS:180}
     amap-key: "${MEETINGOS_INVITATION_AMAP_KEY:}"
+  operation-log:
+    retention-days: ${MEETINGOS_OPERATION_LOG_RETENTION_DAYS:90}
+    cleanup-cron: "${MEETINGOS_OPERATION_LOG_CLEANUP_CRON:0 45 3 * * *}"
   init-admin:
     username: "${MEETINGOS_INIT_ADMIN_USERNAME:admin}"
     password: "${MEETINGOS_INIT_ADMIN_PASSWORD:}"

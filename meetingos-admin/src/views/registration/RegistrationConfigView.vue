@@ -207,7 +207,7 @@ import { useRouteMeeting } from "@/composables/useRouteMeeting";
 import { useMeetingStore, type TduckBindingDto, type TduckFieldMappingDto, type TduckFieldSyncItemDto, type TduckFormOptionDto } from "@/stores/meeting";
 import { attendeeFieldOptions, inferAttendeeField } from "@/utils/attendeeFields";
 import { formatDateTimeLabel } from "@/utils/meetingDisplay";
-import { closeTduckLaunchTab, navigateTduckLaunchTab, openTduckLaunchTab } from "@/utils/tduckNavigation";
+import { closeTduckLaunchTab, navigateTduckLaunchTab, openTduckLaunchTab, persistTduckBrowserSession } from "@/utils/tduckNavigation";
 import type { SyncLog } from "@/utils/types";
 
 type BindingValidationStatus = "VALID" | "INVALID" | "UNKNOWN" | "";
@@ -743,16 +743,12 @@ async function ensureTduckBrowserSession() {
   }
   try {
     const session = await store.loadTduckBrowserSession(currentMeeting.value.id);
-    if (!session.token) {
-      throw new Error("TDuck 未返回登录 token");
-    }
     /*
      * TDuck 前端和 MeetingOS 通过 /tduck/ 部署在同一 origin 下，因此 localStorage 共享。
      * 这里写入 TDuck 原生登录成功后的两个 key，避免用户从 MeetingOS 跳转过去时又被
      * TDuck 路由守卫拦到登录页。不要把 TDuck 管理员密码放到前端，只写服务端换取到的 token。
      */
-    localStorage.setItem("token", session.token);
-    localStorage.setItem("userInfo", JSON.stringify({ ...session.userInfo, token: session.token }));
+    persistTduckBrowserSession(session);
   } catch (error) {
     message.error(extractErrorMessage(error, "同步 TDuck 登录态失败，请检查 TDuck 管理员账号配置"));
     throw error;

@@ -9,7 +9,7 @@
 
 <script setup lang="ts">
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch, type CSSProperties } from "vue";
-import type { Canvas, FabricObject } from "fabric";
+import type { Canvas, FabricObject, Textbox } from "fabric";
 import type { InvitationAsset, InvitationCanvasV1, InvitationElementV1, InvitationMeetingSnapshot } from "@/types/invitation";
 import { DEFAULT_MEETING_IMAGE, resolveAssetUrl, resolveMeetingField } from "@/utils/invitationDocument";
 import { invitationShapePoints, invitationShapeRadius, isInvitationPolygonShape, normalizeInvitationShape } from "@/utils/invitationShape";
@@ -28,6 +28,12 @@ type IdentifiedFabricObject = FabricObject & {
   invitationBaseWidth?: number;
   invitationBaseElementWidth?: number;
   invitationBaseElementHeight?: number;
+};
+type InvitationTextbox = Textbox & IdentifiedFabricObject;
+type ExternalRefreshVersion = {
+  assets: number;
+  meeting: number;
+  qr: number;
 };
 
 const MULTI_SELECTION_ID = "__multiple__";
@@ -61,9 +67,20 @@ const stage = ref<HTMLElement>();
 const loading = ref(true);
 let fabricModule: FabricModule | undefined;
 let fabricCanvas: Canvas | undefined;
-let syncing = false;
-let skipNextCanvasRebuild = false;
-let rebuildSerial = 0;
+let suppressSelectionEvents = false;
+let canvasIsInitializing = false;
+let disposed = false;
+let syncRevision = 0;
+let syncPending = false;
+let syncRunning = false;
+let assetRefreshRevision = 0;
+let meetingRefreshRevision = 0;
+let qrRefreshRevision = 0;
+let processedAssetRefreshRevision = 0;
+let processedMeetingRefreshRevision = 0;
+let processedQrRefreshRevision = 0;
+let renderedCanvasSnapshot: InvitationCanvasV1 | undefined;
+const localFabricChanges = new Map<string, InvitationElementV1>();
 
 const viewportStyle = computed<CSSProperties>(() => ({
   width: `${props.canvas.width * props.zoom}px`,
@@ -79,30 +96,46 @@ const assetUrls = computed(() => new Map(props.assets.map((asset) => [asset.id, 
 watch(
   () => props.canvas,
   () => {
-    // Fabric 已经呈现了本次拖拽或文字编辑；跳过父组件回写引发的整画布重建，避免打断中文输入法和连续拖拽。
-    if (skipNextCanvasRebuild) {
-      skipNextCanvasRebuild = false;
-      return;
-    }
-    void rebuildCanvas();
+    const next = snapshotCanvas(props.canvas);
+    // Fabric 内部拖拽或文字编辑已经把受限后的结果直接写回对象；仅在没有混入其他变更时跳过重复应用。
+    if (canSkipLocalFabricSync(next)) renderedCanvasSnapshot = next;
+    scheduleCanvasSync();
   },
   { deep: true }
 );
 
-watch(() => props.assets, () => void rebuildCanvas(), { deep: true });
-watch(() => props.meeting, () => void rebuildCanvas(), { deep: true });
-watch(() => props.shareUrl, () => void rebuildCanvas());
-watch(() => props.shareToken, () => void rebuildCanvas());
-watch(() => props.publicQueryToken, () => void rebuildCanvas());
+watch(() => props.assets, () => {
+  assetRefreshRevision += 1;
+  scheduleCanvasSync();
+}, { deep: true });
+watch(() => props.meeting, () => {
+  meetingRefreshRevision += 1;
+  scheduleCanvasSync();
+}, { deep: true });
+watch(() => props.shareUrl, () => {
+  qrRefreshRevision += 1;
+  scheduleCanvasSync();
+});
+watch(() => props.shareToken, () => {
+  qrRefreshRevision += 1;
+  scheduleCanvasSync();
+});
+watch(() => props.publicQueryToken, () => {
+  qrRefreshRevision += 1;
+  scheduleCanvasSync();
+});
 
 watch(() => props.selectedId, (id) => {
-  if (!fabricCanvas || syncing) return;
+  if (!fabricCanvas) return;
   const object = fabricCanvas.getObjects().find((item) => (item as IdentifiedFabricObject).invitationElementId === id);
-  if (object) {
-    fabricCanvas.setActiveObject(object);
-    fabricCanvas.requestRenderAll();
-  } else if (!id) {
-    fabricCanvas.discardActiveObject();
+  withSelectionEventsSuppressed(() => {
+    if (object) {
+      fabricCanvas?.setActiveObject(object);
+    } else if (!id) {
+      fabricCanvas?.discardActiveObject();
+    }
+  });
+  if (object || !id) {
     fabricCanvas.requestRenderAll();
   }
 });
@@ -120,12 +153,17 @@ onMounted(async () => {
     selectionBorderColor: "#08784f"
   });
   bindCanvasEvents();
-  await rebuildCanvas();
+  canvasIsInitializing = true;
+  const initialized = await rebuildCanvas(syncRevision);
+  canvasIsInitializing = false;
+  if (!initialized) syncPending = true;
+  if (syncPending) await flushCanvasSyncQueue();
   loading.value = false;
 });
 
 onBeforeUnmount(() => {
-  rebuildSerial += 1;
+  disposed = true;
+  syncRevision += 1;
   fabricCanvas?.dispose();
   fabricCanvas = undefined;
 });
@@ -136,52 +174,423 @@ defineExpose({
   discardSelection
 });
 
-async function rebuildCanvas() {
-  if (!fabricCanvas || !fabricModule) return;
-  const serial = ++rebuildSerial;
-  syncing = true;
-  fabricCanvas.clear();
-  fabricCanvas.setDimensions({ width: props.canvas.width, height: props.canvas.height });
-  fabricCanvas.backgroundColor = props.canvas.backgroundColor;
-  fabricCanvas.backgroundImage = undefined;
-  let backgroundImage: FabricObject | undefined;
-  if (props.canvas.backgroundImageAssetId) {
-    const backgroundUrl = assetUrls.value.get(props.canvas.backgroundImageAssetId);
-    if (backgroundUrl) {
-      try {
-        const background = await fabricModule.FabricImage.fromURL(backgroundUrl, { crossOrigin: "anonymous" });
-        const coverScale = Math.max(props.canvas.width / Math.max(1, background.width), props.canvas.height / Math.max(1, background.height));
-        background.set({
-          left: (props.canvas.width - background.width * coverScale) / 2,
-          top: (props.canvas.height - background.height * coverScale) / 2,
-          originX: "left",
-          originY: "top",
-          scaleX: coverScale,
-          scaleY: coverScale,
-          selectable: false,
-          evented: false
-        });
-        backgroundImage = background;
-      } catch {
-        // 素材跨域或加载失败时仍保留背景色，避免设计器整体不可用。
+/**
+ * 所有来源（属性面板、素材、会议字段、二维码）的变化都进入同一队列。
+ * Fabric 图像和二维码创建是异步的，分开并发执行会让一个刷新取消另一个刷新，留下半张画布。
+ */
+function scheduleCanvasSync() {
+  if (disposed) return;
+  syncRevision += 1;
+  syncPending = true;
+  if (!canvasIsInitializing) void flushCanvasSyncQueue();
+}
+
+async function flushCanvasSyncQueue() {
+  if (syncRunning || canvasIsInitializing || !fabricCanvas || !fabricModule || disposed) return;
+  syncRunning = true;
+  try {
+    while (syncPending && fabricCanvas && fabricModule && !disposed) {
+      syncPending = false;
+      const revision = syncRevision;
+      const externalRefresh = captureExternalRefreshVersion();
+      const synchronized = await syncCanvas(revision, externalRefresh);
+      if (!isSyncCurrent(revision)) {
+        // 当前异步任务使用的是旧快照，下一轮只处理最新状态。
+        syncPending = true;
+        continue;
       }
+      if (synchronized) markExternalRefreshProcessed(externalRefresh);
     }
+  } finally {
+    syncRunning = false;
+    if (syncPending && !canvasIsInitializing && !disposed) void flushCanvasSyncQueue();
   }
-  const objects = await Promise.all([...props.canvas.elements].sort((a, b) => a.zIndex - b.zIndex).map(createFabricObject));
-  if (serial !== rebuildSerial || !fabricCanvas) return;
+}
+
+function captureExternalRefreshVersion(): ExternalRefreshVersion {
+  return {
+    assets: assetRefreshRevision,
+    meeting: meetingRefreshRevision,
+    qr: qrRefreshRevision
+  };
+}
+
+function hasAssetRefresh(refresh: ExternalRefreshVersion) {
+  return refresh.assets > processedAssetRefreshRevision;
+}
+
+function hasMeetingRefresh(refresh: ExternalRefreshVersion) {
+  return refresh.meeting > processedMeetingRefreshRevision;
+}
+
+function hasQrRefresh(refresh: ExternalRefreshVersion) {
+  return refresh.qr > processedQrRefreshRevision;
+}
+
+function markExternalRefreshProcessed(refresh: ExternalRefreshVersion) {
+  processedAssetRefreshRevision = Math.max(processedAssetRefreshRevision, refresh.assets);
+  processedMeetingRefreshRevision = Math.max(processedMeetingRefreshRevision, refresh.meeting);
+  processedQrRefreshRevision = Math.max(processedQrRefreshRevision, refresh.qr);
+}
+
+function isSyncCurrent(revision: number) {
+  return !disposed && revision === syncRevision;
+}
+
+function withSelectionEventsSuppressed(callback: () => void) {
+  suppressSelectionEvents = true;
+  try {
+    callback();
+  } finally {
+    suppressSelectionEvents = false;
+  }
+}
+
+function canSkipLocalFabricSync(next: InvitationCanvasV1) {
+  if (!renderedCanvasSnapshot || !localFabricChanges.size) return false;
+  const previous = renderedCanvasSnapshot;
+  const sameCanvas = previous.width === next.width
+    && previous.height === next.height
+    && previous.backgroundColor === next.backgroundColor
+    && previous.backgroundImageAssetId === next.backgroundImageAssetId
+    && previous.elements.length === next.elements.length;
+  if (!sameCanvas) {
+    localFabricChanges.clear();
+    return false;
+  }
+  const nextById = new Map(next.elements.map((element) => [element.id, element]));
+  const changedIds: string[] = [];
+  for (const element of previous.elements) {
+    const changed = nextById.get(element.id);
+    if (!changed) {
+      localFabricChanges.clear();
+      return false;
+    }
+    if (!sameElement(element, changed)) changedIds.push(element.id);
+  }
+  if (!changedIds.length) {
+    localFabricChanges.clear();
+    return false;
+  }
+  const isOnlyFabricChange = changedIds.every((id) => {
+    const expected = localFabricChanges.get(id);
+    const actual = nextById.get(id);
+    return Boolean(expected && actual && sameElement(expected, actual));
+  });
+  if (!isOnlyFabricChange) {
+    localFabricChanges.clear();
+    return false;
+  }
+  changedIds.forEach((id) => localFabricChanges.delete(id));
+  return true;
+}
+
+async function rebuildCanvas(revision: number): Promise<boolean> {
+  if (!fabricCanvas || !fabricModule || !isSyncCurrent(revision)) return false;
+  const document = snapshotCanvas(props.canvas);
+  // 仅用于首屏初始化。后续属性面板修改走 syncCanvas，不能先 clear()，否则会造成整张预览闪烁。
+  withSelectionEventsSuppressed(() => fabricCanvas?.clear());
+  fabricCanvas.setDimensions({ width: document.width, height: document.height });
+  fabricCanvas.backgroundColor = document.backgroundColor;
+  fabricCanvas.backgroundImage = undefined;
+  const backgroundImage = await createBackgroundImage(document);
+  const objects = await Promise.all([...document.elements].sort((a, b) => a.zIndex - b.zIndex).map(createFabricObject));
+  if (!isSyncCurrent(revision) || !fabricCanvas) return false;
   fabricCanvas.backgroundImage = backgroundImage;
   objects.filter((item): item is FabricObject => Boolean(item)).forEach((object) => fabricCanvas?.add(object));
   const selected = objects.find((item) => item && (item as IdentifiedFabricObject).invitationElementId === props.selectedId);
-  if (selected) fabricCanvas.setActiveObject(selected);
+  if (selected) withSelectionEventsSuppressed(() => fabricCanvas?.setActiveObject(selected));
+  renderedCanvasSnapshot = document;
   fabricCanvas.requestRenderAll();
-  syncing = false;
   emit("ready");
+  return true;
+}
+
+/**
+ * 属性面板会连续写入领域文档。这里按元素增量同步，避免任意一个数字或颜色变化都清空并异步重建整张 Fabric 画布。
+ */
+async function syncCanvas(revision: number, externalRefresh: ExternalRefreshVersion): Promise<boolean> {
+  if (!fabricCanvas || !fabricModule || !isSyncCurrent(revision)) return false;
+  if (!renderedCanvasSnapshot) {
+    return rebuildCanvas(revision);
+  }
+  const previous = renderedCanvasSnapshot;
+  const next = snapshotCanvas(props.canvas);
+  const dimensionsChanged = previous.width !== next.width || previous.height !== next.height;
+  if (dimensionsChanged) fabricCanvas.setDimensions({ width: next.width, height: next.height });
+  if (previous.backgroundColor !== next.backgroundColor) fabricCanvas.backgroundColor = next.backgroundColor;
+  if (dimensionsChanged || previous.backgroundImageAssetId !== next.backgroundImageAssetId) {
+    if (!await updateBackgroundImage(revision, next)) return false;
+  }
+  if (!await reconcileFabricObjects(previous.elements, next.elements, revision)) return false;
+  const refreshAssets = hasAssetRefresh(externalRefresh);
+  const refreshMeeting = hasMeetingRefresh(externalRefresh);
+  const refreshQr = hasQrRefresh(externalRefresh);
+  if (refreshAssets || refreshMeeting || refreshQr) {
+    const refreshSucceeded = await refreshExternalObjects(
+      (element) => (refreshAssets && isAssetDependentElement(element))
+        || (refreshMeeting && isMeetingDependentElement(element))
+        || (refreshQr && element.type === "CHANNEL_QR_CODE"),
+      refreshAssets,
+      revision,
+      next
+    );
+    if (!refreshSucceeded) return false;
+  }
+  if (!isSyncCurrent(revision) || !fabricCanvas) return false;
+  reconcileObjectStack(next.elements);
+  renderedCanvasSnapshot = next;
+  restoreSelectedObject();
+  fabricCanvas.requestRenderAll();
+  emit("ready");
+  return true;
+}
+
+async function refreshExternalObjects(
+  predicate: (element: InvitationElementV1) => boolean,
+  refreshBackground: boolean,
+  revision: number,
+  document: InvitationCanvasV1
+): Promise<boolean> {
+  if (!fabricCanvas || !fabricModule || !isSyncCurrent(revision)) return false;
+  if (refreshBackground && !await updateBackgroundImage(revision, document)) return false;
+  const activeIds = activeInvitationElementIds();
+  for (const element of document.elements) {
+    if (!predicate(element)) continue;
+    if (!isSyncCurrent(revision) || !fabricCanvas) return false;
+    const current = findFabricObject(element.id);
+    if (current) {
+      if (!await replaceFabricObject(current, element, revision, activeIds)) return false;
+    } else if (!await addFabricObject(element, revision)) {
+      return false;
+    }
+  }
+  if (!isSyncCurrent(revision) || !fabricCanvas) return false;
+  restoreActiveObjects(activeIds);
+  return true;
+}
+
+async function reconcileFabricObjects(previousElements: InvitationElementV1[], nextElements: InvitationElementV1[], revision: number): Promise<boolean> {
+  if (!fabricCanvas || !isSyncCurrent(revision)) return false;
+  const previousById = new Map(previousElements.map((element) => [element.id, element]));
+  const nextIds = new Set(nextElements.map((element) => element.id));
+  const activeIds = activeInvitationElementIds();
+
+  for (const element of previousElements) {
+    if (!isSyncCurrent(revision) || !fabricCanvas) return false;
+    if (!nextIds.has(element.id)) {
+      const object = findFabricObject(element.id);
+      if (object) fabricCanvas.remove(object);
+    }
+  }
+  for (const element of nextElements) {
+    if (!isSyncCurrent(revision) || !fabricCanvas) return false;
+    const previous = previousById.get(element.id);
+    const current = findFabricObject(element.id);
+    if (!current) {
+      if (!await addFabricObject(element, revision)) return false;
+      continue;
+    }
+    if (!previous || !sameElement(previous, element)) {
+      if (!updateFabricObject(current, previous, element)) {
+        if (!await replaceFabricObject(current, element, revision, activeIds)) return false;
+      }
+    }
+  }
+  restoreActiveObjects(activeIds);
+  return isSyncCurrent(revision);
+}
+
+function updateFabricObject(object: IdentifiedFabricObject, previous: InvitationElementV1 | undefined, element: InvitationElementV1) {
+  if (!previous || previous.type !== element.type) return false;
+  const rendersAsText = isTextElement(element);
+  if (rendersAsText && object.type !== "textbox") return false;
+  if (!rendersAsText && hasPresentationPropertyChange(previous, element)) return false;
+  if (!rendersAsText && (previous.width !== element.width || previous.height !== element.height)) return false;
+
+  applyObjectState(object, element, rendersAsText);
+  if (rendersAsText) updateTextObject(object as InvitationTextbox, element);
+  recordObjectBaseGeometry(object, element);
+  object.setCoords();
+  return true;
+}
+
+function applyObjectState(object: IdentifiedFabricObject, element: InvitationElementV1, resetTextScale: boolean) {
+  object.set({
+    left: element.x + element.width / 2,
+    top: element.y + element.height / 2,
+    angle: element.rotation,
+    opacity: Number(element.props.opacity ?? 1),
+    selectable: !element.locked,
+    evented: !element.locked,
+    lockMovementX: element.locked,
+    lockMovementY: element.locked,
+    lockRotation: element.locked,
+    lockScalingX: element.locked,
+    lockScalingY: element.locked
+  });
+  if (resetTextScale) {
+    object.set({
+      width: element.width,
+      scaleX: object.invitationBaseScaleX || 1,
+      scaleY: object.invitationBaseScaleY || 1
+    });
+    // Textbox 设置 width 会触发布局计算；height 必须在该计算后单独写入，避免被自然文本高度覆盖。
+    object.set("height", element.height);
+  }
+}
+
+function updateTextObject(object: InvitationTextbox, element: InvitationElementV1) {
+  const propsValue = element.props;
+  const fontSize = Number(propsValue.fontSize || 16);
+  const content = element.type === "TEXT"
+    ? String(propsValue.text || "文字")
+    : `${String(propsValue.labelPrefix || "")}${resolveMeetingField(String(propsValue.field || ""), props.meeting)}`;
+  object.set({
+    text: content,
+    fontSize,
+    fontFamily: String(propsValue.fontFamily || "Inter, system-ui, sans-serif"),
+    fontWeight: String(propsValue.fontWeight || 400),
+    fontStyle: String(propsValue.fontStyle || "normal") as "normal" | "italic" | "oblique",
+    fill: String(propsValue.color || "#17261f"),
+    textAlign: String(propsValue.textAlign || "left") as "left" | "center" | "right" | "justify" | "justify-left" | "justify-center" | "justify-right",
+    lineHeight: Number(propsValue.lineHeight || 1.4),
+    charSpacing: Number(propsValue.letterSpacing || 0) / Math.max(1, fontSize) * 1000
+  });
+  object.initDimensions();
+  // Textbox 会按内容重算自然高度；领域文档必须始终保留用户设定的固定盒子。
+  object.set({ width: element.width });
+  object.set("height", element.height);
+  object.clipPath?.set({ width: element.width, height: element.height });
+}
+
+function recordObjectBaseGeometry(object: IdentifiedFabricObject, element: InvitationElementV1) {
+  object.invitationBaseScaleX = Math.abs(Number(object.scaleX || 1));
+  object.invitationBaseScaleY = Math.abs(Number(object.scaleY || 1));
+  object.invitationBaseWidth = Math.max(0.000001, Number(object.width || element.width));
+  object.invitationBaseElementWidth = element.width;
+  object.invitationBaseElementHeight = element.height;
+}
+
+function hasPresentationPropertyChange(previous: InvitationElementV1, element: InvitationElementV1) {
+  return JSON.stringify(previous.props) !== JSON.stringify(element.props);
+}
+
+function isTextElement(element: InvitationElementV1) {
+  return element.type === "TEXT" || (element.type === "MEETING_FIELD" && element.props.field !== "COVER_IMAGE");
+}
+
+function sameElement(previous: InvitationElementV1, element: InvitationElementV1) {
+  return JSON.stringify(previous) === JSON.stringify(element);
+}
+
+function snapshotCanvas(canvas: InvitationCanvasV1) {
+  return JSON.parse(JSON.stringify(canvas)) as InvitationCanvasV1;
+}
+
+function findFabricObject(elementId: string) {
+  return fabricCanvas?.getObjects().find((item) => (item as IdentifiedFabricObject).invitationElementId === elementId) as IdentifiedFabricObject | undefined;
+}
+
+async function addFabricObject(element: InvitationElementV1, revision: number): Promise<boolean> {
+  const object = await createFabricObject(element);
+  if (!isSyncCurrent(revision) || !fabricCanvas) return false;
+  if (object) fabricCanvas.add(object);
+  return true;
+}
+
+async function replaceFabricObject(current: IdentifiedFabricObject, element: InvitationElementV1, revision: number, activeIds = activeInvitationElementIds()): Promise<boolean> {
+  const next = await createFabricObject(element);
+  if (!isSyncCurrent(revision) || !fabricCanvas) return false;
+  if (!next || !fabricCanvas.getObjects().includes(current)) return true;
+  const index = fabricCanvas.getObjects().indexOf(current);
+  // 异步图片/二维码准备期间保持旧对象可见，新的对象准备好后再原位替换，避免出现空白闪烁。
+  withSelectionEventsSuppressed(() => {
+    fabricCanvas?.add(next);
+    if (index >= 0) fabricCanvas?.moveObjectTo(next, index);
+    fabricCanvas?.remove(current);
+  });
+  restoreActiveObjects(activeIds);
+  return true;
+}
+
+function reconcileObjectStack(elements: InvitationElementV1[]) {
+  if (!fabricCanvas) return;
+  const canvas = fabricCanvas;
+  [...elements].sort((a, b) => a.zIndex - b.zIndex).forEach((element, index) => {
+    const object = findFabricObject(element.id);
+    if (object) canvas.moveObjectTo(object, index);
+  });
+}
+
+function activeInvitationElementIds() {
+  return fabricCanvas?.getActiveObjects()
+    .map((object) => (object as IdentifiedFabricObject).invitationElementId)
+    .filter((id): id is string => Boolean(id)) || [];
+}
+
+function restoreActiveObjects(ids: string[]) {
+  if (!fabricCanvas || !fabricModule || !ids.length) return;
+  const objects = ids.map(findFabricObject).filter((item): item is IdentifiedFabricObject => Boolean(item));
+  withSelectionEventsSuppressed(() => {
+    if (objects.length === 1) fabricCanvas?.setActiveObject(objects[0]);
+    else if (objects.length > 1 && fabricCanvas) fabricCanvas.setActiveObject(new fabricModule!.ActiveSelection(objects, { canvas: fabricCanvas }));
+  });
+}
+
+function restoreSelectedObject() {
+  if (!fabricCanvas || !props.selectedId || props.selectedId === MULTI_SELECTION_ID) return;
+  const object = findFabricObject(props.selectedId);
+  if (object) withSelectionEventsSuppressed(() => fabricCanvas?.setActiveObject(object));
+}
+
+function isAssetDependentElement(element: InvitationElementV1) {
+  return element.type === "IMAGE"
+    || (element.type === "MEETING_FIELD" && element.props.field === "COVER_IMAGE")
+    || element.type === "VIDEO"
+    || element.type === "CAROUSEL";
+}
+
+function isMeetingDependentElement(element: InvitationElementV1) {
+  return element.type === "MEETING_FIELD" || element.type === "COUNTDOWN";
+}
+
+async function createBackgroundImage(document: InvitationCanvasV1) {
+  if (!fabricModule || !document.backgroundImageAssetId) return undefined;
+  const backgroundUrl = assetUrls.value.get(document.backgroundImageAssetId);
+  if (!backgroundUrl) return undefined;
+  try {
+    const background = await fabricModule.FabricImage.fromURL(backgroundUrl, { crossOrigin: "anonymous" });
+    const coverScale = Math.max(document.width / Math.max(1, background.width), document.height / Math.max(1, background.height));
+    background.set({
+      left: (document.width - background.width * coverScale) / 2,
+      top: (document.height - background.height * coverScale) / 2,
+      originX: "left",
+      originY: "top",
+      scaleX: coverScale,
+      scaleY: coverScale,
+      selectable: false,
+      evented: false
+    });
+    return background;
+  } catch {
+    // 素材跨域或加载失败时仍保留背景色，避免设计器整体不可用。
+    return undefined;
+  }
+}
+
+async function updateBackgroundImage(revision: number, document: InvitationCanvasV1): Promise<boolean> {
+  const background = await createBackgroundImage(document);
+  if (!isSyncCurrent(revision) || !fabricCanvas) return false;
+  // 图片尚未就绪时保留当前背景，只有显式移除或新图片成功加载后才替换。
+  if (!document.backgroundImageAssetId || background) fabricCanvas.backgroundImage = background;
+  return true;
 }
 
 function bindCanvasEvents() {
   if (!fabricCanvas) return;
   const emitSelection = () => {
-    if (syncing) return;
+    if (suppressSelectionEvents) return;
     const object = fabricCanvas?.getActiveObject() as IdentifiedFabricObject | undefined;
     if (object?.type === "activeselection") {
       emit("select", MULTI_SELECTION_ID);
@@ -192,7 +601,7 @@ function bindCanvasEvents() {
   fabricCanvas.on("selection:created", emitSelection);
   fabricCanvas.on("selection:updated", emitSelection);
   fabricCanvas.on("selection:cleared", () => {
-    if (syncing) return;
+    if (suppressSelectionEvents) return;
     emit("select", "");
   });
   fabricCanvas.on("object:moving", ({ target }) => snapObject(target as IdentifiedFabricObject));
@@ -465,12 +874,13 @@ function nearestSnapDelta(points: number[], guides: number[], threshold: number)
 }
 
 function syncObject(target: IdentifiedFabricObject) {
-  if (syncing || !target.invitationElementId) return;
+  if (!target.invitationElementId) return;
   const source = props.canvas.elements.find((item) => item.id === target.invitationElementId);
   if (!source) return;
   // getObjectScaling 包含 ActiveSelection 的变换，但不包含 canvas zoom 和 Retina/DPR。
   const objectScaling = target.getObjectScaling();
-  const intrinsicWidthScale = source.type === "TEXT" || source.type === "MEETING_FIELD"
+  const rendersAsText = isTextElement(source);
+  const intrinsicWidthScale = rendersAsText
     ? Math.abs(Number(target.width || 1)) / Math.max(0.000001, target.invitationBaseWidth || 1)
     : 1;
   const visualScaleX = objectScaling.x * intrinsicWidthScale;
@@ -499,7 +909,40 @@ function syncObject(target: IdentifiedFabricObject) {
     rotation,
     props: { ...source.props }
   };
-  // 文本框缩放只改变排版边界；字号由属性面板显式控制，不能随外框拖拽产生小数漂移。
+  // 领域边界校验会夹紧位置和尺寸，必须立即把受限结果回写 Fabric；否则下一次属性更新才会突然跳回。
+  applyCommittedObjectGeometry(target, source, next);
+  commitFabricChange(next);
+}
+
+function applyCommittedObjectGeometry(target: IdentifiedFabricObject, source: InvitationElementV1, next: InvitationElementV1) {
+  target.set({
+    left: next.x + next.width / 2,
+    top: next.y + next.height / 2,
+    angle: next.rotation
+  });
+  if (isTextElement(source)) {
+    // 文本框缩放只改变排版边界；字号由属性面板显式控制，不能随外框拖拽产生小数漂移。
+    target.set({
+      width: next.width,
+      scaleX: target.invitationBaseScaleX || 1,
+      scaleY: target.invitationBaseScaleY || 1
+    });
+    target.set("height", next.height);
+    target.clipPath?.set({ width: next.width, height: next.height });
+  } else {
+    const baseWidth = Math.max(0.000001, target.invitationBaseElementWidth || source.width);
+    const baseHeight = Math.max(0.000001, target.invitationBaseElementHeight || source.height);
+    target.set({
+      scaleX: (target.invitationBaseScaleX || 1) * next.width / baseWidth,
+      scaleY: (target.invitationBaseScaleY || 1) * next.height / baseHeight
+    });
+  }
+  recordObjectBaseGeometry(target, next);
+  target.setCoords();
+}
+
+function commitFabricChange(next: InvitationElementV1) {
+  localFabricChanges.set(next.id, JSON.parse(JSON.stringify(next)) as InvitationElementV1);
   emit("change", next);
 }
 
@@ -519,7 +962,7 @@ function keepTextBounds(target: IdentifiedFabricObject) {
 }
 
 function syncTextContent(target: IdentifiedFabricObject) {
-  if (syncing || !target.invitationElementId || !("text" in target)) return;
+  if (!target.invitationElementId || !("text" in target)) return;
   const source = props.canvas.elements.find((item) => item.id === target.invitationElementId);
   if (!source || source.type !== "TEXT") return;
   /*
@@ -534,15 +977,24 @@ function syncTextContent(target: IdentifiedFabricObject) {
     height: source.height
   });
   keepTextBounds(target);
+  recordObjectBaseGeometry(target, source);
   target.setCoords();
-  skipNextCanvasRebuild = true;
-  emit("change", { ...source, props: { ...source.props, text: String(target.text || "") } });
+  commitFabricChange({ ...source, props: { ...source.props, text: String(target.text || "") } });
 }
 
 function syncModifiedObjects(target: IdentifiedFabricObject) {
-  if (target.type === "activeselection" && fabricCanvas) {
-    // ActiveSelection 自身不对应领域元素，必须逐项读取合成后的世界坐标。
-    fabricCanvas.getActiveObjects().forEach((object) => syncObject(object as IdentifiedFabricObject));
+  if (target.type === "activeselection" && fabricCanvas && fabricModule) {
+    /*
+     * ActiveSelection 内的子对象使用组内坐标，直接把领域坐标写给 left/top 会再叠加一次组变换。
+     * 先解除选择，让 Fabric 将本次组合变换落到各对象的画布坐标，再做边界夹紧并恢复多选状态。
+     */
+    const objects = fabricCanvas.getActiveObjects() as IdentifiedFabricObject[];
+    withSelectionEventsSuppressed(() => fabricCanvas?.discardActiveObject());
+    objects.forEach(syncObject);
+    withSelectionEventsSuppressed(() => {
+      if (objects.length) fabricCanvas?.setActiveObject(new fabricModule!.ActiveSelection(objects, { canvas: fabricCanvas }));
+    });
+    fabricCanvas.requestRenderAll();
     return;
   }
   syncObject(target);

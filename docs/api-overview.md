@@ -211,7 +211,7 @@ MEETINGOS-CHECKIN:{meetingId}:{attendeeCode}
 | `GET` | `/api/admin/exports?meetingId={meetingId}` | 分页查询导出任务和进度 |
 | `GET` | `/api/admin/exports/{taskId}/download?meetingId={meetingId}` | 下载任务生成的固定 XLSX 文件 |
 | `GET` | `/api/admin/exports/download?meetingId={meetingId}&type={type}` | 兼容同步下载，默认 XLSX；显式 `format=csv` 兼容旧调用 |
-| `GET` | `/api/admin/operation-logs` | 操作日志 |
+| `GET` | `/api/admin/operation-logs?category={category}&success={true|false}&fromDate={yyyy-MM-dd}&toDate={yyyy-MM-dd}&keyword={keyword}&includeDraftSaves={true|false}&page={page}&size={size}` | 操作日志；响应头 `X-MeetingOS-Log-Snapshot` 用于稳定分页 |
 | `GET` | `/api/admin/settings` | 读取系统设置，Webhook Token 仅返回脱敏状态 |
 | `PUT` | `/api/admin/settings` | 保存系统设置，忽略请求中的 Webhook Token，密钥仅由 `TDUCK_WEBHOOK_TOKEN` 管理 |
 | `GET` | `/api/admin/meetings/{meetingId}/query-settings` | 查询会议公开座位/住宿/晚宴/签到配置 |
@@ -220,7 +220,7 @@ MEETINGOS-CHECKIN:{meetingId}:{attendeeCode}
 | `POST` | `/api/admin/meetings/{meetingId}/queries/room` | 后台住宿查询候选，最多返回 20 条 |
 
 导出类型：`attendees`、`approved`、`seats`、`rooms`、`checkin-records`、`no-checkin`、`room-inventory`、`statistics`。晚宴管理页使用专用 `/api/admin/dinner/export` 下载 `.xlsx`。
-操作日志暂仅 `SUPER_ADMIN` 可查看；日志 details 会递归脱敏手机号、证件号、邮箱、Token、密码和密钥类字段。
+操作日志暂仅 `SUPER_ADMIN` 可查看；列表响应不包含客户端 IP 和 details。分类由 action 实时推导，默认不展示邀请函草稿保存；调用方应在后续分页请求中回传首次响应的 `X-MeetingOS-Log-Snapshot`。日志 details 会递归脱敏手机号、证件号、邮箱、Token、密码和密钥类字段。
 
 ## 用户与会议授权
 

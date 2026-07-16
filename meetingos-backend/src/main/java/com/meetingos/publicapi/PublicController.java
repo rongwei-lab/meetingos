@@ -2,10 +2,12 @@ package com.meetingos.publicapi;
 
 import com.meetingos.common.ApiResponse;
 import com.meetingos.attendee.Attendee;
+import com.meetingos.checkin.CheckinResultStatus;
 import com.meetingos.checkin.CheckinRequest;
 import com.meetingos.checkin.CheckinResponse;
 import com.meetingos.checkin.CheckinService;
 import com.meetingos.checkin.CheckinType;
+import com.meetingos.operationlog.OperationLogService;
 import com.meetingos.settings.BrandingResponse;
 import com.meetingos.settings.SystemSettingsService;
 import com.meetingos.tduck.TduckService;
@@ -13,6 +15,8 @@ import jakarta.validation.Valid;
 import jakarta.servlet.http.HttpServletRequest;
 import jakarta.servlet.http.HttpServletResponse;
 import org.springframework.http.HttpHeaders;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
@@ -22,11 +26,14 @@ import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
 
 import java.io.IOException;
+import java.util.LinkedHashMap;
 import java.util.Map;
 
 @RestController
 @RequestMapping("/api/public")
 public class PublicController {
+
+    private static final Logger log = LoggerFactory.getLogger(PublicController.class);
 
     private final TduckService tduckService;
     private final PublicRateLimitService publicRateLimitService;
@@ -34,19 +41,22 @@ public class PublicController {
     private final PublicCaptchaService publicCaptchaService;
     private final SystemSettingsService systemSettingsService;
     private final CheckinService checkinService;
+    private final OperationLogService operationLogService;
 
     public PublicController(TduckService tduckService,
                             PublicRateLimitService publicRateLimitService,
                             PublicQueryService publicQueryService,
                             PublicCaptchaService publicCaptchaService,
                             SystemSettingsService systemSettingsService,
-                            CheckinService checkinService) {
+                            CheckinService checkinService,
+                            OperationLogService operationLogService) {
         this.tduckService = tduckService;
         this.publicRateLimitService = publicRateLimitService;
         this.publicQueryService = publicQueryService;
         this.publicCaptchaService = publicCaptchaService;
         this.systemSettingsService = systemSettingsService;
         this.checkinService = checkinService;
+        this.operationLogService = operationLogService;
     }
 
     @GetMapping("/query-settings")
@@ -130,6 +140,7 @@ public class PublicController {
                     clientIp(request),
                     request.getHeader(HttpHeaders.USER_AGENT)
             );
+            recordPublicSelfCheckin(match, response);
             return ApiResponse.ok(response);
         } catch (RuntimeException ex) {
             recordPublicCheckinFailure(queryRequest, match, ex, request);
@@ -172,6 +183,36 @@ public class PublicController {
             );
         } catch (RuntimeException ignored) {
             // 公开签到的历史记录不能影响主流程错误返回，尤其是会议码错误或查询字段缺失时。
+        }
+    }
+
+    private void recordPublicSelfCheckin(PublicAttendeeMatch match,
+                                         CheckinResponse response) {
+        if (response.status() != CheckinResultStatus.SUCCESS) {
+            return;
+        }
+        try {
+            /*
+             * 公开签到请求带有查询条件和验证码，不能复用通用参数摘要写入操作日志。
+             * 只保留已经完成状态变更所需的对象 ID 与结果，重复签到继续由签到记录表承接。
+             */
+            Map<String, Object> details = new LinkedHashMap<>();
+            details.put("meetingId", match.meeting().getId());
+            details.put("attendeeId", response.attendeeId());
+            details.put("resultStatus", response.status().name());
+            operationLogService.recordForActor(
+                    "public",
+                    "PUBLIC_SELF_CHECKIN",
+                    "ATTENDEE",
+                    response.attendeeId() == null ? null : response.attendeeId().toString(),
+                    true,
+                    "自助签到成功",
+                    null,
+                    details
+            );
+        } catch (RuntimeException ex) {
+            // 公开签到成功后，审计落库失败不能回滚参会人的签到状态。
+            log.warn("Public self-checkin audit log recording failed", ex);
         }
     }
 }
