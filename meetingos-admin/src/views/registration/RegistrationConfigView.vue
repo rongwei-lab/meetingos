@@ -16,7 +16,13 @@
             </div>
             <div class="binding-header-actions">
               <n-tag round :type="bindingStatusType">{{ bindingStatusLabel }}</n-tag>
-              <n-dropdown trigger="click" :options="createTduckFormOptions" :disabled="!currentMeeting" @select="handleCreateTduckFormSelect">
+              <n-dropdown
+                v-if="!currentBoundFormKey"
+                trigger="click"
+                :options="createTduckFormOptions"
+                :disabled="!currentMeeting"
+                @select="handleCreateTduckFormSelect"
+              >
                 <n-button size="small" secondary :loading="openingTduck" :disabled="!currentMeeting">
                   <template #icon><n-icon :component="AddOutline" /></template>
                   新建 TDuck 表单
