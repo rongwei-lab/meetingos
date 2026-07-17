@@ -90,8 +90,9 @@
           <n-empty description="暂无桌号，请先新增或导入晚宴分配" />
         </template>
       </n-data-table>
-      <div v-else class="mobile-card-list dinner-card-list">
-        <article v-for="table in sortedDinnerTables" :key="table.id" class="mobile-data-card">
+      <div v-else class="mobile-paged-list">
+        <div class="mobile-card-list dinner-card-list">
+        <article v-for="table in mobileDinnerTables" :key="table.id" class="mobile-data-card">
           <div class="mobile-card-head">
             <div class="mobile-card-title">
               <button type="button" class="table-no-mobile-button" @click="openTableMembersModal(table)">
@@ -118,6 +119,17 @@
           </div>
         </article>
         <n-empty v-if="!sortedDinnerTables.length" description="暂无桌号，请先新增或导入晚宴分配" />
+        </div>
+        <n-pagination
+          v-if="mobileDinnerTableItemCount > mobileDinnerTablePageSize"
+          v-model:page="mobileDinnerTablePage"
+          class="mobile-pagination"
+          :page-count="mobileDinnerTablePageCount"
+          :page-size="mobileDinnerTablePageSize"
+          :item-count="mobileDinnerTableItemCount"
+          :page-slot="5"
+          aria-label="晚宴桌号列表分页"
+        />
       </div>
     </n-card>
 
@@ -151,8 +163,9 @@
           <n-empty description="暂无符合条件的参会人" />
         </template>
       </n-data-table>
-      <div v-else class="mobile-card-list dinner-card-list">
-        <article v-for="row in filteredDinnerAttendeeRows" :key="row.attendeeId" class="mobile-data-card">
+      <div v-else class="mobile-paged-list">
+        <div class="mobile-card-list dinner-card-list">
+        <article v-for="row in mobileDinnerAttendeeRows" :key="row.attendeeId" class="mobile-data-card">
           <div class="mobile-card-head">
             <div class="mobile-card-title">
               <strong>{{ row.attendeeName }}</strong>
@@ -181,6 +194,17 @@
           </div>
         </article>
         <n-empty v-if="!filteredDinnerAttendeeRows.length" description="暂无符合条件的参会人" />
+        </div>
+        <n-pagination
+          v-if="mobileDinnerAttendeeItemCount > mobileDinnerAttendeePageSize"
+          v-model:page="mobileDinnerAttendeePage"
+          class="mobile-pagination"
+          :page-count="mobileDinnerAttendeePageCount"
+          :page-size="mobileDinnerAttendeePageSize"
+          :item-count="mobileDinnerAttendeeItemCount"
+          :page-slot="5"
+          aria-label="晚宴参会人列表分页"
+        />
       </div>
     </n-card>
 
@@ -276,8 +300,9 @@
             <n-empty description="本桌暂无就餐人员" />
           </template>
         </n-data-table>
-        <div v-else class="mobile-card-list dinner-card-list">
-          <article v-for="assignment in selectedTableAssignments" :key="assignment.id" class="mobile-data-card">
+        <div v-else class="mobile-paged-list">
+          <div class="mobile-card-list dinner-card-list">
+          <article v-for="assignment in mobileSelectedTableAssignments" :key="assignment.id" class="mobile-data-card">
             <div class="mobile-card-head">
               <div class="mobile-card-title">
                 <strong>{{ assignment.attendeeName }}</strong>
@@ -296,6 +321,17 @@
             </div>
           </article>
           <n-empty v-if="!selectedTableAssignments.length" description="本桌暂无就餐人员" />
+          </div>
+          <n-pagination
+            v-if="mobileTableMemberItemCount > mobileTableMemberPageSize"
+            v-model:page="mobileTableMemberPage"
+            class="mobile-pagination"
+            :page-count="mobileTableMemberPageCount"
+            :page-size="mobileTableMemberPageSize"
+            :item-count="mobileTableMemberItemCount"
+            :page-slot="5"
+            aria-label="本桌人员列表分页"
+          />
         </div>
       </div>
       <template #footer>
@@ -430,7 +466,7 @@
 
 <script setup lang="ts">
 import type { DataTableColumns, SelectOption } from "naive-ui";
-import { NButton, NDataTable, NPopconfirm, NTag, NUpload, useDialog, useMessage } from "naive-ui";
+import { NButton, NDataTable, NPagination, NPopconfirm, NTag, NUpload, useDialog, useMessage } from "naive-ui";
 import { AddOutline, CloudUploadOutline, DownloadOutline, GridOutline, SearchOutline, TimeOutline, TrashOutline } from "@vicons/ionicons5";
 import { computed, h, onMounted, reactive, ref, watch } from "vue";
 import ImportTaskFeedback from "@/components/ImportTaskFeedback.vue";
@@ -438,6 +474,7 @@ import ImportTaskHistoryModal from "@/components/ImportTaskHistoryModal.vue";
 import PageHeader from "@/components/PageHeader.vue";
 import { useExportTaskDownload } from "@/composables/useExportTaskDownload";
 import { useImportTaskFlow } from "@/composables/useImportTaskFlow";
+import { useClientPagination } from "@/composables/useClientPagination";
 import { useRouteMeeting } from "@/composables/useRouteMeeting";
 import { useIsMobile } from "@/composables/useResponsive";
 import type { DinnerAssignment, DinnerTable } from "@/utils/types";
@@ -587,6 +624,13 @@ const statusFilterOptions = [
   { label: "未安排", value: "UNASSIGNED" }
 ];
 const sortedDinnerTables = computed(() => [...store.currentDinnerTables].sort((a, b) => a.tableNo.localeCompare(b.tableNo, "zh-Hans-CN")));
+const {
+  page: mobileDinnerTablePage,
+  pageCount: mobileDinnerTablePageCount,
+  pageSize: mobileDinnerTablePageSize,
+  itemCount: mobileDinnerTableItemCount,
+  visibleItems: mobileDinnerTables
+} = useClientPagination(sortedDinnerTables, 12, routeMeetingId);
 const totalDinnerCapacity = computed(() => store.currentDinnerTables.reduce((sum, table) => sum + table.capacity, 0));
 const remainingDinnerSeats = computed(() => store.currentDinnerTables.reduce((sum, table) => sum + table.remainingCount, 0));
 const tableDraftTotalCapacity = computed(() => tableDrafts.value.reduce((sum, draft) => sum + normalizedTableCapacity(draft.capacity), 0));
@@ -613,6 +657,17 @@ const selectedTableAssignments = computed(() => {
   const tableNo = activeSelectedTable.value?.tableNo;
   return tableNo ? store.currentDinnerAssignments.filter((assignment) => assignment.tableNo === tableNo) : [];
 });
+const {
+  page: mobileTableMemberPage,
+  pageCount: mobileTableMemberPageCount,
+  pageSize: mobileTableMemberPageSize,
+  itemCount: mobileTableMemberItemCount,
+  visibleItems: mobileSelectedTableAssignments
+} = useClientPagination(
+  selectedTableAssignments,
+  10,
+  computed(() => activeSelectedTable.value?.id || activeSelectedTable.value?.tableNo || "")
+);
 const tableMemberAttendeeOptions = computed<SelectOption[]>(() =>
   unassignedAttendees.value.map((attendee) => ({
     label: [attendee.name, attendee.phone, attendee.company].filter(Boolean).join(" · "),
@@ -688,6 +743,17 @@ const filteredDinnerAttendeeRows = computed(() => {
     );
   });
 });
+const {
+  page: mobileDinnerAttendeePage,
+  pageCount: mobileDinnerAttendeePageCount,
+  pageSize: mobileDinnerAttendeePageSize,
+  itemCount: mobileDinnerAttendeeItemCount,
+  visibleItems: mobileDinnerAttendeeRows
+} = useClientPagination(
+  filteredDinnerAttendeeRows,
+  20,
+  computed(() => [routeMeetingId.value, filters.keyword, filters.status, filters.tableNo])
+);
 
 const attendeeOptions = computed<SelectOption[]>(() => {
   const selectedId = editingAssignment.value?.attendeeId;

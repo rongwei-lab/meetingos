@@ -287,8 +287,6 @@ async function query() {
     captchaId: captchaId.value,
     captchaAnswer: captchaAnswer.value
   };
-  const tasks: Promise<void>[] = [];
-
   if (checkinOnlyEnabled.value) {
     try {
       checkinResult.value = await store.publicSelfCheckin({ ...payload, checkinSource: "SELF" });
@@ -317,46 +315,31 @@ async function query() {
     return;
   }
 
-  if (combinedSeatEnabled.value) {
-    tasks.push(
-      store.publicSeatQuery(payload)
-        .then((result) => {
-          seatResults.value = publicQueryResults(result);
-        })
-        .catch((error) => {
-          const rawMessage = error instanceof Error ? error.message : "座位查询失败";
-          seatMessage.value = normalizePublicQueryError(rawMessage, settings.value, "seat");
-        })
-    );
+  try {
+    const queryTypes = [
+      ...(combinedSeatEnabled.value ? ["SEAT" as const] : []),
+      ...(combinedRoomEnabled.value ? ["ROOM" as const] : []),
+      ...(combinedDinnerEnabled.value ? ["DINNER" as const] : [])
+    ];
+    const result = await store.publicCombinedQuery(payload, { queryTypes });
+    if (combinedSeatEnabled.value) {
+      if (result.seat) seatResults.value = publicQueryResults(result.seat);
+      else seatMessage.value = normalizePublicQueryError(result.seatError || "座位查询失败", settings.value, "seat");
+    }
+    if (combinedRoomEnabled.value) {
+      if (result.room) roomResults.value = publicQueryResults(result.room);
+      else roomMessage.value = normalizePublicQueryError(result.roomError || "住宿查询失败", settings.value, "room");
+    }
+    if (combinedDinnerEnabled.value) {
+      if (result.dinner) dinnerResults.value = publicQueryResults(result.dinner);
+      else dinnerMessage.value = normalizePublicQueryError(result.dinnerError || "晚宴查询失败", settings.value, "dinner");
+    }
+  } catch (error) {
+    const rawMessage = error instanceof Error ? error.message : "综合查询失败";
+    if (combinedSeatEnabled.value) seatMessage.value = normalizePublicQueryError(rawMessage, settings.value, "seat");
+    if (combinedRoomEnabled.value) roomMessage.value = normalizePublicQueryError(rawMessage, settings.value, "room");
+    if (combinedDinnerEnabled.value) dinnerMessage.value = normalizePublicQueryError(rawMessage, settings.value, "dinner");
   }
-
-  if (combinedRoomEnabled.value) {
-    tasks.push(
-      store.publicRoomQuery(payload)
-        .then((result) => {
-          roomResults.value = publicQueryResults(result);
-        })
-        .catch((error) => {
-          const rawMessage = error instanceof Error ? error.message : "住宿查询失败";
-          roomMessage.value = normalizePublicQueryError(rawMessage, settings.value, "room");
-        })
-    );
-  }
-
-  if (combinedDinnerEnabled.value) {
-    tasks.push(
-      store.publicDinnerQuery(payload)
-        .then((result) => {
-          dinnerResults.value = publicQueryResults(result);
-        })
-        .catch((error) => {
-          const rawMessage = error instanceof Error ? error.message : "晚宴查询失败";
-          dinnerMessage.value = normalizePublicQueryError(rawMessage, settings.value, "dinner");
-        })
-    );
-  }
-
-  await Promise.allSettled(tasks);
   const enabledResults = [
     combinedSeatEnabled.value ? seatResults.value.length : true,
     combinedRoomEnabled.value ? roomResults.value.length : true,

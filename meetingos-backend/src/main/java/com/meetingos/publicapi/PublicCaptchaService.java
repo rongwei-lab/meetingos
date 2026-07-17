@@ -59,6 +59,18 @@ public class PublicCaptchaService {
     }
 
     public void verify(String captchaId, String answer) {
+        verify(captchaId, answer, false);
+    }
+
+    /**
+     * 综合查询只产生一次业务请求，验证成功后必须立即消费验证码，避免同一答案被重复查询利用。
+     * 旧版座位、住宿、晚宴三个独立请求继续通过 {@link #verify(String, String)} 兼容最多三次成功。
+     */
+    public void verifyAndConsume(String captchaId, String answer) {
+        verify(captchaId, answer, true);
+    }
+
+    private void verify(String captchaId, String answer, boolean consumeOnSuccess) {
         if (!properties.isCaptchaEnabled()) {
             return;
         }
@@ -89,13 +101,17 @@ public class PublicCaptchaService {
                 throw BusinessException.badRequest("验证码不正确");
             }
 
-            /*
-             * 综合查询页可能同时发起“座位 + 住宿 + 晚宴”三个查询请求。原子递减保证
-             * 并发请求最多成功三次，避免多个线程读到同一个 remainingSuccessUses 后覆盖更新。
-             */
-            challenge.remainingSuccessUses--;
-            if (challenge.remainingSuccessUses <= 0) {
+            if (consumeOnSuccess) {
                 challenges.remove(captchaId, challenge);
+            } else {
+                /*
+                 * 兼容旧版页面同时发起“座位 + 住宿 + 晚宴”三个查询请求。原子递减保证
+                 * 并发请求最多成功三次，避免多个线程读到同一个 remainingSuccessUses 后覆盖更新。
+                 */
+                challenge.remainingSuccessUses--;
+                if (challenge.remainingSuccessUses <= 0) {
+                    challenges.remove(captchaId, challenge);
+                }
             }
         }
     }

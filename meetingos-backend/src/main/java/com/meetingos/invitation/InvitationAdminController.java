@@ -2,6 +2,7 @@ package com.meetingos.invitation;
 
 import com.meetingos.common.ApiResponse;
 import com.meetingos.operationlog.AuditLog;
+import jakarta.servlet.http.HttpServletResponse;
 import jakarta.validation.Valid;
 import org.springframework.format.annotation.DateTimeFormat;
 import org.springframework.http.MediaType;
@@ -153,7 +154,13 @@ public class InvitationAdminController {
     @GetMapping("/{invitationId}/attributions")
     @PreAuthorize("@meetingAccess.canView(#meetingId)")
     public ApiResponse<List<AttributionResponse>> attributions(@PathVariable Long meetingId,
-                                                               @PathVariable Long invitationId) {
-        return ApiResponse.ok(analyticsService.attributions(meetingId, invitationId));
+                                                               @PathVariable Long invitationId,
+                                                               HttpServletResponse response) {
+        InvitationAnalyticsService.AttributionPage page = analyticsService.attributionPage(meetingId, invitationId);
+        // 保持既有 JSON 列表不变，通过响应头明确总数与是否截断，旧客户端无需改造。
+        response.setHeader("X-Total-Count", String.valueOf(page.total()));
+        response.setHeader("X-Result-Limit", String.valueOf(page.limit()));
+        response.setHeader("X-Result-Truncated", String.valueOf(page.truncated()));
+        return ApiResponse.ok(page.items());
     }
 }

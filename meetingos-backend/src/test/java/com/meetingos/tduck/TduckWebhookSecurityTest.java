@@ -134,7 +134,7 @@ class TduckWebhookSecurityTest {
                 .getAnnotation(Transactional.class);
 
         assertThat(successTransaction.propagation()).isEqualTo(Propagation.MANDATORY);
-        assertThat(failedTransaction.propagation()).isEqualTo(Propagation.REQUIRES_NEW);
+        assertThat(failedTransaction.propagation()).isEqualTo(Propagation.REQUIRED);
     }
 
     @Test
@@ -319,7 +319,7 @@ class TduckWebhookSecurityTest {
     }
 
     @Test
-    void duplicatePullSyncDoesNotReapplyPersistedAttribution() {
+    void duplicatePullSyncRetriesIdempotentAttribution() {
         Meeting meeting = meeting();
         TduckFormBinding binding = binding(meeting);
         TduckSyncLog existingLog = new TduckSyncLog();
@@ -327,6 +327,7 @@ class TduckWebhookSecurityTest {
         existingLog.setAttendeeId(21L);
 
         when(bindingRepository.findByMeetingId(1L)).thenReturn(Optional.of(binding));
+        when(bindingRepository.findMeetingIdByFormKey("form-1")).thenReturn(Optional.of(1L));
         when(tduckClient.formDataDetails("data-pull")).thenReturn(new TduckFormDataDetails(
                 "form-1",
                 "data-pull",
@@ -344,7 +345,13 @@ class TduckWebhookSecurityTest {
         TduckWebhookResult result = tduckService.pullSync(new TduckPullSyncRequest(1L, "data-pull"));
 
         assertThat(result.status()).isEqualTo(SyncStatus.DUPLICATE_IGNORED);
-        verifyNoInteractions(invitationAttributionService);
+        verify(invitationAttributionService).attributeFirstSubmission(
+                1L,
+                21L,
+                "form-1",
+                "data-pull",
+                "persisted-attribution-token"
+        );
     }
 
     @Test

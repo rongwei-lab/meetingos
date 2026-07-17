@@ -1,11 +1,14 @@
 import { defineStore } from "pinia";
-import { canUseDemoFallback, extractErrorMessage, http, type PagePayload, isAuthFailure, isRequestCanceled, unwrapApi } from "@/api/http";
+import { canUseDemoFallback, extractErrorMessage, http, type PagePayload, isAuthFailure, isHttpStatus, isRequestCanceled, unwrapApi } from "@/api/http";
 import { mockAttendees, mockDinnerAssignments, mockMeetings, mockRooms, mockSeats, mockSyncLogs } from "@/utils/mockData";
 import { updateMeetingCounters } from "@/utils/meetingCounters";
 import { formatDateTimeLabel } from "@/utils/meetingDisplay";
 import { DEFAULT_NEW_MEETING_STATUS } from "@/utils/meetingLifecycle";
 import { RequestRuntime, type LatestRequestToken } from "@/utils/requestControl";
 import { sanitizeImageUrl } from "@/utils/safeUrl";
+import { mapWithConcurrency } from "@/utils/async";
+import { CURRENT_MEETING_KEY } from "@/utils/currentMeeting";
+import { pollFileTask } from "@/utils/fileTasks";
 import type {
   AdminQueryCandidate,
   Attendee,
@@ -34,8 +37,6 @@ import type {
   SeatQueryResult,
   SyncLog
 } from "@/utils/types";
-
-const CURRENT_MEETING_KEY = "meetingos.currentMeetingId";
 
 interface MeetingSummaryDto {
   id: number;
@@ -279,6 +280,15 @@ export interface PublicCaptchaDto {
   expiresInSeconds?: number;
 }
 
+export interface PublicCombinedQueryDto {
+  seat?: PublicQueryResponse<SeatQueryResult> | null;
+  seatError?: string | null;
+  room?: PublicQueryResponse<RoomQueryResult> | null;
+  roomError?: string | null;
+  dinner?: PublicQueryResponse<DinnerQueryResult> | null;
+  dinnerError?: string | null;
+}
+
 interface PublicQueryHistoryDto {
   id: number;
   queryType: PublicQueryType;
@@ -434,12 +444,19 @@ export interface TduckBatchSyncFailureDto {
 }
 
 export interface TduckBatchSyncResultDto {
+  taskId?: string | number;
+  status: "PENDING" | "RUNNING" | "COMPLETED" | "FAILED";
+  progress?: number;
+  total?: number;
   scanned: number;
   success: number;
   duplicateIgnored: number;
   failed: number;
   failures: TduckBatchSyncFailureDto[];
   message: string;
+  startedAt?: string;
+  completedAt?: string;
+  createdAt?: string;
 }
 
 export interface TduckBrowserSessionDto {
@@ -781,7 +798,7 @@ async function loadAllPageContent<T>(loadPage: (page: number) => Promise<PagePay
     { length: Math.max(0, firstPage.totalPages - 1) },
     (_, index) => index + 1
   );
-  const extraPages = await Promise.all(remainingPages.map(loadPage));
+  const extraPages = await mapWithConcurrency(remainingPages, PAGE_LOAD_CONCURRENCY, loadPage);
   return [firstPage, ...extraPages].flatMap((page) => page.content);
 }
 
@@ -860,6 +877,24 @@ const dinnerLoadPromises = requestRuntime.createPromiseCache<string, Promise<voi
 const dinnerTablesLoadPromises = requestRuntime.createPromiseCache<string, Promise<void>>();
 const latestStatisticsRequests = new Map<string, LatestRequestToken>();
 const ADMIN_PAGE_SIZE = 200;
+const PAGE_LOAD_CONCURRENCY = 4;
+const MAX_CACHED_ATTENDEE_MEETINGS = 2;
+const attendeeMeetingAccessOrder: string[] = [];
+
+function rememberAttendeeMeeting(meetingId: string) {
+  const existingIndex = attendeeMeetingAccessOrder.indexOf(meetingId);
+  if (existingIndex >= 0) attendeeMeetingAccessOrder.splice(existingIndex, 1);
+  attendeeMeetingAccessOrder.push(meetingId);
+}
+
+function retainedAttendeeMeetingIds(currentMeetingId = "") {
+  const retained = attendeeMeetingAccessOrder.slice(-MAX_CACHED_ATTENDEE_MEETINGS);
+  if (currentMeetingId && !retained.includes(currentMeetingId)) {
+    if (retained.length >= MAX_CACHED_ATTENDEE_MEETINGS) retained.shift();
+    retained.push(currentMeetingId);
+  }
+  return new Set(retained);
+}
 
 function singleFlight<T>(promises: Map<string, Promise<T>>, key: string, loader: () => Promise<T>) {
   const existing = promises.get(key);
@@ -896,6 +931,7 @@ function publicQueryHistoryRequestKey(meetingId: string, filters: PublicQueryHis
 export function clearMeetingRuntimeCaches() {
   bootstrapPromise = null;
   latestStatisticsRequests.clear();
+  attendeeMeetingAccessOrder.splice(0);
   requestRuntime.reset();
 }
 
@@ -1109,6 +1145,7 @@ export const useMeetingStore = defineStore("meeting", {
     setCurrentMeetingId(meetingId: string) {
       this.currentMeetingId = meetingId;
       if (meetingId) {
+        if (this.attendees.some((attendee) => attendee.meetingId === meetingId)) rememberAttendeeMeeting(meetingId);
         localStorage.setItem(CURRENT_MEETING_KEY, meetingId);
       } else {
         localStorage.removeItem(CURRENT_MEETING_KEY);
@@ -1427,6 +1464,61 @@ export const useMeetingStore = defineStore("meeting", {
         return localDinnerQuery(this, payload);
       }
     },
+    async publicCombinedQuery(payload: {
+      publicQueryToken?: string | null;
+      values: Record<PublicQueryField, string>;
+      captchaId?: string | null;
+      captchaAnswer?: string | null;
+    }, options: { queryTypes?: readonly CombinedQueryType[] } = {}): Promise<PublicCombinedQueryDto> {
+      try {
+        return unwrapApi(await http.post<PublicCombinedQueryDto>("/public/combined-query", payload));
+      } catch (error) {
+        if (isHttpStatus(error, [404, 405])) {
+          /*
+           * 前后端滚动发布期间，旧后端还没有综合接口。只在“路由不存在”时回退旧接口；
+           * 其他错误继续上抛，避免把鉴权、限流或服务端异常误判为版本兼容问题。
+           */
+          const enabledTypes = new Set(options.queryTypes || defaultCombinedQueryTypes);
+          const result: PublicCombinedQueryDto = {};
+          const requests: Promise<void>[] = [];
+          if (enabledTypes.has("SEAT")) {
+            requests.push(this.publicSeatQuery(payload)
+              .then((value) => { result.seat = value; })
+              .catch((seatError) => { result.seatError = extractErrorMessage(seatError, "座位查询失败"); }));
+          }
+          if (enabledTypes.has("ROOM")) {
+            requests.push(this.publicRoomQuery(payload)
+              .then((value) => { result.room = value; })
+              .catch((roomError) => { result.roomError = extractErrorMessage(roomError, "住宿查询失败"); }));
+          }
+          if (enabledTypes.has("DINNER")) {
+            requests.push(this.publicDinnerQuery(payload)
+              .then((value) => { result.dinner = value; })
+              .catch((dinnerError) => { result.dinnerError = extractErrorMessage(dinnerError, "晚宴查询失败"); }));
+          }
+          await Promise.all(requests);
+          return result;
+        }
+        if (!canUseDemoFallback(error)) throw new Error(extractErrorMessage(error, "综合查询失败"));
+        const result: PublicCombinedQueryDto = {};
+        try {
+          result.seat = localSeatQuery(this, payload);
+        } catch (seatError) {
+          result.seatError = seatError instanceof Error ? seatError.message : "座位查询失败";
+        }
+        try {
+          result.room = localRoomQuery(this, payload);
+        } catch (roomError) {
+          result.roomError = roomError instanceof Error ? roomError.message : "住宿查询失败";
+        }
+        try {
+          result.dinner = localDinnerQuery(this, payload);
+        } catch (dinnerError) {
+          result.dinnerError = dinnerError instanceof Error ? dinnerError.message : "晚宴查询失败";
+        }
+        return result;
+      }
+    },
     async publicSelfCheckin(payload: {
       publicQueryToken?: string | null;
       values: Record<PublicQueryField, string>;
@@ -1566,6 +1658,8 @@ export const useMeetingStore = defineStore("meeting", {
     },
     async loadAttendees(meetingId?: string) {
       meetingId = requireMeetingId(meetingId || this.currentMeetingId);
+      // LRU 以用户发起加载的时刻为准，旧请求晚返回时不能反过来淘汰当前会议。
+      rememberAttendeeMeeting(meetingId);
       return singleFlight(attendeesLoadPromises, meetingId, async () => {
         const request = requestRuntime.requests.begin(`attendees:${meetingId}`);
         try {
@@ -1576,25 +1670,32 @@ export const useMeetingStore = defineStore("meeting", {
             })
           );
           const remainingPages = Array.from({ length: Math.max(0, firstPage.totalPages - 1) }, (_, index) => index + 1);
-          const extraPages = await Promise.all(
-            remainingPages.map(async (page) =>
+          const extraPages = await mapWithConcurrency(
+            remainingPages,
+            PAGE_LOAD_CONCURRENCY,
+            async (page) =>
               unwrapApi(
                 await http.get<PagePayload<AttendeeDto>>("/admin/attendees", {
                   params: { meetingId: backendId(meetingId), page, size: ADMIN_PAGE_SIZE },
                   signal: request.signal
                 })
               )
-            )
           );
           if (!requestRuntime.requests.isCurrent(request)) return;
           const content = [firstPage, ...extraPages].flatMap((page) => page.content);
+          const retainedMeetingIds = retainedAttendeeMeetingIds(this.currentMeetingId);
+          const mappedContent = retainedMeetingIds.has(meetingId)
+            ? content.map((item) => mapAttendee(item, meetingId))
+            : [];
           this.attendees = [
-            ...this.attendees.filter((attendee) => attendee.meetingId !== meetingId),
-            ...content.map((item) => mapAttendee(item, meetingId))
+            ...this.attendees.filter((attendee) => attendee.meetingId !== meetingId && retainedMeetingIds.has(attendee.meetingId)),
+            ...mappedContent
           ];
-          if (!this.loadedAttendeeMeetingIds.includes(meetingId)) {
-            this.loadedAttendeeMeetingIds.push(meetingId);
-          }
+          const loadedMeetingIds = retainedMeetingIds.has(meetingId)
+            ? [...this.loadedAttendeeMeetingIds, meetingId]
+            : this.loadedAttendeeMeetingIds;
+          this.loadedAttendeeMeetingIds = [...new Set(loadedMeetingIds)]
+            .filter((loadedMeetingId) => retainedMeetingIds.has(loadedMeetingId));
         } finally {
           requestRuntime.requests.finish(request);
         }
@@ -2212,18 +2313,45 @@ export const useMeetingStore = defineStore("meeting", {
       ]);
       return result;
     },
-    async pullAllTduckSync(meetingId: string) {
+    async pullAllTduckSync(
+      meetingId: string,
+      options: { signal?: AbortSignal; onUpdate?: (task: TduckBatchSyncResultDto) => void } = {}
+    ) {
       const normalizedMeetingId = requireMeetingId(meetingId);
-      const result = unwrapApi(
+      let result = unwrapApi(
         await http.post<TduckBatchSyncResultDto>("/admin/tduck/sync/pull/all", {
           meetingId: backendId(normalizedMeetingId)
-        })
+        }, { signal: options.signal })
       );
+      if (result.taskId != null) {
+        const taskId = String(result.taskId);
+        result = await pollFileTask(
+          result,
+          async () => unwrapApi(
+            await http.get<TduckBatchSyncResultDto>(`/admin/tduck/sync/pull/tasks/${encodeURIComponent(taskId)}`, {
+              params: { meetingId: backendId(normalizedMeetingId) },
+              signal: options.signal
+            })
+          ),
+          new Set(["COMPLETED", "FAILED"]),
+          {
+            signal: options.signal,
+            intervalMs: 1_000,
+            maxIntervalMs: 3_000,
+            backoffFactor: 1.5,
+            timeoutMs: 2 * 60 * 60_000,
+            resetBackoffWhen: (previous, current) =>
+              (current.scanned ?? 0) > (previous.scanned ?? 0) || (current.progress ?? 0) > (previous.progress ?? 0),
+            onUpdate: options.onUpdate
+          }
+        );
+      }
       await Promise.allSettled([
         this.loadAttendees(normalizedMeetingId),
         this.loadSyncLogs(normalizedMeetingId),
         this.loadStatistics(normalizedMeetingId)
       ]);
+      if (result.status === "FAILED") throw new Error(result.message || "一键同步失败");
       return result;
     },
     async auditAttendees(ids: string[], status: Attendee["auditStatus"], reason = "") {

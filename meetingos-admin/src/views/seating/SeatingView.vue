@@ -370,7 +370,7 @@
 
 <script setup lang="ts">
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from "vue";
-import { NIcon, useDialog, useMessage } from "naive-ui";
+import { NButtonGroup, NIcon, NRadioButton, NRadioGroup, NSwitch, useDialog, useMessage } from "naive-ui";
 import { AddOutline, DownloadOutline, FlashOutline, GridOutline, RemoveOutline, ReorderThreeOutline, SettingsOutline, TrashOutline } from "@vicons/ionicons5";
 import PageHeader from "@/components/PageHeader.vue";
 import { useRouteMeeting } from "@/composables/useRouteMeeting";
@@ -515,17 +515,27 @@ const sortedSeats = computed(() =>
   )
 );
 
+const seatAreaIndex = computed(() => {
+  const index = new Map<string, { name: string; seats: Seat[]; rows: Map<number, Seat[]>; rowCount: number; seatsPerRow: number }>();
+  for (const seat of sortedSeats.value) {
+    const name = seat.areaName || "A区";
+    let area = index.get(name);
+    if (!area) {
+      area = { name, seats: [], rows: new Map(), rowCount: 1, seatsPerRow: 1 };
+      index.set(name, area);
+    }
+    area.seats.push(seat);
+    area.rowCount = Math.max(area.rowCount, seat.rowNo);
+    area.seatsPerRow = Math.max(area.seatsPerRow, seat.seatNo);
+    const row = area.rows.get(seat.rowNo);
+    if (row) row.push(seat);
+    else area.rows.set(seat.rowNo, [seat]);
+  }
+  return index;
+});
+
 const areaGroups = computed(() => {
-  const names = Array.from(new Set(sortedSeats.value.map((seat) => seat.areaName || "A区")));
-  return names.map((name) => {
-    const seats = sortedSeats.value.filter((seat) => seat.areaName === name);
-    return {
-      name,
-      seats,
-      rowCount: Math.max(...seats.map((seat) => seat.rowNo), 1),
-      seatsPerRow: Math.max(...seats.map((seat) => seat.seatNo), 1)
-    };
-  });
+  return Array.from(seatAreaIndex.value.values());
 });
 
 const areaOptions = computed(() => [
@@ -545,9 +555,14 @@ watch(
 
 const stats = computed(() => {
   const total = store.currentSeats.length;
-  const assigned = store.currentSeats.filter((seat) => seat.status === "ASSIGNED" || seat.status === "CHECKED_IN").length;
-  const checkedIn = store.currentSeats.filter((seat) => seat.status === "CHECKED_IN").length;
-  const disabled = store.currentSeats.filter((seat) => seat.status === "DISABLED").length;
+  let assigned = 0;
+  let checkedIn = 0;
+  let disabled = 0;
+  for (const seat of store.currentSeats) {
+    if (seat.status === "ASSIGNED" || seat.status === "CHECKED_IN") assigned += 1;
+    if (seat.status === "CHECKED_IN") checkedIn += 1;
+    if (seat.status === "DISABLED") disabled += 1;
+  }
   return {
     total,
     assigned,
@@ -629,7 +644,7 @@ const selectedSeatAssigneeTypeLabel = computed(() => {
 const seatModalBusy = computed(() => assigningSeat.value || clearingSeat.value || togglingSeatStatus.value || lockingSeat.value || updatingSeatType.value || swappingSeat.value);
 
 function seatsByAreaRow(areaName: string, rowNo: number) {
-  return sortedSeats.value.filter((seat) => seat.areaName === areaName && seat.rowNo === rowNo);
+  return seatAreaIndex.value.get(areaName)?.rows.get(rowNo) || [];
 }
 
 function areaGridStyle(area: { seatsPerRow: number }) {
@@ -967,7 +982,7 @@ function layoutAreaSeatCount(draft: LayoutAreaDraft) {
 }
 
 function seatsForArea(areaName: string) {
-  return store.currentSeats.filter((seat) => seat.areaName === areaName);
+  return seatAreaIndex.value.get(areaName)?.seats || [];
 }
 
 function areaLookupName(draft: LayoutAreaDraft) {

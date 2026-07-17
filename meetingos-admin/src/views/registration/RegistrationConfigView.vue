@@ -202,8 +202,8 @@
 </template>
 
 <script setup lang="ts">
-import { computed, h, onMounted, ref, watch } from "vue";
-import { extractErrorMessage } from "@/api/http";
+import { computed, h, onBeforeUnmount, onMounted, ref, watch } from "vue";
+import { extractErrorMessage, isRequestCanceled } from "@/api/http";
 import { NDataTable, NIcon, NSelect, NSwitch, useMessage, type DropdownOption } from "naive-ui";
 import { AddOutline, CreateOutline, SparklesOutline } from "@vicons/ionicons5";
 import { useRouter } from "vue-router";
@@ -240,6 +240,7 @@ const pullSyncDataId = ref("");
 const bindingValidationStatus = ref<BindingValidationStatus>("");
 const bindingValidationMessage = ref("");
 const currentBinding = ref<TduckBindingDto | null>(null);
+let pullAllSyncController: AbortController | null = null;
 
 const redirectUrl = computed(() => (currentMeeting.value ? `${window.location.origin}/r/${currentMeeting.value.code}` : ""));
 const tduckFrontBaseUrl = computed(() => `${window.location.origin}/tduck`);
@@ -439,11 +440,18 @@ const logColumns = [
 ];
 
 watch(routeMeetingId, () => {
+  pullAllSyncController?.abort();
+  pullAllSyncController = null;
+  pullingAllSync.value = false;
   void syncRegistrationContext();
 }, { immediate: true });
 
 onMounted(() => {
   void searchTduckForms("");
+});
+
+onBeforeUnmount(() => {
+  pullAllSyncController?.abort();
 });
 
 async function saveBindingAndGenerateQr() {
@@ -633,9 +641,13 @@ async function pullAllSyncSubmissions() {
     message.warning("请先选择会议");
     return;
   }
+  pullAllSyncController?.abort();
+  const controller = new AbortController();
+  pullAllSyncController = controller;
   pullingAllSync.value = true;
   try {
-    const result = await store.pullAllTduckSync(store.currentMeetingId);
+    const result = await store.pullAllTduckSync(store.currentMeetingId, { signal: controller.signal });
+    if (controller.signal.aborted) return;
     const summary = result.message || `已扫描 ${result.scanned} 条，成功 ${result.success} 条，已同步跳过 ${result.duplicateIgnored} 条，失败 ${result.failed} 条`;
     if (result.failed > 0) {
       const failurePreview = result.failures
@@ -647,9 +659,13 @@ async function pullAllSyncSubmissions() {
     }
     message.success(summary);
   } catch (error) {
+    if (isRequestCanceled(error) || controller.signal.aborted) return;
     message.error(extractErrorMessage(error, "一键同步失败"));
   } finally {
-    pullingAllSync.value = false;
+    if (pullAllSyncController === controller) {
+      pullAllSyncController = null;
+      pullingAllSync.value = false;
+    }
   }
 }
 

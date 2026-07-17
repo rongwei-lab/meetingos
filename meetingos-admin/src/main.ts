@@ -2,37 +2,13 @@ import { createApp } from "vue";
 import { createPinia } from "pinia";
 import {
   NAlert,
-  NBadge,
   NButton,
-  NButtonGroup,
-  NCard,
-  NConfigProvider,
-  NDialogProvider,
-  NDivider,
-  NDrawer,
-  NDrawerContent,
-  NDropdown,
-  NEmpty,
   NForm,
   NFormItem,
   NIcon,
   NInput,
-  NInputNumber,
-  NMessageProvider,
-  NModal,
-  NPagination,
-  NPopover,
-  NRadioButton,
-  NRadioGroup,
-  NResult,
-  NSelect,
   NSpace,
-  NSpin,
-  NSwitch,
-  NTabPane,
-  NTabs,
-  NTag,
-  NTooltip
+  NSpin
 } from "naive-ui";
 import App from "./App.vue";
 import router from "./router";
@@ -50,39 +26,15 @@ const globalNaiveComponents = {
    * Naive UI 组件的内部 name 是 Button/Input/Form 这类无前缀名称，
    * 但模板里使用的是 <n-button>/<n-input>。这里必须按 NButton 这种注册名显式注册，
    * 否则 Vue 会把 n-input 等标签当成普通自定义元素，登录页就会出现“没有输入框”。
-   */
+  */
   NAlert,
-  NBadge,
   NButton,
-  NButtonGroup,
-  NCard,
-  NConfigProvider,
-  NDialogProvider,
-  NDivider,
-  NDrawer,
-  NDrawerContent,
-  NDropdown,
-  NEmpty,
   NForm,
   NFormItem,
   NIcon,
   NInput,
-  NInputNumber,
-  NMessageProvider,
-  NModal,
-  NPagination,
-  NPopover,
-  NRadioButton,
-  NRadioGroup,
-  NResult,
-  NSelect,
   NSpace,
-  NSpin,
-  NSwitch,
-  NTabPane,
-  NTabs,
-  NTag,
-  NTooltip
+  NSpin
 };
 
 Object.entries(globalNaiveComponents).forEach(([name, component]) => {

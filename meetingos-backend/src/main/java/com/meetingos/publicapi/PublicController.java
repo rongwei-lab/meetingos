@@ -103,6 +103,18 @@ public class PublicController {
         return ApiResponse.ok(publicQueryService.publicDinnerQueryResponse(queryRequest, clientIp(request), request.getHeader(HttpHeaders.USER_AGENT)));
     }
 
+    @PostMapping("/combined-query")
+    public ApiResponse<PublicCombinedQueryResponse> combinedQuery(@Valid @RequestBody PublicQueryRequest queryRequest,
+                                                                  HttpServletRequest request) {
+        publicRateLimitService.check(request);
+        publicCaptchaService.verifyAndConsume(queryRequest.captchaId(), queryRequest.captchaAnswer());
+        return ApiResponse.ok(publicQueryService.publicCombinedQueryResponse(
+                queryRequest,
+                clientIp(request),
+                request.getHeader(HttpHeaders.USER_AGENT)
+        ));
+    }
+
     @GetMapping("/checkin-code")
     public ApiResponse<Map<String, String>> checkinCode(@RequestParam Long meetingId, @RequestParam String attendeeCode) {
         String compact = "MEETINGOS-CHECKIN:" + meetingId + ":" + attendeeCode;

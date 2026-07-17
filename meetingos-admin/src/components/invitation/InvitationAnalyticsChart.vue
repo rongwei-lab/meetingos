@@ -14,7 +14,7 @@ watch(() => props.data, renderChart, { deep: true });
 
 onMounted(async () => {
   if (!chartElement.value) return;
-  const echarts = await import("echarts");
+  const echarts = await import("@/utils/echarts");
   chart = echarts.init(chartElement.value);
   renderChart();
   window.addEventListener("resize", resizeChart, { passive: true });

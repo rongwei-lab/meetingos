@@ -12,6 +12,8 @@ import org.springframework.web.client.RestClientResponseException;
 import org.springframework.web.util.HtmlUtils;
 import org.springframework.web.util.UriComponentsBuilder;
 
+import java.net.URLEncoder;
+import java.nio.charset.StandardCharsets;
 import java.time.Duration;
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
@@ -62,9 +64,13 @@ public class TduckClient {
                 .toUriString();
         Map<String, Object> response = withTokenRetry(token -> requestGet(url, token));
         Object data = unwrapTduckData(response);
+        String registrationBaseUrl = trimTrailingSlash(settingsService.tduckFrontUrl()) + "/s/";
+        /*
+         * 列表接口返回的字段数量可能为 0，表示该 TDuck 版本没有在列表中提供计数。
+         * 不再为每一行补调 entity + details 两个接口；真正绑定和同步字段时仍会读取完整详情并校验。
+         */
         return extractRows(data).stream()
-                .map(this::toFormOption)
-                .map(this::withItemCount)
+                .map(row -> toFormOption(row, registrationBaseUrl))
                 .filter(option -> StringUtils.hasText(option.formKey()))
                 .toList();
     }
@@ -448,6 +454,10 @@ public class TduckClient {
     }
 
     private TduckFormOption toFormOption(Map<String, Object> row) {
+        return toFormOption(row, null);
+    }
+
+    private TduckFormOption toFormOption(Map<String, Object> row, String registrationBaseUrl) {
         String formKey = firstText(row, "formKey", "key", "id");
         return new TduckFormOption(
                 formKey,
@@ -455,31 +465,10 @@ public class TduckClient {
                 firstText(row, "status", "state"),
                 isPublished(row),
                 firstInt(row, "itemCount", "fieldCount", "itemsCount", "formItemCount"),
-                StringUtils.hasText(formKey) ? registrationUrlFor(formKey) : ""
+                StringUtils.hasText(formKey)
+                        ? (registrationBaseUrl == null ? registrationUrlFor(formKey) : registrationBaseUrl + formKey)
+                        : ""
         );
-    }
-
-    private TduckFormOption withItemCount(TduckFormOption option) {
-        if (!StringUtils.hasText(option.formKey()) || option.itemCount() > 0) {
-            return option;
-        }
-        try {
-            Optional<TduckFormDetails> details = formDetails(option.formKey());
-            if (details.isEmpty()) {
-                return option;
-            }
-            TduckFormDetails detail = details.get();
-            return new TduckFormOption(
-                    option.formKey(),
-                    StringUtils.hasText(option.formName()) ? option.formName() : detail.formName(),
-                    option.status(),
-                    option.published(),
-                    detail.itemCount(),
-                    option.registrationUrl()
-            );
-        } catch (TduckClientException ex) {
-            return option;
-        }
     }
 
     private TduckFormFieldOption toFieldOption(Map<String, Object> row) {
@@ -634,14 +623,20 @@ public class TduckClient {
             base = trimTrailingSlash(settingsService.current().baseUrl()) + "/api/integrations/tduck/webhook";
         }
         /*
-         * 默认回调地址不再自动拼接 token，避免密钥进入浏览器、代理和 Nginx 访问日志。
-         * 若 TDuck 社区版部署确实无法设置自定义 header/HMAC，可在 MEETINGOS_WEBHOOK_INTERNAL_URL
-         * 中显式配置仅内网可达的 ?token=... 兼容地址。
+         * 当前 TDuck 社区版 Webhook 配置只支持事件类型，不能保存自定义请求头或生成 HMAC。
+         * 因此必须把部署级 token 作为内部回调的 query 参数传递；边界 Nginx 的安全日志
+         * 只记录 $uri、不记录 query string，避免密钥写入访问日志。TDuck 配置只应由受控管理员访问。
          */
+        String webhookToken = settingsService.webhookToken();
+        if (!StringUtils.hasText(webhookToken)) {
+            throw new TduckClientException("未配置 TDUCK_WEBHOOK_TOKEN，无法安全配置 Webhook");
+        }
+        // token 常为 Base64 字符串，必须编码 +、/、=；否则 Servlet 会把 + 解成空格导致验签失败。
+        String encodedToken = URLEncoder.encode(webhookToken.trim(), StandardCharsets.UTF_8);
         return UriComponentsBuilder
                 .fromHttpUrl(base)
-                .build()
-                .encode()
+                .replaceQueryParam("token", encodedToken)
+                .build(true)
                 .toUriString();
     }
 

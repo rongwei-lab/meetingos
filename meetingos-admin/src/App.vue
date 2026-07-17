@@ -11,15 +11,20 @@
 <script setup lang="ts">
 import { computed, onMounted } from "vue";
 import { NConfigProvider, NDialogProvider, NMessageProvider, dateZhCN, zhCN, type GlobalThemeOverrides } from "naive-ui";
-import { useMeetingStore } from "@/stores/meeting";
+import { http, unwrapApi } from "@/api/http";
 import { usePreferenceStore } from "@/stores/preferences";
+import { applyDocumentBranding, type DocumentBranding } from "@/utils/documentBranding";
 
 const preferences = usePreferenceStore();
-const meetingStore = useMeetingStore();
 preferences.initTheme();
 
 onMounted(() => {
-  void meetingStore.loadBranding();
+  /* 文档标题只依赖轻量公开接口，避免 App 首屏静态加载完整会议业务 store。 */
+  void http.get<DocumentBranding>("/public/branding")
+    .then((response) => applyDocumentBranding(unwrapApi(response)))
+    .catch(() => {
+      // 品牌接口不可用时保留 index.html 的默认标题，不阻断页面主流程。
+    });
 });
 
 const themeOverrides = computed<GlobalThemeOverrides>(() => {

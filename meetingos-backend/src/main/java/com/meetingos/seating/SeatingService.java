@@ -13,15 +13,20 @@ import org.springframework.transaction.annotation.Transactional;
 
 import java.util.ArrayList;
 import java.util.Comparator;
+import java.util.EnumMap;
+import java.util.EnumSet;
 import java.util.HashMap;
 import java.util.HashSet;
+import java.util.IdentityHashMap;
 import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
+import java.util.NavigableMap;
 import java.util.Objects;
-import java.util.Optional;
 import java.util.Set;
+import java.util.TreeMap;
+import java.util.TreeSet;
 import java.util.stream.Collectors;
 
 @Service
@@ -47,6 +52,7 @@ public class SeatingService {
 
     @Transactional
     public List<Seat> createLayout(SeatLayoutRequest request) {
+        validateLayoutSize(request);
         Meeting meeting = meetingRepository.findById(request.meetingId())
                 .orElseThrow(() -> BusinessException.notFound("会议不存在"));
         String areaName = normalizeAreaName(request.areaName());
@@ -109,6 +115,21 @@ public class SeatingService {
         return seatRepository.findByMeetingIdAndAreaNameOrderByRowNoAscSeatNoAsc(request.meetingId(), areaName);
     }
 
+    private void validateLayoutSize(SeatLayoutRequest request) {
+        long totalSeats = (long) request.rowCount() * request.seatsPerRow();
+        if (request.rowCount() < 1
+                || request.rowCount() > SeatLayoutRequest.MAX_ROWS
+                || request.seatsPerRow() < 1
+                || request.seatsPerRow() > SeatLayoutRequest.MAX_SEATS_PER_ROW
+                || totalSeats > SeatLayoutRequest.MAX_SEATS_PER_AREA) {
+            throw BusinessException.badRequest("单个区域最多支持 80 排、每排 80 座（共 6400 座）");
+        }
+        if (request.disabledSeatCodes() != null
+                && request.disabledSeatCodes().size() > SeatLayoutRequest.MAX_SEATS_PER_AREA) {
+            throw BusinessException.badRequest("禁用座位数量不能超过 6400");
+        }
+    }
+
     @Transactional
     public void deleteArea(Long meetingId, String areaName) {
         if (areaName == null || areaName.isBlank()) {
@@ -160,6 +181,7 @@ public class SeatingService {
                 .filter(seat -> !seat.isLocked())
                 .filter(seat -> !assignedBySeat.containsKey(seat.getId()))
                 .toList();
+        SeatAvailabilityIndex availability = new SeatAvailabilityIndex(availableSeats);
 
         List<String> warnings = new ArrayList<>();
         int assigned = 0;
@@ -171,9 +193,9 @@ public class SeatingService {
                             attendee -> attendee.getOrganization() == null ? "" : attendee.getOrganization(),
                             LinkedHashMap::new,
                             Collectors.toList()
-                    ));
+            ));
             for (List<Attendee> group : byOrg.values()) {
-                List<Seat> reserved = reserveSeatsForGroup(typeEntry.getKey(), group.size(), availableSeats);
+                List<Seat> reserved = availability.reserve(typeEntry.getKey(), group.size());
                 if (reserved.isEmpty()) {
                     warnings.add("座位不足，未能安排: " + group.stream().map(Attendee::getName).collect(Collectors.joining(",")));
                     continue;
@@ -181,9 +203,9 @@ public class SeatingService {
                 int assignable = Math.min(group.size(), reserved.size());
                 for (int i = 0; i < assignable; i++) {
                     saveAssignment(meeting, group.get(i), reserved.get(i), false);
+                    availability.remove(reserved.get(i));
                     assigned++;
                 }
-                availableSeats = removeSeats(availableSeats, reserved.subList(0, assignable));
                 if (assignable < group.size()) {
                     warnings.add("座位不足，部分同单位人员未排座: " + group.get(0).getOrganization());
                 }
@@ -364,49 +386,6 @@ public class SeatingService {
         return result;
     }
 
-    private List<Seat> reserveSeatsForGroup(AttendeeType attendeeType, int groupSize, List<Seat> availableSeats) {
-        List<SeatType> preferredTypes = preferredSeatTypes(attendeeType);
-        for (SeatType type : preferredTypes) {
-            List<Seat> typedSeats = availableSeats.stream()
-                    .filter(seat -> seat.getSeatType() == type)
-                    .sorted(Comparator.comparingInt(Seat::getRowNo).thenComparingInt(Seat::getSeatNo))
-                    .toList();
-            Optional<List<Seat>> contiguous = findContiguousSeats(typedSeats, groupSize);
-            if (contiguous.isPresent()) {
-                return contiguous.get();
-            }
-        }
-
-        // 连续座位不足时降级为顺序座位，保证尽量提高排座完成率；未覆盖管理员手动座位和锁定/禁用座位。
-        return availableSeats.stream()
-                .filter(seat -> preferredTypes.contains(seat.getSeatType()))
-                .sorted(Comparator.comparingInt(Seat::getRowNo).thenComparingInt(Seat::getSeatNo))
-                .limit(groupSize)
-                .toList();
-    }
-
-    private Optional<List<Seat>> findContiguousSeats(List<Seat> seats, int size) {
-        Map<Integer, List<Seat>> byRow = seats.stream()
-                .collect(Collectors.groupingBy(Seat::getRowNo, LinkedHashMap::new, Collectors.toList()));
-        for (List<Seat> rowSeats : byRow.values()) {
-            List<Seat> sorted = rowSeats.stream().sorted(Comparator.comparingInt(Seat::getSeatNo)).toList();
-            for (int start = 0; start <= sorted.size() - size; start++) {
-                List<Seat> window = sorted.subList(start, start + size);
-                boolean continuous = true;
-                for (int i = 1; i < window.size(); i++) {
-                    if (window.get(i).getSeatNo() != window.get(i - 1).getSeatNo() + 1) {
-                        continuous = false;
-                        break;
-                    }
-                }
-                if (continuous) {
-                    return Optional.of(new ArrayList<>(window));
-                }
-            }
-        }
-        return Optional.empty();
-    }
-
     private List<SeatType> preferredSeatTypes(AttendeeType attendeeType) {
         return switch (attendeeType) {
             case VIP -> List.of(SeatType.VIP, SeatType.GUEST, SeatType.NORMAL);
@@ -431,9 +410,98 @@ public class SeatingService {
                         Comparator.nullsLast(Comparator.naturalOrder()));
     }
 
-    private List<Seat> removeSeats(List<Seat> availableSeats, List<Seat> usedSeats) {
-        Set<Long> usedIds = usedSeats.stream().map(Seat::getId).collect(Collectors.toSet());
-        return availableSeats.stream().filter(seat -> !usedIds.contains(seat.getId())).toList();
+    /**
+     * 自动排座期间维护按类型、排号和座号组织的可变索引。单位很多且每组只有一人时，
+     * 取下一个座位和删除已用座位均为对数复杂度，避免每组重新扫描、排序并复制全量列表。
+     */
+    private final class SeatAvailabilityIndex {
+        private final Comparator<Seat> seatOrder;
+        private final TreeSet<Seat> allSeats;
+        private final Map<SeatType, NavigableMap<Integer, TreeSet<Seat>>> rowsByType = new EnumMap<>(SeatType.class);
+
+        private SeatAvailabilityIndex(List<Seat> seats) {
+            Map<Seat, Integer> sourceOrder = new IdentityHashMap<>();
+            for (int index = 0; index < seats.size(); index++) {
+                sourceOrder.put(seats.get(index), index);
+            }
+            this.seatOrder = Comparator.comparingInt(Seat::getRowNo)
+                    .thenComparingInt(Seat::getSeatNo)
+                    .thenComparingInt(sourceOrder::get);
+            this.allSeats = new TreeSet<>(seatOrder);
+            for (Seat seat : seats) {
+                allSeats.add(seat);
+                if (seat.getSeatType() == null) {
+                    continue;
+                }
+                rowsByType.computeIfAbsent(seat.getSeatType(), ignored -> new TreeMap<>())
+                        .computeIfAbsent(seat.getRowNo(), ignored -> new TreeSet<>(seatOrder))
+                        .add(seat);
+            }
+        }
+
+        private List<Seat> reserve(AttendeeType attendeeType, int groupSize) {
+            List<SeatType> preferredTypes = preferredSeatTypes(attendeeType);
+            for (SeatType type : preferredTypes) {
+                List<Seat> contiguous = contiguous(type, groupSize);
+                if (!contiguous.isEmpty()) {
+                    return contiguous;
+                }
+            }
+
+            // 连续座位不足时仍按原规则合并所有可接受类型，再按排号和座号取前 N 个。
+            Set<SeatType> acceptedTypes = EnumSet.copyOf(preferredTypes);
+            List<Seat> fallback = new ArrayList<>(Math.min(groupSize, allSeats.size()));
+            for (Seat seat : allSeats) {
+                if (acceptedTypes.contains(seat.getSeatType())) {
+                    fallback.add(seat);
+                    if (fallback.size() == groupSize) {
+                        break;
+                    }
+                }
+            }
+            return fallback;
+        }
+
+        private List<Seat> contiguous(SeatType type, int size) {
+            NavigableMap<Integer, TreeSet<Seat>> rows = rowsByType.get(type);
+            if (rows == null) {
+                return List.of();
+            }
+            for (TreeSet<Seat> rowSeats : rows.values()) {
+                List<Seat> run = new ArrayList<>(Math.min(size, rowSeats.size()));
+                Integer previousSeatNo = null;
+                for (Seat seat : rowSeats) {
+                    if (previousSeatNo == null || seat.getSeatNo() != previousSeatNo + 1) {
+                        run.clear();
+                    }
+                    run.add(seat);
+                    if (run.size() == size) {
+                        return new ArrayList<>(run);
+                    }
+                    previousSeatNo = seat.getSeatNo();
+                }
+            }
+            return List.of();
+        }
+
+        private void remove(Seat seat) {
+            allSeats.remove(seat);
+            SeatType type = seat.getSeatType();
+            if (type == null) {
+                return;
+            }
+            NavigableMap<Integer, TreeSet<Seat>> rows = rowsByType.get(type);
+            if (rows == null) {
+                return;
+            }
+            TreeSet<Seat> rowSeats = rows.get(seat.getRowNo());
+            if (rowSeats != null) {
+                rowSeats.remove(seat);
+                if (rowSeats.isEmpty()) {
+                    rows.remove(seat.getRowNo());
+                }
+            }
+        }
     }
 
     private String normalizeAreaName(String areaName) {

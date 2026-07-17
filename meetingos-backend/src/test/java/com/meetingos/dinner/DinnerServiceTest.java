@@ -24,6 +24,7 @@ import org.springframework.web.multipart.MultipartFile;
 
 import java.io.ByteArrayOutputStream;
 import java.util.List;
+import java.util.Map;
 import java.util.Optional;
 
 import static org.assertj.core.api.Assertions.assertThat;
@@ -31,6 +32,7 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.inOrder;
 import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
@@ -40,6 +42,7 @@ class DinnerServiceTest {
     private AttendeeRepository attendeeRepository;
     private DinnerAssignmentRepository dinnerAssignmentRepository;
     private DinnerTableRepository dinnerTableRepository;
+    private OperationLogService operationLogService;
     private SystemSettingsService systemSettingsService;
     private DinnerService dinnerService;
     private Meeting meeting;
@@ -50,7 +53,7 @@ class DinnerServiceTest {
         attendeeRepository = mock(AttendeeRepository.class);
         dinnerAssignmentRepository = mock(DinnerAssignmentRepository.class);
         dinnerTableRepository = mock(DinnerTableRepository.class);
-        OperationLogService operationLogService = mock(OperationLogService.class);
+        operationLogService = mock(OperationLogService.class);
         systemSettingsService = mock(SystemSettingsService.class);
         dinnerService = new DinnerService(
                 meetingRepository,
@@ -178,6 +181,33 @@ class DinnerServiceTest {
         assertThat(meeting.getDinnerVenue()).isEqualTo("三层宴会厅");
         assertThat(meeting.getDinnerTime()).isEqualTo("18:30");
         assertThat(existing.getRemark()).isEqualTo("调整");
+        var expectedLogDetails = Map.<String, Object>of(
+                "meetingId", 1L,
+                "attendeeId", 11L,
+                "attendeeName", "张三",
+                "oldTableNo", "1号桌",
+                "newTableNo", "8号桌",
+                "source", "IMPORT",
+                "remark", "调整"
+        );
+        verify(operationLogService).recordWithinTransaction(
+                "DINNER_ASSIGNMENT_CHANGE",
+                "DINNER",
+                "11",
+                true,
+                "晚宴桌号变更",
+                null,
+                expectedLogDetails
+        );
+        verify(operationLogService, never()).record(
+                "DINNER_ASSIGNMENT_CHANGE",
+                "DINNER",
+                "11",
+                true,
+                "晚宴桌号变更",
+                null,
+                expectedLogDetails
+        );
     }
 
     @Test

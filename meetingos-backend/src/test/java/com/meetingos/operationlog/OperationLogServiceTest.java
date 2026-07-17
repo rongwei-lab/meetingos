@@ -1,12 +1,15 @@
 package com.meetingos.operationlog;
 
 import com.meetingos.security.ClientIpResolver;
+import jakarta.servlet.http.HttpServletRequest;
 import org.junit.jupiter.api.Test;
 import org.mockito.ArgumentCaptor;
 import org.springframework.data.domain.PageImpl;
 import org.springframework.data.domain.Pageable;
 import org.springframework.data.domain.Sort;
 import org.springframework.data.jpa.domain.Specification;
+import org.springframework.transaction.annotation.Propagation;
+import org.springframework.transaction.annotation.Transactional;
 
 import java.util.List;
 import java.util.Map;
@@ -21,6 +24,35 @@ import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.when;
 
 class OperationLogServiceTest {
+
+    @Test
+    void businessLogJoinsCallerTransactionWhileAuditLogKeepsIndependentTransaction() throws NoSuchMethodException {
+        Transactional businessLogTransaction = OperationLogService.class.getMethod(
+                "recordWithinTransaction",
+                String.class,
+                String.class,
+                String.class,
+                boolean.class,
+                String.class,
+                HttpServletRequest.class,
+                Map.class
+        ).getAnnotation(Transactional.class);
+        Transactional auditLogTransaction = OperationLogService.class.getMethod(
+                "record",
+                String.class,
+                String.class,
+                String.class,
+                boolean.class,
+                String.class,
+                HttpServletRequest.class,
+                Map.class
+        ).getAnnotation(Transactional.class);
+
+        assertThat(businessLogTransaction).isNotNull();
+        assertThat(businessLogTransaction.propagation()).isEqualTo(Propagation.MANDATORY);
+        assertThat(auditLogTransaction).isNotNull();
+        assertThat(auditLogTransaction.propagation()).isEqualTo(Propagation.REQUIRES_NEW);
+    }
 
     @Test
     void recordTruncatesMessageBeforeSaving() {

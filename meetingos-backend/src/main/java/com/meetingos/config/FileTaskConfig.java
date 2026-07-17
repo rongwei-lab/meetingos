@@ -11,6 +11,8 @@ import org.springframework.scheduling.annotation.EnableScheduling;
 import org.springframework.scheduling.concurrent.ThreadPoolTaskExecutor;
 import org.springframework.security.task.DelegatingSecurityContextAsyncTaskExecutor;
 
+import java.util.concurrent.ThreadPoolExecutor;
+
 /**
  * 导入、导出文件任务共用的有界执行器。
  *
@@ -44,10 +46,34 @@ public class FileTaskConfig {
         return executor;
     }
 
+    /**
+     * TDuck 全量拉取包含大量串行远程请求，不能长期占用导入、导出的文件任务线程。
+     * 独立有界队列只隔离调度资源；队列拒绝必须抛回调度服务释放进程内占位，数据库中的
+     * PENDING 状态和恢复器仍负责容量释放后的重新派发。
+     */
+    @Bean(name = "tduckPullSyncThreadPool")
+    public ThreadPoolTaskExecutor tduckPullSyncThreadPool() {
+        ThreadPoolTaskExecutor executor = new ThreadPoolTaskExecutor();
+        executor.setCorePoolSize(2);
+        executor.setMaxPoolSize(2);
+        executor.setQueueCapacity(32);
+        executor.setThreadNamePrefix("meetingos-tduck-pull-");
+        executor.setWaitForTasksToCompleteOnShutdown(true);
+        executor.setAwaitTerminationSeconds(30);
+        executor.setRejectedExecutionHandler(new ThreadPoolExecutor.AbortPolicy());
+        return executor;
+    }
+
     @Bean(name = "fileTaskExecutor")
     public AsyncTaskExecutor fileTaskExecutor(
             @Qualifier("fileTaskThreadPool") ThreadPoolTaskExecutor executor) {
         // 保留提交管理员的审计身份，并在任务结束后清理线程上下文，避免线程复用造成身份串用。
+        return new DelegatingSecurityContextAsyncTaskExecutor(executor);
+    }
+
+    @Bean(name = "tduckPullSyncExecutor")
+    public AsyncTaskExecutor tduckPullSyncExecutor(
+            @Qualifier("tduckPullSyncThreadPool") ThreadPoolTaskExecutor executor) {
         return new DelegatingSecurityContextAsyncTaskExecutor(executor);
     }
 }

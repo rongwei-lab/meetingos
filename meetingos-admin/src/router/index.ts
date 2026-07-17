@@ -1,11 +1,11 @@
 import { createRouter, createWebHistory } from "vue-router";
 import { useAuthStore } from "@/stores/auth";
-import { useMeetingStore } from "@/stores/meeting";
+import { currentMeetingIdFromStorage } from "@/utils/currentMeeting";
 
 function redirectToCurrentMeeting(suffix: string) {
   return () => {
-    const meetingStore = useMeetingStore();
-    return meetingStore.currentMeetingId ? `/meetings/${meetingStore.currentMeetingId}/${suffix}` : "/meetings";
+    const meetingId = currentMeetingIdFromStorage();
+    return meetingId ? `/meetings/${meetingId}/${suffix}` : "/meetings";
   };
 }
 

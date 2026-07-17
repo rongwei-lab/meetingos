@@ -2,6 +2,8 @@ package com.meetingos.room;
 
 import com.meetingos.attendee.Attendee;
 import com.meetingos.attendee.AttendeeRepository;
+import com.meetingos.common.ImportRowTransactionRunner;
+import com.meetingos.common.TableRow;
 import com.meetingos.meeting.Meeting;
 import com.meetingos.meeting.MeetingRepository;
 import com.meetingos.operationlog.OperationLogService;
@@ -15,17 +17,23 @@ import org.springframework.transaction.annotation.Transactional;
 import org.springframework.web.multipart.MultipartFile;
 
 import java.util.List;
+import java.util.Map;
 import java.util.Optional;
+import java.util.function.Supplier;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.Mockito.inOrder;
 import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.never;
+import static org.mockito.Mockito.times;
+import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 class RoomServiceTest {
 
     private RoomRepository roomRepository;
     private AttendeeRepository attendeeRepository;
+    private OperationLogService operationLogService;
     private RoomService roomService;
     private Meeting meeting;
 
@@ -33,12 +41,13 @@ class RoomServiceTest {
     void setUp() {
         roomRepository = mock(RoomRepository.class);
         attendeeRepository = mock(AttendeeRepository.class);
+        operationLogService = mock(OperationLogService.class);
         roomService = new RoomService(
                 mock(MeetingRepository.class),
                 roomRepository,
                 attendeeRepository,
                 mock(EntityManager.class),
-                mock(OperationLogService.class),
+                operationLogService,
                 mock(SystemSettingsService.class)
         );
         meeting = new Meeting();
@@ -67,6 +76,33 @@ class RoomServiceTest {
         assertThat(attendee.getRoomRemark()).isEqualTo("靠窗");
         assertThat(target.getStatus()).isEqualTo(RoomStatus.ASSIGNED);
         assertThat(previous.getStatus()).isEqualTo(RoomStatus.AVAILABLE);
+        Map<String, Object> expectedLogDetails = Map.of(
+                "meetingId", 1L,
+                "attendeeId", 11L,
+                "attendeeName", "张三",
+                "oldRoomNo", "B102",
+                "newRoomNo", "A101",
+                "source", "MANUAL",
+                "remark", "靠窗"
+        );
+        verify(operationLogService).recordWithinTransaction(
+                "ROOM_ASSIGNMENT_CHANGE",
+                "ROOM",
+                "11",
+                true,
+                "房间分配变更",
+                null,
+                expectedLogDetails
+        );
+        verify(operationLogService, never()).record(
+                "ROOM_ASSIGNMENT_CHANGE",
+                "ROOM",
+                "11",
+                true,
+                "房间分配变更",
+                null,
+                expectedLogDetails
+        );
     }
 
     @Test
@@ -109,6 +145,34 @@ class RoomServiceTest {
     void capacityWriteTransactionsUseReadCommittedIsolation() throws NoSuchMethodException {
         assertReadCommitted("assign", AssignRoomRequest.class);
         assertReadCommitted("clearAssignment", Long.class);
+    }
+
+    @Test
+    void cleanRoomImportUsesSingleTransactionForBatch() {
+        MeetingRepository meetingRepository = mock(MeetingRepository.class);
+        ImportRowTransactionRunner transactionRunner = mock(ImportRowTransactionRunner.class);
+        when(meetingRepository.findById(1L)).thenReturn(Optional.of(meeting));
+        when(transactionRunner.supportsBatchTransactions()).thenReturn(true);
+        when(transactionRunner.execute(org.mockito.ArgumentMatchers.<Supplier<Object>>any()))
+                .thenAnswer(invocation -> ((Supplier<?>) invocation.getArgument(0)).get());
+        RoomService batchedService = new RoomService(
+                meetingRepository,
+                roomRepository,
+                attendeeRepository,
+                mock(EntityManager.class),
+                mock(OperationLogService.class),
+                mock(SystemSettingsService.class),
+                transactionRunner
+        );
+
+        var result = batchedService.importRoomRows(1L, List.of(
+                new TableRow(2, Map.of("房间号", "A101")),
+                new TableRow(3, Map.of("房间号", "A102"))
+        ), (processed, imported, failed) -> {
+        });
+
+        assertThat(result.importedRows()).isEqualTo(2);
+        verify(transactionRunner, times(1)).execute(org.mockito.ArgumentMatchers.<Supplier<Object>>any());
     }
 
     private void assertReadCommitted(String methodName, Class<?>... parameterTypes) throws NoSuchMethodException {

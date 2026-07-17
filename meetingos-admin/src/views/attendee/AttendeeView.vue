@@ -90,8 +90,9 @@
         :pagination="{ pageSize: 10 }"
         :scroll-x="tableScrollX"
       />
-      <div v-else class="mobile-card-list attendee-card-list">
-        <article v-for="attendee in filteredAttendees" :key="attendee.id" class="mobile-data-card attendee-mobile-card">
+      <div v-else class="mobile-paged-list">
+        <div class="mobile-card-list attendee-card-list">
+        <article v-for="attendee in mobileAttendees" :key="attendee.id" class="mobile-data-card attendee-mobile-card">
           <div class="mobile-card-head">
             <button type="button" class="attendee-card-title" @click="openDetail(attendee)">
               <strong>{{ attendee.name || "-" }}</strong>
@@ -169,6 +170,17 @@
           </div>
         </article>
         <n-empty v-if="!filteredAttendees.length" description="没有匹配的参会人" />
+        </div>
+        <n-pagination
+          v-if="mobileAttendeeItemCount > mobileAttendeePageSize"
+          v-model:page="mobileAttendeePage"
+          class="mobile-pagination"
+          :page-count="mobileAttendeePageCount"
+          :page-size="mobileAttendeePageSize"
+          :item-count="mobileAttendeeItemCount"
+          :page-slot="5"
+          aria-label="参会人列表分页"
+        />
       </div>
     </n-card>
 
@@ -550,7 +562,7 @@
 
 <script setup lang="ts">
 import type { SelectOption, UploadCustomRequestOptions } from "naive-ui";
-import { NButton, NDataTable, NDynamicTags, NForm, NFormItem, NModal, NSpace, NTag, NUpload, useDialog, useMessage } from "naive-ui";
+import { NButton, NDataTable, NDivider, NDynamicTags, NForm, NFormItem, NModal, NPagination, NSpace, NSwitch, NTag, NUpload, useDialog, useMessage } from "naive-ui";
 import { TimeOutline } from "@vicons/ionicons5";
 import { computed, defineAsyncComponent, h, nextTick, onBeforeUnmount, onMounted, ref, watch } from "vue";
 import { useRoute } from "vue-router";
@@ -561,6 +573,7 @@ import PageHeader from "@/components/PageHeader.vue";
 import StatusTag from "@/components/StatusTag.vue";
 import { useExportTaskDownload } from "@/composables/useExportTaskDownload";
 import { useImportTaskFlow } from "@/composables/useImportTaskFlow";
+import { useClientPagination } from "@/composables/useClientPagination";
 import { useRouteMeeting } from "@/composables/useRouteMeeting";
 import { useIsMobile } from "@/composables/useResponsive";
 import type { MeetingPrintFieldSettingsDto, TduckFieldMappingDto } from "@/stores/meeting";
@@ -774,6 +787,17 @@ const localFilteredAttendees = computed(() =>
 );
 
 const filteredAttendees = computed(() => remoteFilteredAttendees.value || localFilteredAttendees.value);
+const {
+  page: mobileAttendeePage,
+  pageCount: mobileAttendeePageCount,
+  pageSize: mobileAttendeePageSize,
+  itemCount: mobileAttendeeItemCount,
+  visibleItems: mobileAttendees
+} = useClientPagination(
+  filteredAttendees,
+  20,
+  computed(() => [routeMeetingId.value, keyword.value, auditStatus.value, hasSeat.value, selectedTags.value.join("|")])
+);
 
 const defaultNameplateSizePreset = nameplateSizePresets.find((size) => size.value === "100x220") || nameplateSizePresets[0];
 

@@ -51,13 +51,14 @@
 
 <script setup lang="ts">
 import { computed, defineAsyncComponent, nextTick, onBeforeUnmount, onMounted, ref, shallowRef, watch } from "vue";
+import { NRadioButton, NRadioGroup } from "naive-ui";
 import PageHeader from "@/components/PageHeader.vue";
 import { useRouteMeeting } from "@/composables/useRouteMeeting";
 import { useMeetingStore, type StatisticsOverviewDto } from "@/stores/meeting";
 
 type RangeMode = "today" | "7d" | "30d" | "custom";
-type ChartInstance = import("echarts").ECharts;
-type EChartsModule = typeof import("echarts");
+type ChartInstance = import("@/utils/echarts").ChartInstance;
+type EChartsModule = typeof import("@/utils/echarts");
 
 const NDatePicker = defineAsyncComponent(() => import("naive-ui/es/date-picker").then((module) => module.NDatePicker));
 const store = useMeetingStore();
@@ -75,6 +76,8 @@ const customRange = ref<[number, number] | null>(null);
 const echartsModule = shallowRef<EChartsModule | null>(null);
 const trendChartRef = ref<HTMLDivElement | null>(null);
 const chartInstances: ChartInstance[] = [];
+let lastRenderedOverview: StatisticsOverviewDto | null = null;
+let chartRenderGeneration = 0;
 
 const activeRange = computed(() => {
   if (rangeMode.value === "custom" && customRange.value) {
@@ -154,7 +157,7 @@ const metricGroups = computed(() => {
 
 function loadStatisticsPage(meetingId = routeMeetingId.value) {
   if (!meetingId) return;
-  void store.loadStatisticsWithRange(meetingId, activeRange.value).then(renderCharts);
+  void store.loadStatisticsWithRange(meetingId, activeRange.value);
 }
 
 watch([routeMeetingId, activeRange], ([meetingId]) => {
@@ -167,27 +170,32 @@ watch(overview, () => {
 
 onMounted(() => {
   loadStatisticsPage();
+  void renderCharts();
   window.addEventListener("resize", resizeCharts);
 });
 
 onBeforeUnmount(() => {
+  chartRenderGeneration += 1;
   window.removeEventListener("resize", resizeCharts);
   chartInstances.splice(0).forEach((chart) => chart.dispose());
 });
 
 async function ensureEcharts() {
   if (!echartsModule.value) {
-    echartsModule.value = await import("echarts");
+    echartsModule.value = await import("@/utils/echarts");
   }
   return echartsModule.value;
 }
 
 async function renderCharts() {
-  await nextTick();
+  const generation = ++chartRenderGeneration;
   const data = overview.value;
-  if (!data) return;
+  if (!data || data === lastRenderedOverview) return;
+  await nextTick();
   const echarts = await ensureEcharts();
+  if (generation !== chartRenderGeneration || data !== overview.value) return;
   renderTrendChart(echarts, data);
+  lastRenderedOverview = data;
 }
 
 function chartFor(echarts: EChartsModule, element: HTMLDivElement | null) {

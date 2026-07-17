@@ -33,6 +33,8 @@ class InvitationEventRetentionServiceIntegrationTest {
     @Autowired
     private InvitationEventRetentionService retentionService;
     @Autowired
+    private InvitationAnalyticsService analyticsService;
+    @Autowired
     private EntityManager entityManager;
 
     @Test
@@ -66,6 +68,40 @@ class InvitationEventRetentionServiceIntegrationTest {
         assertThat(retained.getClickEvent()).isNull();
         assertThat(retained.getAttributionStatus()).isEqualTo(RegistrationAttributionStatus.ATTRIBUTED);
         assertThat(retained.getTduckDataId()).isEqualTo("retention-data-id");
+    }
+
+    @Test
+    void analyticsExecutesDatabaseAggregatesAndBoundedDetailProjection() {
+        LocalDateTime now = LocalDateTime.now();
+        Meeting meeting = saveExpiredMeeting(now);
+        MeetingInvitation invitation = saveInvitation(meeting);
+        MeetingInvitationVersion version = saveVersion(invitation);
+        InvitationShareLink shareLink = saveShareLink(meeting, invitation, version);
+        saveEvent(meeting, invitation, version, shareLink, InvitationEventType.PAGE_VIEW,
+                "analytics-page-view", now, null);
+        InvitationEvent click = saveEvent(meeting, invitation, version, shareLink, InvitationEventType.CTA_CLICK,
+                "analytics-cta-click", now.plusMinutes(1), "analytics-click-public-id");
+        saveAttribution(meeting, invitation, version, shareLink, click, now.plusMinutes(2));
+        entityManager.flush();
+        entityManager.clear();
+
+        InvitationApiModels.InvitationAnalyticsResponse response = analyticsService.analytics(
+                meeting.getId(), invitation.getId(), now.toLocalDate(), now.toLocalDate()
+        );
+
+        assertThat(response.pageViews()).isEqualTo(1);
+        assertThat(response.uniqueVisitors()).isEqualTo(1);
+        assertThat(response.ctaClicks()).isEqualTo(1);
+        assertThat(response.attributedRegistrations()).isEqualTo(1);
+        assertThat(response.daily()).singleElement().satisfies(metric ->
+                assertThat(metric.attributedRegistrations()).isEqualTo(1));
+        assertThat(response.channels()).singleElement().satisfies(metric -> {
+            assertThat(metric.pageViews()).isEqualTo(1);
+            assertThat(metric.attributedRegistrations()).isEqualTo(1);
+        });
+        assertThat(analyticsService.attributions(meeting.getId(), invitation.getId()))
+                .singleElement()
+                .satisfies(attribution -> assertThat(attribution.tduckDataId()).isEqualTo("retention-data-id"));
     }
 
     private Meeting saveExpiredMeeting(LocalDateTime now) {

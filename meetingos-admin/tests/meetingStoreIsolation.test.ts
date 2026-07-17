@@ -1,7 +1,7 @@
 import { createPinia, setActivePinia } from "pinia";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { http } from "../src/api/http";
-import { useMeetingStore, type StatisticsOverviewDto } from "../src/stores/meeting";
+import { clearMeetingRuntimeCaches, useMeetingStore, type StatisticsOverviewDto } from "../src/stores/meeting";
 import type { Attendee } from "../src/utils/types";
 
 function statistics(registrationCount: number): StatisticsOverviewDto {
@@ -28,6 +28,7 @@ function installLocalStorage() {
 describe("meeting store 会议隔离", () => {
   beforeEach(() => {
     vi.restoreAllMocks();
+    clearMeetingRuntimeCaches();
     installLocalStorage();
     setActivePinia(createPinia());
   });
@@ -147,6 +148,196 @@ describe("meeting store 会议隔离", () => {
       tags: "嘉宾"
     });
     expect(requestConfig.params).not.toHaveProperty("attendeeType");
+  });
+
+  it("参会人分页请求限制并发并只缓存最近两个会议", async () => {
+    let activeRequests = 0;
+    let peakRequests = 0;
+    vi.spyOn(http, "get").mockImplementation(async (_url, config) => {
+      const params = config?.params as { meetingId: number; page: number; size: number };
+      activeRequests += 1;
+      peakRequests = Math.max(peakRequests, activeRequests);
+      await new Promise((resolve) => setTimeout(resolve, params.page % 2 ? 4 : 1));
+      activeRequests -= 1;
+      return {
+        data: {
+          success: true,
+          code: "OK",
+          message: "success",
+          timestamp: "2026-07-16T00:00:00Z",
+          data: {
+            content: [{
+              id: params.meetingId * 100 + params.page,
+              name: `参会人${params.meetingId}-${params.page}`,
+              phone: "13800000000",
+              reviewStatus: "APPROVED"
+            }],
+            page: params.page,
+            size: params.size,
+            totalElements: 6,
+            totalPages: 6
+          }
+        }
+      } as never;
+    });
+    const store = useMeetingStore();
+
+    await store.loadAttendees("1");
+    await store.loadAttendees("2");
+    await store.loadAttendees("3");
+
+    expect(peakRequests).toBeLessThanOrEqual(4);
+    expect([...new Set(store.attendees.map((attendee) => attendee.meetingId))]).toEqual(["2", "3"]);
+    expect(store.loadedAttendeeMeetingIds).toEqual(["2", "3"]);
+    expect(store.attendees.filter((attendee) => attendee.meetingId === "3").map((attendee) => attendee.id)).toEqual([
+      "300", "301", "302", "303", "304", "305"
+    ]);
+  });
+
+  it("旧会议请求晚返回时不会淘汰当前会议缓存", async () => {
+    const completeRequest = new Map<number, () => void>();
+    vi.spyOn(http, "get").mockImplementation((_url, config) => {
+      const meetingId = Number((config?.params as { meetingId: number }).meetingId);
+      return new Promise((resolve) => {
+        completeRequest.set(meetingId, () => resolve({
+          data: {
+            success: true,
+            code: "OK",
+            message: "success",
+            timestamp: "2026-07-16T00:00:00Z",
+            data: {
+              content: [{
+                id: meetingId * 100,
+                name: `参会人${meetingId}`,
+                phone: "13800000000",
+                reviewStatus: "APPROVED"
+              }],
+              page: 0,
+              size: 200,
+              totalElements: 1,
+              totalPages: 1
+            }
+          }
+        } as never));
+      });
+    });
+    const store = useMeetingStore();
+
+    store.setCurrentMeetingId("1");
+    const first = store.loadAttendees("1");
+    store.setCurrentMeetingId("2");
+    const second = store.loadAttendees("2");
+    store.setCurrentMeetingId("3");
+    const current = store.loadAttendees("3");
+
+    completeRequest.get(3)?.();
+    await current;
+    completeRequest.get(1)?.();
+    await first;
+    completeRequest.get(2)?.();
+    await second;
+
+    expect(store.currentMeetingId).toBe("3");
+    expect([...new Set(store.attendees.map((attendee) => attendee.meetingId))]).toEqual(["3", "2"]);
+    expect(store.currentAttendees.map((attendee) => attendee.id)).toEqual(["300"]);
+    expect(store.loadedAttendeeMeetingIds).toEqual(["3", "2"]);
+  });
+
+  it("TDuck 一键同步会轮询异步任务并在终态后刷新关联数据", async () => {
+    vi.useFakeTimers();
+    try {
+      const post = vi.spyOn(http, "post").mockResolvedValue({
+        data: {
+          success: true,
+          code: "OK",
+          message: "success",
+          timestamp: "2026-07-16T00:00:00Z",
+          data: {
+            taskId: 88,
+            status: "PENDING",
+            progress: 0,
+            total: 10,
+            scanned: 0,
+            success: 0,
+            duplicateIgnored: 0,
+            failed: 0,
+            failures: [],
+            message: "等待同步"
+          }
+        }
+      } as never);
+      const get = vi.spyOn(http, "get").mockResolvedValue({
+        data: {
+          success: true,
+          code: "OK",
+          message: "success",
+          timestamp: "2026-07-16T00:00:01Z",
+          data: {
+            taskId: 88,
+            status: "COMPLETED",
+            progress: 100,
+            total: 10,
+            scanned: 10,
+            success: 8,
+            duplicateIgnored: 2,
+            failed: 0,
+            failures: [],
+            message: "同步完成"
+          }
+        }
+      } as never);
+      const store = useMeetingStore();
+      const loadAttendees = vi.spyOn(store, "loadAttendees").mockResolvedValue(undefined);
+      const loadSyncLogs = vi.spyOn(store, "loadSyncLogs").mockResolvedValue(undefined);
+      const loadStatistics = vi.spyOn(store, "loadStatistics").mockResolvedValue({} as StatisticsOverviewDto);
+
+      const resultPromise = store.pullAllTduckSync("1");
+      await vi.advanceTimersByTimeAsync(1_000);
+      const result = await resultPromise;
+
+      expect(post).toHaveBeenCalledWith("/admin/tduck/sync/pull/all", { meetingId: 1 }, { signal: undefined });
+      expect(get).toHaveBeenCalledWith("/admin/tduck/sync/pull/tasks/88", { params: { meetingId: 1 }, signal: undefined });
+      expect(result).toMatchObject({ status: "COMPLETED", scanned: 10, success: 8 });
+      expect(loadAttendees).toHaveBeenCalledWith("1");
+      expect(loadSyncLogs).toHaveBeenCalledWith("1");
+      expect(loadStatistics).toHaveBeenCalledWith("1");
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("旧后端缺少综合查询接口时只回退当前启用的独立查询", async () => {
+    const notFound = Object.assign(new Error("Request failed with status code 404"), {
+      isAxiosError: true,
+      response: { status: 404, data: "" }
+    });
+    const envelope = (data: unknown) => ({
+      data: {
+        success: true,
+        code: "OK",
+        message: "success",
+        timestamp: "2026-07-16T00:00:00Z",
+        data
+      }
+    });
+    const post = vi.spyOn(http, "post").mockImplementation(async (url) => {
+      if (url === "/public/combined-query") throw notFound;
+      if (url === "/public/seat-query") return envelope({ seatCode: "A-1" }) as never;
+      if (url === "/public/dinner-query") return envelope({ tableNo: "T-1" }) as never;
+      throw new Error(`unexpected URL: ${url}`);
+    });
+    const store = useMeetingStore();
+    const payload = { publicQueryToken: "token", values: { NAME: "张三" } as never };
+
+    const result = await store.publicCombinedQuery(payload, { queryTypes: ["SEAT", "DINNER"] });
+
+    expect(post.mock.calls.map(([url]) => url)).toEqual([
+      "/public/combined-query",
+      "/public/seat-query",
+      "/public/dinner-query"
+    ]);
+    expect(result).toMatchObject({ seat: { seatCode: "A-1" }, dinner: { tableNo: "T-1" } });
+    expect(result.room).toBeUndefined();
   });
 
   it("备注保存会修剪空白、支持清空并保留聚合状态", async () => {

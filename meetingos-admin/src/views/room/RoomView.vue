@@ -108,8 +108,9 @@
           <n-empty description="还没有可分配的房源" />
         </template>
       </n-data-table>
-      <div v-else class="mobile-card-list room-card-list">
-        <article v-for="room in filteredRooms" :key="room.id" class="mobile-data-card">
+      <div v-else class="mobile-paged-list">
+        <div class="mobile-card-list room-card-list">
+        <article v-for="room in mobileRooms" :key="room.id" class="mobile-data-card">
           <div class="mobile-card-head">
             <div class="mobile-card-title">
               <strong>{{ room.roomNo }}</strong>
@@ -140,6 +141,17 @@
           </div>
         </article>
         <n-empty v-if="!filteredRooms.length" description="还没有可分配的房源" />
+        </div>
+        <n-pagination
+          v-if="mobileRoomItemCount > mobileRoomPageSize"
+          v-model:page="mobileRoomPage"
+          class="mobile-pagination"
+          :page-count="mobileRoomPageCount"
+          :page-size="mobileRoomPageSize"
+          :item-count="mobileRoomItemCount"
+          :page-slot="5"
+          aria-label="房源列表分页"
+        />
       </div>
     </n-card>
 
@@ -179,8 +191,9 @@
           <n-empty description="暂无符合条件的参会人" />
         </template>
       </n-data-table>
-      <div v-else class="mobile-card-list assignment-card-list">
-        <article v-for="row in filteredRoomAttendeeRows" :key="row.attendeeId" class="mobile-data-card">
+      <div v-else class="mobile-paged-list">
+        <div class="mobile-card-list assignment-card-list">
+        <article v-for="row in mobileRoomAttendeeRows" :key="row.attendeeId" class="mobile-data-card">
           <div class="mobile-card-head">
             <div class="mobile-card-title">
               <strong>{{ row.attendeeName }}</strong>
@@ -209,6 +222,17 @@
           </div>
         </article>
         <n-empty v-if="!filteredRoomAttendeeRows.length" description="暂无符合条件的参会人" />
+        </div>
+        <n-pagination
+          v-if="mobileRoomAttendeeItemCount > mobileRoomAttendeePageSize"
+          v-model:page="mobileRoomAttendeePage"
+          class="mobile-pagination"
+          :page-count="mobileRoomAttendeePageCount"
+          :page-size="mobileRoomAttendeePageSize"
+          :item-count="mobileRoomAttendeeItemCount"
+          :page-slot="5"
+          aria-label="住宿参会人列表分页"
+        />
       </div>
     </n-card>
 
@@ -405,7 +429,7 @@
 
 <script setup lang="ts">
 import type { DataTableColumns, DropdownOption, SelectOption } from "naive-ui";
-import { NButton, NDataTable, NTag, NUpload, useMessage } from "naive-ui";
+import { NButton, NDataTable, NPagination, NTag, NUpload, useMessage } from "naive-ui";
 import {
   AddOutline,
   AlbumsOutline,
@@ -421,6 +445,7 @@ import ImportTaskHistoryModal from "@/components/ImportTaskHistoryModal.vue";
 import PageHeader from "@/components/PageHeader.vue";
 import { useExportTaskDownload } from "@/composables/useExportTaskDownload";
 import { useImportTaskFlow } from "@/composables/useImportTaskFlow";
+import { useClientPagination } from "@/composables/useClientPagination";
 import { useRouteMeeting } from "@/composables/useRouteMeeting";
 import { useIsMobile } from "@/composables/useResponsive";
 import type { CreateRoomPayload } from "@/stores/meeting";
@@ -682,6 +707,17 @@ const filteredRooms = computed(() => {
     );
   });
 });
+const {
+  page: mobileRoomPage,
+  pageCount: mobileRoomPageCount,
+  pageSize: mobileRoomPageSize,
+  itemCount: mobileRoomItemCount,
+  visibleItems: mobileRooms
+} = useClientPagination(
+  filteredRooms,
+  12,
+  computed(() => [routeMeetingId.value, filters.keyword, filters.hotelName, filters.roomType, filters.status])
+);
 
 const batchPreview = computed(() => {
   const roomNos = buildBatchRoomNos();
@@ -723,6 +759,17 @@ const filteredRoomAttendeeRows = computed(() => {
     );
   });
 });
+const {
+  page: mobileRoomAttendeePage,
+  pageCount: mobileRoomAttendeePageCount,
+  pageSize: mobileRoomAttendeePageSize,
+  itemCount: mobileRoomAttendeeItemCount,
+  visibleItems: mobileRoomAttendeeRows
+} = useClientPagination(
+  filteredRoomAttendeeRows,
+  20,
+  computed(() => [routeMeetingId.value, attendeeFilters.keyword, attendeeFilters.status, attendeeFilters.roomNo])
+);
 
 const roomColumns: DataTableColumns<Room> = [
   {
@@ -1111,11 +1158,11 @@ function currentMeetingName() {
 }
 
 function roomByNo(roomNo?: string) {
-  return roomNo ? store.currentRooms.find((room) => room.roomNo === roomNo) : undefined;
+  return roomNo ? store.currentRoomByNo.get(roomNo) : undefined;
 }
 
 function occupantsForRoom(room: Room) {
-  return store.currentAttendees.filter((attendee) => attendee.roomId === room.id || attendee.roomNo === room.roomNo);
+  return store.currentAttendeesByRoomId.get(room.id) || store.currentAttendeesByRoomNo.get(room.roomNo) || [];
 }
 
 function roomOccupancy(room: Room) {

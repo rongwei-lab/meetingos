@@ -75,6 +75,20 @@ class PublicCaptchaServiceTest {
         }
     }
 
+    @Test
+    void combinedQueryConsumesCaptchaAfterFirstSuccessfulUse() {
+        PublicCaptchaService service = new PublicCaptchaService(enabledProperties(), 10);
+        PublicCaptchaResponse captcha = service.create();
+        String answer = answer(captcha.question());
+
+        service.verifyAndConsume(captcha.captchaId(), answer);
+
+        assertThat(service.challengeCount()).isZero();
+        assertThatThrownBy(() -> service.verifyAndConsume(captcha.captchaId(), answer))
+                .isInstanceOf(BusinessException.class)
+                .hasMessageContaining("验证码已过期");
+    }
+
     private PublicQueryProperties enabledProperties() {
         PublicQueryProperties properties = new PublicQueryProperties();
         properties.setCaptchaEnabled(true);

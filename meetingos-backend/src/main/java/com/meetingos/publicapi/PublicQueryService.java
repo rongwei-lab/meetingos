@@ -1,6 +1,8 @@
 package com.meetingos.publicapi;
 
 import com.meetingos.attendee.Attendee;
+import com.meetingos.attendee.AttendeeMatchCandidate;
+import com.meetingos.attendee.AttendeePublicQueryCriteria;
 import com.meetingos.attendee.AttendeeRepository;
 import com.meetingos.attendee.ReviewStatus;
 import com.meetingos.common.BusinessException;
@@ -18,6 +20,8 @@ import com.meetingos.seating.SeatAssignment;
 import com.meetingos.seating.SeatAssignmentRepository;
 import com.meetingos.seating.SeatRepository;
 import com.meetingos.seating.SeatQueryResult;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -32,11 +36,13 @@ import java.util.Locale;
 import java.util.Map;
 import java.util.Objects;
 import java.util.Set;
+import java.util.function.Function;
 import java.util.stream.Collectors;
 
 @Service
 public class PublicQueryService {
 
+    private static final Logger log = LoggerFactory.getLogger(PublicQueryService.class);
     private static final List<PublicQueryField> DEFAULT_FIELDS = List.of(PublicQueryField.PHONE, PublicQueryField.NAME);
     private static final List<PublicQueryResultField> DEFAULT_RESULT_FIELDS = List.of(
             PublicQueryResultField.ATTENDEE_NAME,
@@ -92,16 +98,7 @@ public class PublicQueryService {
     private static final List<String> PUBLIC_PAGE_CONTENT_KEYS = List.of("entry", "combined", "seat", "room", "dinner", "checkin");
     private static final int ADMIN_QUERY_LIMIT = 20;
     private static final int PUBLIC_QUERY_RESULT_LIMIT = 20;
-    private static final List<PublicQueryField> CANDIDATE_FIELD_PRIORITY = List.of(
-            PublicQueryField.ATTENDEE_CODE,
-            PublicQueryField.PHONE,
-            PublicQueryField.PHONE_LAST4,
-            PublicQueryField.EMAIL,
-            PublicQueryField.NAME,
-            PublicQueryField.ORGANIZATION,
-            PublicQueryField.TITLE
-    );
-
+    private static final int PUBLIC_QUERY_CANDIDATE_LIMIT = PUBLIC_QUERY_RESULT_LIMIT + 1;
     private final MeetingRepository meetingRepository;
     private final AttendeeRepository attendeeRepository;
     private final SeatAssignmentRepository assignmentRepository;
@@ -110,6 +107,7 @@ public class PublicQueryService {
     private final DinnerService dinnerService;
     private final PublicQueryHistoryService historyService;
     private final PublicCaptchaService captchaService;
+    private final PublicQueryTransactionRunner transactionRunner;
 
     public PublicQueryService(MeetingRepository meetingRepository,
                               AttendeeRepository attendeeRepository,
@@ -118,7 +116,8 @@ public class PublicQueryService {
                               RoomRepository roomRepository,
                               DinnerService dinnerService,
                               PublicQueryHistoryService historyService,
-                              PublicCaptchaService captchaService) {
+                              PublicCaptchaService captchaService,
+                              PublicQueryTransactionRunner transactionRunner) {
         this.meetingRepository = meetingRepository;
         this.attendeeRepository = attendeeRepository;
         this.assignmentRepository = assignmentRepository;
@@ -127,6 +126,7 @@ public class PublicQueryService {
         this.dinnerService = dinnerService;
         this.historyService = historyService;
         this.captchaService = captchaService;
+        this.transactionRunner = transactionRunner;
     }
 
     @Transactional(readOnly = true)
@@ -154,7 +154,6 @@ public class PublicQueryService {
         return identifySingleMatchedAttendee(meeting, request.values());
     }
 
-    @Transactional(readOnly = true)
     public void recordPublicCheckin(PublicQueryRequest request,
                                     Attendee attendee,
                                     String resultSummary,
@@ -233,24 +232,20 @@ public class PublicQueryService {
         return toSettingsResponse(meeting);
     }
 
-    @Transactional(readOnly = true)
     public SeatQueryResult publicSeatQuery(PublicQueryRequest request) {
         return publicSeatQuery(request, null, null);
     }
 
-    @Transactional(readOnly = true)
     public SeatQueryResult publicSeatQuery(PublicQueryRequest request, String clientIp, String userAgent) {
         List<SeatQueryResult> results = publicSeatQueryResults(request, clientIp, userAgent, false);
         return results.get(0);
     }
 
-    @Transactional(readOnly = true)
     public Object publicSeatQueryResponse(PublicQueryRequest request, String clientIp, String userAgent) {
         Meeting meeting = resolvePublicMeeting(request.publicQueryToken());
-        if (!meeting.isPublicQueryAllowMultipleResults()) {
-            return publicSeatQuery(request, clientIp, userAgent);
-        }
-        return singleOrMultiple(publicSeatQueryResults(meeting, request, clientIp, userAgent, true));
+        return singleOrMultiple(publicSeatQueryResults(
+                meeting, request, clientIp, userAgent, meeting.isPublicQueryAllowMultipleResults()
+        ));
     }
 
     private List<SeatQueryResult> publicSeatQueryResults(PublicQueryRequest request, String clientIp, String userAgent, boolean allowMultiple) {
@@ -262,44 +257,44 @@ public class PublicQueryService {
                                                         String clientIp,
                                                         String userAgent,
                                                         boolean allowMultiple) {
-        Attendee attendee = null;
         try {
-            ensureQueryWindowOpen(meeting);
-            if (!meeting.isSeatQueryEnabled()) {
-                throw BusinessException.badRequest("座位查询尚未开放");
-            }
-            List<SeatQueryResult> results = new ArrayList<>();
-            for (Attendee current : resolvePublicAttendees(meeting, request.values(), allowMultiple)) {
-                attendee = current;
-                SeatQueryResult rawResult = toSeatResult(meeting, current);
-                historyService.recordSuccess(meeting, PublicQueryType.SEAT, request.values(), current, seatSummary(rawResult), clientIp, userAgent);
-                results.add(filterSeatResult(meeting, rawResult));
-            }
-            return results;
+            List<RecordedQueryResult<SeatQueryResult>> recorded = transactionRunner.read(() -> {
+                ensureQueryWindowOpen(meeting);
+                if (!meeting.isSeatQueryEnabled()) {
+                    throw BusinessException.badRequest("座位查询尚未开放");
+                }
+                List<RecordedQueryResult<SeatQueryResult>> results = new ArrayList<>();
+                for (Attendee attendee : resolvePublicAttendees(meeting, request.values(), allowMultiple)) {
+                    SeatQueryResult rawResult = toSeatResult(meeting, attendee);
+                    results.add(new RecordedQueryResult<>(
+                            attendee, filterSeatResult(meeting, rawResult), seatSummary(rawResult)
+                    ));
+                }
+                return results;
+            });
+            recordSuccessfulQueries(meeting, PublicQueryType.SEAT, request, recorded, clientIp, userAgent);
+            return recorded.stream().map(RecordedQueryResult::result).toList();
         } catch (RuntimeException ex) {
-            historyService.recordFailure(meeting, PublicQueryType.SEAT, request.values(), failureAttendee(attendee, meeting, request.values()), ex.getMessage(), clientIp, userAgent);
+            Attendee attendee = transactionRunner.read(() -> failureAttendee(null, meeting, request.values()));
+            historyService.recordFailure(meeting, PublicQueryType.SEAT, request.values(), attendee, ex.getMessage(), clientIp, userAgent);
             throw ex;
         }
     }
 
-    @Transactional(readOnly = true)
     public RoomQueryResult publicRoomQuery(PublicQueryRequest request) {
         return publicRoomQuery(request, null, null);
     }
 
-    @Transactional(readOnly = true)
     public RoomQueryResult publicRoomQuery(PublicQueryRequest request, String clientIp, String userAgent) {
         List<RoomQueryResult> results = publicRoomQueryResults(request, clientIp, userAgent, false);
         return results.get(0);
     }
 
-    @Transactional(readOnly = true)
     public Object publicRoomQueryResponse(PublicQueryRequest request, String clientIp, String userAgent) {
         Meeting meeting = resolvePublicMeeting(request.publicQueryToken());
-        if (!meeting.isPublicQueryAllowMultipleResults()) {
-            return publicRoomQuery(request, clientIp, userAgent);
-        }
-        return singleOrMultiple(publicRoomQueryResults(meeting, request, clientIp, userAgent, true));
+        return singleOrMultiple(publicRoomQueryResults(
+                meeting, request, clientIp, userAgent, meeting.isPublicQueryAllowMultipleResults()
+        ));
     }
 
     private List<RoomQueryResult> publicRoomQueryResults(PublicQueryRequest request, String clientIp, String userAgent, boolean allowMultiple) {
@@ -311,44 +306,44 @@ public class PublicQueryService {
                                                         String clientIp,
                                                         String userAgent,
                                                         boolean allowMultiple) {
-        Attendee attendee = null;
         try {
-            ensureQueryWindowOpen(meeting);
-            if (!meeting.isRoomQueryEnabled()) {
-                throw BusinessException.badRequest("住宿查询尚未开放");
-            }
-            List<RoomQueryResult> results = new ArrayList<>();
-            for (Attendee current : resolvePublicAttendees(meeting, request.values(), allowMultiple)) {
-                attendee = current;
-                RoomQueryResult rawResult = toRoomResult(meeting, current);
-                historyService.recordSuccess(meeting, PublicQueryType.ROOM, request.values(), current, roomSummary(rawResult), clientIp, userAgent);
-                results.add(filterRoomResult(meeting, rawResult));
-            }
-            return results;
+            List<RecordedQueryResult<RoomQueryResult>> recorded = transactionRunner.read(() -> {
+                ensureQueryWindowOpen(meeting);
+                if (!meeting.isRoomQueryEnabled()) {
+                    throw BusinessException.badRequest("住宿查询尚未开放");
+                }
+                List<RecordedQueryResult<RoomQueryResult>> results = new ArrayList<>();
+                for (Attendee attendee : resolvePublicAttendees(meeting, request.values(), allowMultiple)) {
+                    RoomQueryResult rawResult = toRoomResult(meeting, attendee);
+                    results.add(new RecordedQueryResult<>(
+                            attendee, filterRoomResult(meeting, rawResult), roomSummary(rawResult)
+                    ));
+                }
+                return results;
+            });
+            recordSuccessfulQueries(meeting, PublicQueryType.ROOM, request, recorded, clientIp, userAgent);
+            return recorded.stream().map(RecordedQueryResult::result).toList();
         } catch (RuntimeException ex) {
-            historyService.recordFailure(meeting, PublicQueryType.ROOM, request.values(), failureAttendee(attendee, meeting, request.values()), ex.getMessage(), clientIp, userAgent);
+            Attendee attendee = transactionRunner.read(() -> failureAttendee(null, meeting, request.values()));
+            historyService.recordFailure(meeting, PublicQueryType.ROOM, request.values(), attendee, ex.getMessage(), clientIp, userAgent);
             throw ex;
         }
     }
 
-    @Transactional(readOnly = true)
     public DinnerQueryResult publicDinnerQuery(PublicQueryRequest request) {
         return publicDinnerQuery(request, null, null);
     }
 
-    @Transactional(readOnly = true)
     public DinnerQueryResult publicDinnerQuery(PublicQueryRequest request, String clientIp, String userAgent) {
         List<DinnerQueryResult> results = publicDinnerQueryResults(request, clientIp, userAgent, false);
         return results.get(0);
     }
 
-    @Transactional(readOnly = true)
     public Object publicDinnerQueryResponse(PublicQueryRequest request, String clientIp, String userAgent) {
         Meeting meeting = resolvePublicMeeting(request.publicQueryToken());
-        if (!meeting.isPublicQueryAllowMultipleResults()) {
-            return publicDinnerQuery(request, clientIp, userAgent);
-        }
-        return singleOrMultiple(publicDinnerQueryResults(meeting, request, clientIp, userAgent, true));
+        return singleOrMultiple(publicDinnerQueryResults(
+                meeting, request, clientIp, userAgent, meeting.isPublicQueryAllowMultipleResults()
+        ));
     }
 
     private List<DinnerQueryResult> publicDinnerQueryResults(PublicQueryRequest request, String clientIp, String userAgent, boolean allowMultiple) {
@@ -360,23 +355,217 @@ public class PublicQueryService {
                                                             String clientIp,
                                                             String userAgent,
                                                             boolean allowMultiple) {
-        Attendee attendee = null;
         try {
-            ensureQueryWindowOpen(meeting);
-            if (!meeting.isDinnerQueryEnabled()) {
-                throw BusinessException.badRequest("晚宴查询尚未开放");
-            }
-            List<DinnerQueryResult> results = new ArrayList<>();
-            for (Attendee current : resolvePublicAttendees(meeting, request.values(), allowMultiple)) {
-                attendee = current;
-                DinnerQueryResult rawResult = dinnerService.query(meeting.getId(), current);
-                historyService.recordSuccess(meeting, PublicQueryType.DINNER, request.values(), current, dinnerSummary(rawResult), clientIp, userAgent);
-                results.add(filterDinnerResult(meeting, rawResult));
-            }
-            return results;
+            List<RecordedQueryResult<DinnerQueryResult>> recorded = transactionRunner.read(() -> {
+                ensureQueryWindowOpen(meeting);
+                if (!meeting.isDinnerQueryEnabled()) {
+                    throw BusinessException.badRequest("晚宴查询尚未开放");
+                }
+                List<RecordedQueryResult<DinnerQueryResult>> results = new ArrayList<>();
+                for (Attendee attendee : resolvePublicAttendees(meeting, request.values(), allowMultiple)) {
+                    DinnerQueryResult rawResult = dinnerService.query(meeting.getId(), attendee);
+                    results.add(new RecordedQueryResult<>(
+                            attendee, filterDinnerResult(meeting, rawResult), dinnerSummary(rawResult)
+                    ));
+                }
+                return results;
+            });
+            recordSuccessfulQueries(meeting, PublicQueryType.DINNER, request, recorded, clientIp, userAgent);
+            return recorded.stream().map(RecordedQueryResult::result).toList();
         } catch (RuntimeException ex) {
-            historyService.recordFailure(meeting, PublicQueryType.DINNER, request.values(), failureAttendee(attendee, meeting, request.values()), ex.getMessage(), clientIp, userAgent);
+            Attendee attendee = transactionRunner.read(() -> failureAttendee(null, meeting, request.values()));
+            historyService.recordFailure(meeting, PublicQueryType.DINNER, request.values(), attendee, ex.getMessage(), clientIp, userAgent);
             throw ex;
+        }
+    }
+
+    public PublicCombinedQueryResponse publicCombinedQueryResponse(PublicQueryRequest request,
+                                                                   String clientIp,
+                                                                   String userAgent) {
+        Meeting meeting = resolvePublicMeeting(request.publicQueryToken());
+        List<PublicQueryType> configured = parseCombinedQueryTypes(meeting);
+        Set<PublicQueryType> configuredTypes = configured.isEmpty()
+                ? EnumSet.noneOf(PublicQueryType.class)
+                : EnumSet.copyOf(configured);
+        boolean seatRequested = configuredTypes.contains(PublicQueryType.SEAT) && meeting.isSeatQueryEnabled();
+        boolean roomRequested = configuredTypes.contains(PublicQueryType.ROOM) && meeting.isRoomQueryEnabled();
+        boolean dinnerRequested = configuredTypes.contains(PublicQueryType.DINNER) && meeting.isDinnerQueryEnabled();
+        if (!(seatRequested || roomRequested || dinnerRequested)) {
+            return new PublicCombinedQueryResponse(null, null, null, null, null, null);
+        }
+
+        try {
+            CombinedReadResult readResult = transactionRunner.read(() -> {
+                ensureQueryWindowOpen(meeting);
+                List<Attendee> attendees = resolvePublicAttendees(
+                        meeting,
+                        request.values(),
+                        meeting.isPublicQueryAllowMultipleResults()
+                );
+                return new CombinedReadResult(
+                        combinedSection(
+                                PublicQueryType.SEAT,
+                                seatRequested,
+                                attendees,
+                                attendee -> toSeatResult(meeting, attendee),
+                                result -> filterSeatResult(meeting, result),
+                                this::seatSummary
+                        ),
+                        combinedSection(
+                                PublicQueryType.ROOM,
+                                roomRequested,
+                                attendees,
+                                attendee -> toRoomResult(meeting, attendee),
+                                result -> filterRoomResult(meeting, result),
+                                this::roomSummary
+                        ),
+                        combinedSection(
+                                PublicQueryType.DINNER,
+                                dinnerRequested,
+                                attendees,
+                                attendee -> dinnerService.query(meeting.getId(), attendee),
+                                result -> filterDinnerResult(meeting, result),
+                                this::dinnerSummary
+                        )
+                );
+            });
+
+            recordCombinedSection(meeting, PublicQueryType.SEAT, request, readResult.seat(), clientIp, userAgent);
+            recordCombinedSection(meeting, PublicQueryType.ROOM, request, readResult.room(), clientIp, userAgent);
+            recordCombinedSection(meeting, PublicQueryType.DINNER, request, readResult.dinner(), clientIp, userAgent);
+            return new PublicCombinedQueryResponse(
+                    combinedData(readResult.seat()), combinedError(readResult.seat()),
+                    combinedData(readResult.room()), combinedError(readResult.room()),
+                    combinedData(readResult.dinner()), combinedError(readResult.dinner())
+            );
+        } catch (BusinessException ex) {
+            String error = firstNonBlank(ex.getMessage(), "未找到匹配报名记录");
+            recordCombinedFailure(meeting, request, seatRequested, roomRequested, dinnerRequested, error, clientIp, userAgent);
+            return new PublicCombinedQueryResponse(
+                    null, seatRequested ? error : null,
+                    null, roomRequested ? error : null,
+                    null, dinnerRequested ? error : null
+            );
+        } catch (RuntimeException ex) {
+            // 基础设施与程序异常交给统一异常处理器输出脱敏 5xx，不能把内部消息伪装成业务 200。
+            log.error("Public combined query failed unexpectedly, meetingId={}", meeting.getId(), ex);
+            throw ex;
+        }
+    }
+
+    private <T> CombinedSection<T> combinedSection(PublicQueryType queryType,
+                                                    boolean requested,
+                                                    List<Attendee> attendees,
+                                                    Function<Attendee, T> rawResult,
+                                                    Function<T, T> resultFilter,
+                                                    Function<T, String> summary) {
+        if (!requested) {
+            return null;
+        }
+        Attendee current = null;
+        try {
+            List<RecordedQueryResult<T>> results = new ArrayList<>();
+            for (Attendee attendee : attendees) {
+                current = attendee;
+                T raw = rawResult.apply(attendee);
+                results.add(new RecordedQueryResult<>(attendee, resultFilter.apply(raw), summary.apply(raw)));
+            }
+            return new CombinedSection<>(results, null, null);
+        } catch (BusinessException ex) {
+            return new CombinedSection<>(List.of(), firstNonBlank(ex.getMessage(), "查询失败"), current);
+        } catch (RuntimeException ex) {
+            log.error(
+                    "Public combined query section failed unexpectedly, meetingId={}, queryType={}, attendeeId={}",
+                    current == null ? null : current.getMeeting().getId(),
+                    queryType,
+                    current == null ? null : current.getId(),
+                    ex
+            );
+            throw ex;
+        }
+    }
+
+    private <T> void recordSuccessfulQueries(Meeting meeting,
+                                             PublicQueryType queryType,
+                                             PublicQueryRequest request,
+                                             List<RecordedQueryResult<T>> recorded,
+                                             String clientIp,
+                                             String userAgent) {
+        try {
+            historyService.recordSuccessBatch(
+                    meeting,
+                    queryType,
+                    request.values(),
+                    recorded.stream().map(RecordedQueryResult::attendee).toList(),
+                    recorded.stream().map(RecordedQueryResult::summary).toList(),
+                    clientIp,
+                    userAgent
+            );
+        } catch (RuntimeException ex) {
+            // 历史是旁路审计数据，写入失败不能丢弃已经成功读取的业务结果。
+            log.warn("Public query history recording failed, meetingId={}, queryType={}", meeting.getId(), queryType, ex);
+        }
+    }
+
+    private <T> void recordCombinedSection(Meeting meeting,
+                                           PublicQueryType queryType,
+                                           PublicQueryRequest request,
+                                           CombinedSection<T> section,
+                                           String clientIp,
+                                           String userAgent) {
+        if (section == null) {
+            return;
+        }
+        if (section.error() != null) {
+            recordFailureSafely(
+                    meeting, queryType, request.values(), section.failureAttendee(), section.error(), clientIp, userAgent
+            );
+            return;
+        }
+        recordSuccessfulQueries(meeting, queryType, request, section.results(), clientIp, userAgent);
+    }
+
+    private Object combinedData(CombinedSection<?> section) {
+        if (section == null || section.error() != null) {
+            return null;
+        }
+        return singleOrMultiple(section.results().stream().map(RecordedQueryResult::result).toList());
+    }
+
+    private String combinedError(CombinedSection<?> section) {
+        return section == null ? null : section.error();
+    }
+
+    private void recordCombinedFailure(Meeting meeting,
+                                       PublicQueryRequest request,
+                                       boolean seatRequested,
+                                       boolean roomRequested,
+                                       boolean dinnerRequested,
+                                       String error,
+                                       String clientIp,
+                                       String userAgent) {
+        if (seatRequested) {
+            recordFailureSafely(meeting, PublicQueryType.SEAT, request.values(), null, error, clientIp, userAgent);
+        }
+        if (roomRequested) {
+            recordFailureSafely(meeting, PublicQueryType.ROOM, request.values(), null, error, clientIp, userAgent);
+        }
+        if (dinnerRequested) {
+            recordFailureSafely(meeting, PublicQueryType.DINNER, request.values(), null, error, clientIp, userAgent);
+        }
+    }
+
+    private void recordFailureSafely(Meeting meeting,
+                                     PublicQueryType queryType,
+                                     Map<PublicQueryField, String> values,
+                                     Attendee attendee,
+                                     String error,
+                                     String clientIp,
+                                     String userAgent) {
+        try {
+            historyService.recordFailure(meeting, queryType, values, attendee, error, clientIp, userAgent);
+        } catch (RuntimeException ex) {
+            log.warn("Public query failure history recording failed, meetingId={}, queryType={}", meeting.getId(), queryType, ex);
         }
     }
 
@@ -384,7 +573,7 @@ public class PublicQueryService {
     public List<AdminQueryCandidate> adminSeatCandidates(Long meetingId, AdminQueryRequest request) {
         Meeting meeting = meetingRepository.findById(meetingId)
                 .orElseThrow(() -> BusinessException.notFound("会议不存在"));
-        return matchAttendees(meeting, request.values()).stream()
+        return matchAttendees(meeting, request.values(), null).stream()
                 .limit(ADMIN_QUERY_LIMIT)
                 .map(this::toCandidate)
                 .toList();
@@ -394,7 +583,7 @@ public class PublicQueryService {
     public List<AdminQueryCandidate> adminRoomCandidates(Long meetingId, AdminQueryRequest request) {
         Meeting meeting = meetingRepository.findById(meetingId)
                 .orElseThrow(() -> BusinessException.notFound("会议不存在"));
-        return matchAttendees(meeting, request.values()).stream()
+        return matchAttendees(meeting, request.values(), null).stream()
                 .limit(ADMIN_QUERY_LIMIT)
                 .map(this::toCandidate)
                 .toList();
@@ -405,7 +594,9 @@ public class PublicQueryService {
     }
 
     private List<Attendee> resolvePublicAttendees(Meeting meeting, Map<PublicQueryField, String> values, boolean allowMultiple) {
-        List<Attendee> matches = matchAttendees(meeting, values);
+        List<Attendee> matches = matchAttendees(
+                meeting, values, allowMultiple ? ReviewStatus.APPROVED : null
+        );
         if (matches.isEmpty()) {
             throw BusinessException.notFound("未找到匹配报名记录");
         }
@@ -425,7 +616,6 @@ public class PublicQueryService {
          * 同时避免后台误配模糊字段时把过多报名信息一次性暴露到公开页。
          */
         List<Attendee> approvedMatches = matches.stream()
-                .filter(attendee -> attendee.getReviewStatus() == ReviewStatus.APPROVED)
                 .limit(PUBLIC_QUERY_RESULT_LIMIT)
                 .toList();
         if (approvedMatches.isEmpty()) {
@@ -436,72 +626,94 @@ public class PublicQueryService {
 
     private Attendee identifySingleMatchedAttendee(Meeting meeting, Map<PublicQueryField, String> values) {
         try {
-            List<Attendee> matches = matchAttendees(meeting, values);
+            List<Attendee> matches = matchAttendees(meeting, values, null);
             return matches.size() == 1 ? matches.get(0) : null;
         } catch (RuntimeException ignored) {
             return null;
         }
     }
 
-    private List<Attendee> matchAttendees(Meeting meeting, Map<PublicQueryField, String> values) {
+    private List<Attendee> matchAttendees(Meeting meeting,
+                                          Map<PublicQueryField, String> values,
+                                          ReviewStatus reviewStatus) {
         List<PublicQueryField> fields = parseFields(meeting);
         PublicQueryMatchMode mode = parseMatchMode(meeting);
+        boolean exact = mode == PublicQueryMatchMode.EXACT;
         requireConfiguredValues(fields, values);
-        return queryCandidateAttendees(meeting.getId(), fields, values, mode).stream()
-                .filter(attendee -> fields.stream().allMatch(field -> matches(attendee, field, values.get(field), mode)))
-                .toList();
-    }
-
-    private List<Attendee> queryCandidateAttendees(Long meetingId,
-                                                   List<PublicQueryField> fields,
-                                                   Map<PublicQueryField, String> values,
-                                                   PublicQueryMatchMode mode) {
-        /*
-         * 公开查询原先会把整场会议参会人全部加载进 JVM 后再逐条匹配。会议人数上来后，
-         * 即便用户填了唯一手机号，也会产生不必要的数据库传输和对象创建。
-         *
-         * 这里先按“最有区分度”的已配置字段取候选集，再继续走 matches(...) 做完整校验。
-         * 这样不改变精确/模糊匹配语义，同时让默认的“手机号 + 姓名”查询优先命中手机号索引。
-         */
-        for (PublicQueryField field : CANDIDATE_FIELD_PRIORITY) {
-            if (fields.contains(field)) {
-                return queryCandidateAttendeesByField(meetingId, field, values.get(field), mode);
+        List<Attendee> matches = new ArrayList<>(PUBLIC_QUERY_CANDIDATE_LIMIT);
+        int offset = 0;
+        while (matches.size() < PUBLIC_QUERY_CANDIDATE_LIMIT) {
+            AttendeePublicQueryCriteria criteria = new AttendeePublicQueryCriteria(
+                    meeting.getId(),
+                    exact,
+                    reviewStatus,
+                    normalizedValue(fields, values, PublicQueryField.ATTENDEE_CODE, exact),
+                    normalizedValue(fields, values, PublicQueryField.PHONE, exact),
+                    normalizedValue(fields, values, PublicQueryField.PHONE_LAST4, exact),
+                    normalizedValue(fields, values, PublicQueryField.EMAIL, exact),
+                    normalizedValue(fields, values, PublicQueryField.NAME, exact),
+                    normalizedValue(fields, values, PublicQueryField.ORGANIZATION, exact),
+                    normalizedValue(fields, values, PublicQueryField.TITLE, exact),
+                    offset,
+                    PUBLIC_QUERY_CANDIDATE_LIMIT
+            );
+            List<AttendeeMatchCandidate> candidates = attendeeRepository.findPublicQueryCandidates(criteria);
+            if (candidates.isEmpty()) {
+                break;
+            }
+            Map<Long, Attendee> attendeesById = attendeeRepository.findAllById(
+                            candidates.stream().map(AttendeeMatchCandidate::id).toList()
+                    ).stream()
+                    .collect(Collectors.toMap(Attendee::getId, attendee -> attendee));
+            candidates.stream()
+                    .map(candidate -> attendeesById.get(candidate.id()))
+                    .filter(Objects::nonNull)
+                    // 数据库 ai_ci 排序规则会折叠重音；复用原规则复核，避免匹配语义随排序规则变化。
+                    .filter(attendee -> fields.stream().allMatch(field -> matches(attendee, field, values.get(field), mode)))
+                    .limit(PUBLIC_QUERY_CANDIDATE_LIMIT - matches.size())
+                    .forEach(matches::add);
+            offset += candidates.size();
+            if (candidates.size() < PUBLIC_QUERY_CANDIDATE_LIMIT) {
+                break;
             }
         }
-        return attendeeRepository.findByMeetingIdOrderByIdAsc(meetingId);
+        return matches;
     }
 
-    private List<Attendee> queryCandidateAttendeesByField(Long meetingId,
-                                                          PublicQueryField field,
-                                                          String rawValue,
-                                                          PublicQueryMatchMode mode) {
-        String value = normalizeForMatch(field, rawValue);
-        if (value.isBlank()) {
-            return List.of();
+    private String normalizedValue(List<PublicQueryField> fields,
+                                   Map<PublicQueryField, String> values,
+                                   PublicQueryField field,
+                                   boolean exact) {
+        return fields.contains(field) ? normalizeForMatch(field, values.get(field), exact) : null;
+    }
+
+    private boolean matches(Attendee attendee,
+                            PublicQueryField field,
+                            String rawNeedle,
+                            PublicQueryMatchMode mode) {
+        String haystack = valueOf(attendee, field);
+        if (haystack == null || haystack.isBlank()) {
+            return false;
         }
-        boolean exact = mode == PublicQueryMatchMode.EXACT;
+        String needle = normalizeForSemanticMatch(field, rawNeedle);
+        String normalizedHaystack = normalizeForSemanticMatch(field, haystack);
+        if (mode == PublicQueryMatchMode.EXACT) {
+            if (field == PublicQueryField.PHONE_LAST4) {
+                return normalizedHaystack.endsWith(needle);
+            }
+            return Objects.equals(normalizedHaystack, needle);
+        }
+        return normalizedHaystack.contains(needle);
+    }
+
+    private String valueOf(Attendee attendee, PublicQueryField field) {
         return switch (field) {
-            case ATTENDEE_CODE -> exact
-                    ? attendeeRepository.findByMeetingIdAndAttendeeCodeIgnoreCase(meetingId, rawValue.trim())
-                    : attendeeRepository.findByMeetingIdAndAttendeeCodeContainingIgnoreCase(meetingId, rawValue.trim());
-            case PHONE -> exact
-                    ? attendeeRepository.findByMeetingIdAndPhone(meetingId, value).stream().toList()
-                    : attendeeRepository.findByMeetingIdAndPhoneContaining(meetingId, value);
-            case PHONE_LAST4 -> exact
-                    ? attendeeRepository.findByMeetingIdAndPhoneEndingWith(meetingId, value)
-                    : attendeeRepository.findByMeetingIdAndPhoneContaining(meetingId, value);
-            case EMAIL -> exact
-                    ? attendeeRepository.findByMeetingIdAndEmailIgnoreCase(meetingId, rawValue.trim())
-                    : attendeeRepository.findByMeetingIdAndEmailContainingIgnoreCase(meetingId, rawValue.trim());
-            case NAME -> exact
-                    ? attendeeRepository.findByMeetingIdAndNameIgnoreCase(meetingId, rawValue.trim())
-                    : attendeeRepository.findByMeetingIdAndNameContainingIgnoreCase(meetingId, rawValue.trim());
-            case ORGANIZATION -> exact
-                    ? attendeeRepository.findByMeetingIdAndOrganizationIgnoreCase(meetingId, rawValue.trim())
-                    : attendeeRepository.findByMeetingIdAndOrganizationContainingIgnoreCase(meetingId, rawValue.trim());
-            case TITLE -> exact
-                    ? attendeeRepository.findByMeetingIdAndTitleIgnoreCase(meetingId, rawValue.trim())
-                    : attendeeRepository.findByMeetingIdAndTitleContainingIgnoreCase(meetingId, rawValue.trim());
+            case NAME -> attendee.getName();
+            case PHONE, PHONE_LAST4 -> attendee.getPhone();
+            case ATTENDEE_CODE -> attendee.getAttendeeCode();
+            case ORGANIZATION -> attendee.getOrganization();
+            case TITLE -> attendee.getTitle();
+            case EMAIL -> attendee.getEmail();
         };
     }
 
@@ -530,35 +742,15 @@ public class PublicQueryService {
         }
     }
 
-    private boolean matches(Attendee attendee, PublicQueryField field, String rawNeedle, PublicQueryMatchMode mode) {
-        String haystack = valueOf(attendee, field);
-        if (haystack == null || haystack.isBlank()) {
-            return false;
+    private String normalizeForMatch(PublicQueryField field, String value, boolean exact) {
+        String normalized = value == null ? "" : value.trim();
+        if (field == PublicQueryField.PHONE || field == PublicQueryField.PHONE_LAST4) {
+            normalized = normalized.replaceAll("[\\s-]", "");
         }
-        String needle = normalizeForMatch(field, rawNeedle);
-        String normalizedHaystack = normalizeForMatch(field, haystack);
-        if (mode == PublicQueryMatchMode.EXACT) {
-            // PHONE_LAST4 是“拿输入值和完整手机号后缀比较”，不是要求参会人手机号等于 4 位数字。
-            if (field == PublicQueryField.PHONE_LAST4) {
-                return normalizedHaystack.endsWith(needle);
-            }
-            return Objects.equals(normalizedHaystack, needle);
-        }
-        return normalizedHaystack.contains(needle);
+        return exact ? normalized : normalized.toLowerCase(Locale.ROOT);
     }
 
-    private String valueOf(Attendee attendee, PublicQueryField field) {
-        return switch (field) {
-            case NAME -> attendee.getName();
-            case PHONE, PHONE_LAST4 -> attendee.getPhone();
-            case ATTENDEE_CODE -> attendee.getAttendeeCode();
-            case ORGANIZATION -> attendee.getOrganization();
-            case TITLE -> attendee.getTitle();
-            case EMAIL -> attendee.getEmail();
-        };
-    }
-
-    private String normalizeForMatch(PublicQueryField field, String value) {
+    private String normalizeForSemanticMatch(PublicQueryField field, String value) {
         String normalized = value == null ? "" : value.trim().toLowerCase(Locale.ROOT);
         if (field == PublicQueryField.PHONE || field == PublicQueryField.PHONE_LAST4) {
             normalized = normalized.replaceAll("[\\s-]", "");
@@ -1274,5 +1466,22 @@ public class PublicQueryService {
         }
         String normalized = layout.toUpperCase(Locale.ROOT);
         return Set.of("CARD", "LIST", "COMPACT").contains(normalized) ? normalized : "CARD";
+    }
+
+    private record CombinedReadResult(
+            CombinedSection<SeatQueryResult> seat,
+            CombinedSection<RoomQueryResult> room,
+            CombinedSection<DinnerQueryResult> dinner
+    ) {
+    }
+
+    private record CombinedSection<T>(
+            List<RecordedQueryResult<T>> results,
+            String error,
+            Attendee failureAttendee
+    ) {
+    }
+
+    private record RecordedQueryResult<T>(Attendee attendee, T result, String summary) {
     }
 }

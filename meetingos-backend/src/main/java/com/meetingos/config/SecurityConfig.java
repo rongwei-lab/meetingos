@@ -37,7 +37,14 @@ public class SecurityConfig {
                         .requestMatchers(HttpMethod.HEAD, "/uploads/images/**", "/r/**", "/api/public/**").permitAll()
                         .requestMatchers(HttpMethod.POST, "/api/tduck/webhook", "/api/public/tduck/webhook", "/api/integrations/tduck/webhook").permitAll()
                         .requestMatchers(HttpMethod.POST, "/api/public/invitations/**").permitAll()
-                        .requestMatchers(HttpMethod.POST, "/api/public/seat-query", "/api/public/room-query", "/api/public/dinner-query", "/api/public/checkin").permitAll()
+                        .requestMatchers(
+                                HttpMethod.POST,
+                                "/api/public/seat-query",
+                                "/api/public/room-query",
+                                "/api/public/dinner-query",
+                                "/api/public/combined-query",
+                                "/api/public/checkin"
+                        ).permitAll()
                         .requestMatchers(HttpMethod.GET, "/r/**", "/api/public/**").permitAll()
                         .anyRequest().authenticated()
                 )

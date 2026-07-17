@@ -44,6 +44,10 @@ export function isAuthFailure(error: unknown) {
   return isUnauthenticated(error) || isForbidden(error);
 }
 
+export function isHttpStatus(error: unknown, statuses: readonly number[]) {
+  return axios.isAxiosError(error) && Boolean(error.response && statuses.includes(error.response.status));
+}
+
 export function isRequestCanceled(error: unknown) {
   return axios.isCancel(error) || (error instanceof DOMException && error.name === "AbortError");
 }

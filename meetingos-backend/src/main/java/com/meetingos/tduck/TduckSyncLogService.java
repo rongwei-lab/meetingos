@@ -35,7 +35,11 @@ public class TduckSyncLogService {
         return syncLogRepository.save(log);
     }
 
-    @Transactional(propagation = Propagation.REQUIRES_NEW)
+    /*
+     * Webhook 主事务内失败已被转换为 FAILED 结果，直接加入当前事务即可；鉴权/解析失败发生在
+     * 事务外时 REQUIRED 仍会自行开启事务。这样避免失败洪峰下外层事务占一个连接、日志再等第二个连接。
+     */
+    @Transactional(propagation = Propagation.REQUIRED)
     public TduckSyncLog failed(TduckWebhookRequest request, Meeting meeting, String message) {
         TduckSyncLog log = baseLog(request, meeting, request == null ? null : request.eventId());
         log.setStatus(SyncStatus.FAILED);

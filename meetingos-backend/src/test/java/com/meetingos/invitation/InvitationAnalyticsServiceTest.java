@@ -4,6 +4,7 @@ import com.meetingos.meeting.Meeting;
 import com.meetingos.meeting.MeetingRepository;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
+import org.springframework.data.domain.Pageable;
 
 import java.time.LocalDate;
 import java.time.LocalDateTime;
@@ -17,19 +18,16 @@ import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.when;
 
 class InvitationAnalyticsServiceTest {
-    private MeetingRepository meetingRepository;
+    private MeetingInvitationRepository invitationRepository;
     private InvitationEventRepository eventRepository;
     private RegistrationAttributionRepository attributionRepository;
     private InvitationShareLinkRepository shareLinkRepository;
     private InvitationAnalyticsService service;
-    private Meeting meeting;
-    private MeetingInvitation invitation;
-    private InvitationShareLink shareLink;
 
     @BeforeEach
     void setUp() {
-        meetingRepository = mock(MeetingRepository.class);
-        MeetingInvitationRepository invitationRepository = mock(MeetingInvitationRepository.class);
+        MeetingRepository meetingRepository = mock(MeetingRepository.class);
+        invitationRepository = mock(MeetingInvitationRepository.class);
         shareLinkRepository = mock(InvitationShareLinkRepository.class);
         eventRepository = mock(InvitationEventRepository.class);
         attributionRepository = mock(RegistrationAttributionRepository.class);
@@ -37,40 +35,28 @@ class InvitationAnalyticsServiceTest {
                 meetingRepository, invitationRepository, shareLinkRepository, eventRepository, attributionRepository
         );
 
-        meeting = new Meeting();
+        Meeting meeting = new Meeting();
         meeting.setId(1L);
-        invitation = new MeetingInvitation();
-        invitation.setId(10L);
-        invitation.setMeeting(meeting);
-        shareLink = new InvitationShareLink();
-        shareLink.setId(100L);
-        shareLink.setMeeting(meeting);
-        shareLink.setInvitation(invitation);
-
         when(meetingRepository.findById(1L)).thenReturn(Optional.of(meeting));
-        when(attributionRepository.findByMeetingIdAndAttributedAtBetweenOrderByAttributedAtAsc(
-                eq(1L), any(LocalDateTime.class), any(LocalDateTime.class)
+        when(eventRepository.summarizeDaily(
+                eq(1L), any(), any(), any(), eq(InvitationEventType.PAGE_VIEW), eq(InvitationEventType.CTA_CLICK)
         )).thenReturn(List.of());
-        when(shareLinkRepository.findByMeetingIdOrderByCreatedAtAsc(1L)).thenReturn(List.of());
+        when(eventRepository.summarizeByChannel(
+                eq(1L), any(), any(), any(), eq(InvitationEventType.PAGE_VIEW), eq(InvitationEventType.CTA_CLICK)
+        )).thenReturn(List.of());
+        when(attributionRepository.summarizeAttributedDaily(
+                eq(1L), any(), any(), any(), eq(RegistrationAttributionStatus.ATTRIBUTED)
+        )).thenReturn(List.of());
+        when(attributionRepository.summarizeAttributedByChannel(
+                eq(1L), any(), any(), any(), eq(RegistrationAttributionStatus.ATTRIBUTED)
+        )).thenReturn(List.of());
+        when(shareLinkRepository.findAnalyticsLinks(eq(1L), any())).thenReturn(List.of());
+        stubAttributionTotals();
     }
 
     @Test
-    void clickThroughRateUsesUniqueClickVisitorsDividedByUniqueVisitors() {
-        LocalDateTime occurredAt = LocalDate.of(2026, 7, 14).atTime(10, 0);
-        List<InvitationEvent> events = List.of(
-                event(InvitationEventType.PAGE_VIEW, "visitor-a", occurredAt),
-                event(InvitationEventType.PAGE_VIEW, "visitor-a", occurredAt.plusMinutes(1)),
-                event(InvitationEventType.PAGE_VIEW, "visitor-b", occurredAt.plusMinutes(2)),
-                event(InvitationEventType.PAGE_VIEW, "visitor-b", occurredAt.plusMinutes(3)),
-                event(InvitationEventType.PAGE_VIEW, "visitor-c", occurredAt.plusMinutes(4)),
-                event(InvitationEventType.CTA_CLICK, "visitor-a", occurredAt.plusMinutes(5)),
-                event(InvitationEventType.CTA_CLICK, "visitor-a", occurredAt.plusMinutes(6)),
-                event(InvitationEventType.CTA_CLICK, "visitor-b", occurredAt.plusMinutes(7)),
-                event(InvitationEventType.CTA_CLICK, "visitor-b", occurredAt.plusMinutes(8))
-        );
-        when(eventRepository.findByMeetingIdAndOccurredAtBetweenOrderByOccurredAtAsc(
-                eq(1L), any(LocalDateTime.class), any(LocalDateTime.class)
-        )).thenReturn(events);
+    void clickThroughRateUsesDatabaseAggregates() {
+        stubEventTotals(5L, 3L, 4L, 2L);
 
         InvitationApiModels.InvitationAnalyticsResponse response = service.analytics(
                 1L, null, LocalDate.of(2026, 7, 14), LocalDate.of(2026, 7, 14)
@@ -85,11 +71,7 @@ class InvitationAnalyticsServiceTest {
 
     @Test
     void clickThroughRateIsZeroWhenThereAreNoUniqueVisitors() {
-        when(eventRepository.findByMeetingIdAndOccurredAtBetweenOrderByOccurredAtAsc(
-                eq(1L), any(LocalDateTime.class), any(LocalDateTime.class)
-        )).thenReturn(List.of(event(
-                InvitationEventType.CTA_CLICK, "visitor-a", LocalDate.of(2026, 7, 14).atTime(10, 0)
-        )));
+        stubEventTotals(0L, 0L, 1L, 1L);
 
         InvitationApiModels.InvitationAnalyticsResponse response = service.analytics(
                 1L, null, LocalDate.of(2026, 7, 14), LocalDate.of(2026, 7, 14)
@@ -100,14 +82,45 @@ class InvitationAnalyticsServiceTest {
         assertThat(response.clickThroughRate()).isZero();
     }
 
-    private InvitationEvent event(InvitationEventType type, String visitorHash, LocalDateTime occurredAt) {
-        InvitationEvent event = new InvitationEvent();
-        event.setMeeting(meeting);
-        event.setInvitation(invitation);
-        event.setShareLink(shareLink);
-        event.setEventType(type);
-        event.setVisitorHash(visitorHash);
-        event.setOccurredAt(occurredAt);
-        return event;
+    @Test
+    void attributionDetailsUseBoundedProjection() {
+        MeetingInvitation invitation = new MeetingInvitation();
+        invitation.setId(10L);
+        when(invitationRepository.findByIdAndMeetingId(10L, 1L)).thenReturn(Optional.of(invitation));
+        LocalDateTime attributedAt = LocalDateTime.of(2026, 7, 14, 10, 0);
+        when(attributionRepository.findResponseRowsByInvitationId(eq(10L), any(Pageable.class)))
+                .thenReturn(List.<Object[]>of(new Object[]{
+                        99L, RegistrationAttributionStatus.ATTRIBUTED, "data-1", 8L, 7L,
+                        "公众号", true, attributedAt
+                }));
+        when(attributionRepository.countByInvitationId(10L)).thenReturn(2_500L);
+
+        InvitationAnalyticsService.AttributionPage page = service.attributionPage(1L, 10L);
+        List<InvitationApiModels.AttributionResponse> response = page.items();
+
+        assertThat(response).singleElement().satisfies(item -> {
+            assertThat(item.id()).isEqualTo(99L);
+            assertThat(item.channelName()).isEqualTo("公众号");
+            assertThat(item.attributedAt()).isEqualTo(attributedAt);
+        });
+        assertThat(page.total()).isEqualTo(2_500);
+        assertThat(page.limit()).isEqualTo(2_000);
+        assertThat(page.truncated()).isTrue();
+    }
+
+    private void stubEventTotals(long pageViews, long visitors, long clicks, long clickVisitors) {
+        when(eventRepository.summarize(
+                eq(1L), any(), any(), any(), eq(InvitationEventType.PAGE_VIEW), eq(InvitationEventType.CTA_CLICK)
+        )).thenReturn(List.<Object[]>of(new Object[]{pageViews, visitors, clicks, clickVisitors}));
+    }
+
+    private void stubAttributionTotals() {
+        when(attributionRepository.summarize(
+                eq(1L), any(), any(), any(),
+                eq(RegistrationAttributionStatus.ATTRIBUTED),
+                eq(RegistrationAttributionStatus.DIRECT_UNATTRIBUTED),
+                eq(RegistrationAttributionStatus.INVALID_TOKEN),
+                eq(RegistrationAttributionStatus.LEGACY_UNATTRIBUTED)
+        )).thenReturn(List.<Object[]>of(new Object[]{0L, 0L, 0L, 0L, 0L, 0L}));
     }
 }

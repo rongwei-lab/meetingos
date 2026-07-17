@@ -268,7 +268,7 @@
 <script setup lang="ts">
 import type { UploadCustomRequestOptions } from "naive-ui";
 import { computed, h, onMounted, reactive, ref } from "vue";
-import { NButton, NDataTable, NSpace, NTag, NUpload, useMessage, type DataTableColumns } from "naive-ui";
+import { NButton, NDataTable, NSpace, NSwitch, NTabPane, NTabs, NTag, NUpload, useMessage, type DataTableColumns } from "naive-ui";
 import MeetingAuthorizationPicker from "@/components/MeetingAuthorizationPicker.vue";
 import PageHeader from "@/components/PageHeader.vue";
 import { useMeetingStore, type AdminUserDto, type MeetingUserPermissionDto } from "@/stores/meeting";

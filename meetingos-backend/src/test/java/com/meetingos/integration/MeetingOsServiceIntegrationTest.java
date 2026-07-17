@@ -29,6 +29,7 @@ import com.meetingos.permission.MeetingUserPermissionRequest;
 import com.meetingos.permission.MeetingUserPermissionService;
 import com.meetingos.publicapi.MeetingQuerySettingsRequest;
 import com.meetingos.publicapi.PublicQueryField;
+import com.meetingos.publicapi.PublicCombinedQueryResponse;
 import com.meetingos.publicapi.PublicQueryHistory;
 import com.meetingos.publicapi.PublicQueryHistoryRepository;
 import com.meetingos.publicapi.PublicQueryMatchMode;
@@ -225,14 +226,15 @@ class MeetingOsServiceIntegrationTest {
         assertThat(seatRepository.findByMeetingIdAndAreaNameOrderByRowNoAscSeatNoAsc(1L, "A区"))
                 .hasSize(15);
 
-        Long firstSeatId = seatRepository.findByMeetingIdAndAreaNameOrderByRowNoAscSeatNoAsc(1L, "A区").get(0).getId();
-        seatingService.manualAssign(new ManualAssignSeatRequest(1L, firstSeatId));
+        var expandedSeats = seatRepository.findByMeetingIdAndAreaNameOrderByRowNoAscSeatNoAsc(1L, "A区");
+        Long outsideShrinkRangeSeatId = expandedSeats.get(expandedSeats.size() - 1).getId();
+        seatingService.manualAssign(new ManualAssignSeatRequest(1L, outsideShrinkRangeSeatId));
 
         SeatLayoutRequest shrink = new SeatLayoutRequest(
                 1L,
                 "主会场",
                 "A区",
-                0,
+                1,
                 1,
                 "row-seat",
                 "",
@@ -885,6 +887,44 @@ class MeetingOsServiceIntegrationTest {
 
         assertThat(publicQueryService.publicSeatQuery(request).seatCode()).isEqualTo("A区-1-1");
         assertThat(publicQueryService.publicRoomQuery(request).hotelName()).isEqualTo("北京会议中心酒店");
+    }
+
+    @Test
+    void combinedPublicQueryMatchesIdentityOnceAndKeepsIndependentResults() throws Exception {
+        enablePublicQueries();
+        seatingService.manualAssign(new ManualAssignSeatRequest(
+                1L,
+                seatRepository.findByMeetingIdAndAreaNameOrderByRowNoAscSeatNoAsc(1L, "A区").get(0).getId()
+        ));
+        ensureRoom("1801");
+        roomService.assign(new AssignRoomRequest(1L, "1801", "前台领取房卡"));
+        PublicQueryRequest request = new PublicQueryRequest(
+                TEST_PUBLIC_QUERY_TOKEN,
+                Map.of(PublicQueryField.PHONE, "0001", PublicQueryField.NAME, "嘉宁")
+        );
+
+        PublicCombinedQueryResponse response = publicQueryService.publicCombinedQueryResponse(request, null, null);
+
+        assertThat(response.seat()).isInstanceOf(com.meetingos.seating.SeatQueryResult.class);
+        assertThat(response.seatError()).isNull();
+        assertThat(response.room()).isInstanceOf(com.meetingos.room.RoomQueryResult.class);
+        assertThat(response.roomError()).isNull();
+        assertThat(response.dinner()).isNull();
+
+        mockMvc.perform(post("/api/public/combined-query")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("""
+                                {
+                                  "publicQueryToken": "pq_test_ndef2026",
+                                  "values": {
+                                    "PHONE": "0001",
+                                    "NAME": "嘉宁"
+                                  }
+                                }
+                                """))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.data.seat.seatCode").value("A区-1-1"))
+                .andExpect(jsonPath("$.data.room.roomNo").value("1801"));
     }
 
     @Test

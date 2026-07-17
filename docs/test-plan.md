@@ -81,7 +81,7 @@ docker compose --env-file ../.env --profile tduck up -d
   `MEETINGOS_MYSQL_MIGRATION_TEST_URL`、`MEETINGOS_MYSQL_MIGRATION_TEST_USERNAME` 和
   `MEETINGOS_MYSQL_MIGRATION_TEST_PASSWORD`，执行
   `cd meetingos-backend && ./mvnw -Dtest=MigrationChecksumTest,FlywayMySqlMigrationTest test`。
-  必须同时看到 V1→V6 全部成功、`flyway validate` 成功、V1 Flyway checksum 与生产基线一致，且
+  必须同时看到 V1→V7 全部成功、`flyway validate` 成功、V1 Flyway checksum 与生产基线一致，且
   SHA-256 清单无漂移；未设置 URL 时 `FlywayMySqlMigrationTest` 会跳过，不算通过。checksum 不一致时
   必须阻断发布并核对生产迁移历史，禁止修改 V1 或使用 `flyway repair` 掩盖问题。
 - 创建两份邀请方案，分别保存 H5/海报草稿并同时发布，确认渠道链接互不混淆。

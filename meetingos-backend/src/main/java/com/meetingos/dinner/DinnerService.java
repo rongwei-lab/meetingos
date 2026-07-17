@@ -32,6 +32,8 @@ import java.util.stream.Collectors;
 @Service
 public class DinnerService {
 
+    private static final int IMPORT_BATCH_SIZE = 50;
+
     private final MeetingRepository meetingRepository;
     private final AttendeeRepository attendeeRepository;
     private final DinnerAssignmentRepository dinnerAssignmentRepository;
@@ -225,46 +227,67 @@ public class DinnerService {
         List<ImportFailure> failures = new ArrayList<>();
         int imported = 0;
 
-        for (TableRow row : rows) {
-            try {
-                importRowTransactionRunner.execute(() -> {
-                    // 每行统一先锁会议，避免自动建桌、容量校验与其他晚宴写操作形成反向锁序。
-                    Meeting meeting = lockMeetingForDinnerChange(meetingId);
-                    Attendee attendee = resolveAttendee(meetingId, row);
-                    String tableNo = requiredMaxLength(row, 80, "桌号", "餐桌号", "桌位", "tableNo", "table");
-                    attendee = lockAttendeeForDinnerChange(attendee.getId());
-                    String venue = optionalMaxLength(
-                            row.get("晚宴地点", "用餐地点", "宴会厅", "餐厅", "venue", "dinnerVenue"),
-                            160,
-                            "晚宴地点"
-                    );
-                    String dinnerTime = optionalMaxLength(
-                            row.get("晚宴时间", "用餐时间", "时间", "dinnerTime", "time"),
-                            120,
-                            "晚宴时间"
-                    );
-                    String remark = optionalMaxLength(
-                            row.get("备注", "晚宴备注", "用餐备注", "remark", "dinnerRemark"),
-                            500,
-                            "备注"
-                    );
-                    upsertAssignment(attendee, tableNo, remark, "IMPORT");
-                    // 只有分配和容量校验成功后才允许用旧模板补齐会议级设置。
-                    backfillDinnerSettingsIfBlank(meeting, venue, dinnerTime);
-                    return null;
-                });
-                imported++;
-            } catch (BusinessException ex) {
-                failures.add(new ImportFailure(row.rowNumber(), ex.getMessage()));
-            } catch (RuntimeException ex) {
-                failures.add(new ImportFailure(row.rowNumber(), "晚宴分配数据格式不正确，请检查该行字段"));
+        for (int start = 0; start < rows.size(); start += IMPORT_BATCH_SIZE) {
+            List<TableRow> batch = rows.subList(start, Math.min(start + IMPORT_BATCH_SIZE, rows.size()));
+            if (importRowTransactionRunner.supportsBatchTransactions() && batch.size() > 1) {
+                try {
+                    importRowTransactionRunner.execute(() -> {
+                        batch.forEach(row -> importAssignmentRowWithinTransaction(meetingId, row));
+                        return null;
+                    });
+                    imported += batch.size();
+                    progressListener.onProgress(imported + failures.size(), imported, failures.size());
+                    continue;
+                } catch (RuntimeException ignored) {
+                    // 批次已回滚，逐行重试以继续输出原有的失败行明细。
+                }
             }
-            progressListener.onProgress(imported + failures.size(), imported, failures.size());
+
+            for (TableRow row : batch) {
+                try {
+                    importRowTransactionRunner.execute(() -> {
+                        importAssignmentRowWithinTransaction(meetingId, row);
+                        return null;
+                    });
+                    imported++;
+                } catch (BusinessException ex) {
+                    failures.add(new ImportFailure(row.rowNumber(), ex.getMessage()));
+                } catch (RuntimeException ex) {
+                    failures.add(new ImportFailure(row.rowNumber(), "晚宴分配数据格式不正确，请检查该行字段"));
+                }
+                progressListener.onProgress(imported + failures.size(), imported, failures.size());
+            }
         }
         return ImportResult.of(rows.size(), imported, failures, "晚宴分配");
     }
 
-    @Transactional(readOnly = true)
+    private void importAssignmentRowWithinTransaction(Long meetingId, TableRow row) {
+        // 批次内仍统一先锁会议，保持与其他晚宴写操作相同的锁顺序。
+        Meeting meeting = lockMeetingForDinnerChange(meetingId);
+        Attendee attendee = resolveAttendee(meetingId, row);
+        String tableNo = requiredMaxLength(row, 80, "桌号", "餐桌号", "桌位", "tableNo", "table");
+        attendee = lockAttendeeForDinnerChange(attendee.getId());
+        String venue = optionalMaxLength(
+                row.get("晚宴地点", "用餐地点", "宴会厅", "餐厅", "venue", "dinnerVenue"),
+                160,
+                "晚宴地点"
+        );
+        String dinnerTime = optionalMaxLength(
+                row.get("晚宴时间", "用餐时间", "时间", "dinnerTime", "time"),
+                120,
+                "晚宴时间"
+        );
+        String remark = optionalMaxLength(
+                row.get("备注", "晚宴备注", "用餐备注", "remark", "dinnerRemark"),
+                500,
+                "备注"
+        );
+        upsertAssignment(attendee, tableNo, remark, "IMPORT");
+        // 只有分配和容量校验成功后才允许用旧模板补齐会议级设置。
+        backfillDinnerSettingsIfBlank(meeting, venue, dinnerTime);
+    }
+
+    @Transactional(readOnly = true, noRollbackFor = BusinessException.class)
     public DinnerQueryResult query(Long meetingId, Attendee attendee) {
         if (attendee.getReviewStatus() != ReviewStatus.APPROVED) {
             throw BusinessException.badRequest("报名尚未审核通过，暂不能查询晚宴桌号");
@@ -598,7 +621,7 @@ public class DinnerService {
         details.put("newTableNo", newTableNo);
         details.put("source", source);
         details.put("remark", remark);
-        operationLogService.record(
+        operationLogService.recordWithinTransaction(
                 "DINNER_ASSIGNMENT_CHANGE",
                 "DINNER",
                 attendee.getId() == null ? null : attendee.getId().toString(),

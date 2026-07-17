@@ -26,6 +26,15 @@ public class PublicQueryProperties {
      */
     private boolean trustForwardHeaders = false;
 
+    /** 公开查询历史保留天数，防止审计表无限增长。 */
+    private int historyRetentionDays = 180;
+
+    /** 单个清理事务删除的最大行数。 */
+    private int historyCleanupBatchSize = 1000;
+
+    /** 单次调度允许处理的最大批次数，避免清理任务长期占用数据库。 */
+    private int historyCleanupMaxBatches = 10;
+
     public int getRateLimitPerMinute() {
         return rateLimitPerMinute;
     }
@@ -56,5 +65,29 @@ public class PublicQueryProperties {
 
     public void setTrustForwardHeaders(boolean trustForwardHeaders) {
         this.trustForwardHeaders = trustForwardHeaders;
+    }
+
+    public int getHistoryRetentionDays() {
+        return historyRetentionDays;
+    }
+
+    public void setHistoryRetentionDays(int historyRetentionDays) {
+        this.historyRetentionDays = historyRetentionDays;
+    }
+
+    public int getHistoryCleanupBatchSize() {
+        return historyCleanupBatchSize;
+    }
+
+    public void setHistoryCleanupBatchSize(int historyCleanupBatchSize) {
+        this.historyCleanupBatchSize = historyCleanupBatchSize;
+    }
+
+    public int getHistoryCleanupMaxBatches() {
+        return historyCleanupMaxBatches;
+    }
+
+    public void setHistoryCleanupMaxBatches(int historyCleanupMaxBatches) {
+        this.historyCleanupMaxBatches = historyCleanupMaxBatches;
     }
 }

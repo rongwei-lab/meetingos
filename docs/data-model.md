@@ -271,6 +271,22 @@ TDuck 同步日志。
 | `attendee_id` | bigint | 关联参会人 |
 | `created_at` | datetime | 创建时间 |
 
+### tduck_pull_sync_tasks
+
+TDuck 全量拉取同步任务。任务按会议互斥，通过可选幂等键返回同一任务；运行中的任务使用 `run_token` 和 `lease_until` 防止旧 worker 覆盖被恢复任务的进度。
+
+| 字段 | 类型建议 | 说明 |
+| --- | --- | --- |
+| `meeting_id` | bigint | 所属会议 |
+| `form_key` | varchar(120) | 创建时固定的 TDuck 表单 key |
+| `idempotency_key` | varchar(128) | 客户端重试幂等键，同会议唯一 |
+| `status` | varchar(32) | `PENDING`、`RUNNING`、`COMPLETED` 或 `FAILED` |
+| `total_rows` / `processed_rows` | int | 总量与当前已处理数量 |
+| `success_rows` / `duplicate_rows` / `failed_rows` | int | 处理结果计数 |
+| `failure_details` | text | 有限失败样例 JSON |
+| `lease_until` / `run_token` | datetime / varchar(64) | 租约与当前 worker 所有权 |
+| `requested_by` | varchar(64) | 发起任务的后台账号 |
+
 ### operation_log
 
 操作日志。

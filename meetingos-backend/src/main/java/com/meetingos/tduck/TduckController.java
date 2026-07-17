@@ -32,10 +32,14 @@ public class TduckController {
     private static final Logger log = LoggerFactory.getLogger(TduckController.class);
 
     private final TduckService tduckService;
+    private final TduckPullSyncTaskService pullSyncTaskService;
     private final OperationLogService operationLogService;
 
-    public TduckController(TduckService tduckService, OperationLogService operationLogService) {
+    public TduckController(TduckService tduckService,
+                           TduckPullSyncTaskService pullSyncTaskService,
+                           OperationLogService operationLogService) {
         this.tduckService = tduckService;
+        this.pullSyncTaskService = pullSyncTaskService;
         this.operationLogService = operationLogService;
     }
 
@@ -135,7 +139,17 @@ public class TduckController {
     @PreAuthorize("@meetingAccess.canManage(#request.meetingId())")
     @AuditLog(action = "TDUCK_BATCH_PULL_SYNC", targetType = "TDUCK_DATA")
     public ApiResponse<TduckBatchPullSyncResponse> batchPullSync(@Valid @RequestBody TduckBatchPullSyncRequest request) {
-        return ApiResponse.ok(tduckService.batchPullSync(request));
+        return ApiResponse.ok(pullSyncTaskService.create(request));
+    }
+
+    @GetMapping({
+            "/api/tduck/sync/pull/tasks/{taskId}",
+            "/api/admin/tduck/sync/pull/tasks/{taskId}"
+    })
+    @PreAuthorize("@meetingAccess.canManage(#meetingId)")
+    public ApiResponse<TduckBatchPullSyncResponse> batchPullSyncTask(@PathVariable Long taskId,
+                                                                     @RequestParam Long meetingId) {
+        return ApiResponse.ok(pullSyncTaskService.detail(meetingId, taskId));
     }
 
     @PostMapping({

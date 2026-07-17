@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { buildImportIdempotencyKey, importTaskStatusText, pollFileTask } from "../src/utils/fileTasks";
 import { filenameFromDisposition } from "../src/stores/meeting";
 
@@ -45,6 +45,45 @@ describe("文件任务工具", () => {
 
     await expect(polling).rejects.toMatchObject({ name: "AbortError" });
     expect(loadCount).toBe(0);
+  });
+
+  it("长任务在进度不变时退避，进度推进后恢复初始间隔", async () => {
+    vi.useFakeTimers();
+    try {
+      const states = [
+        { status: "RUNNING", progress: 0 },
+        { status: "RUNNING", progress: 10 },
+        { status: "RUNNING", progress: 10 },
+        { status: "COMPLETED", progress: 100 }
+      ];
+      let loadCount = 0;
+      const polling = pollFileTask(
+        { status: "RUNNING", progress: 0 },
+        async () => states[loadCount++] || states.at(-1)!,
+        new Set(["COMPLETED"]),
+        {
+          intervalMs: 1_000,
+          maxIntervalMs: 3_000,
+          backoffFactor: 1.5,
+          resetBackoffWhen: (previous, current) => current.progress > previous.progress
+        }
+      );
+
+      await vi.advanceTimersByTimeAsync(1_000);
+      expect(loadCount).toBe(1);
+      await vi.advanceTimersByTimeAsync(1_499);
+      expect(loadCount).toBe(1);
+      await vi.advanceTimersByTimeAsync(1);
+      expect(loadCount).toBe(2);
+      await vi.advanceTimersByTimeAsync(1_000);
+      expect(loadCount).toBe(3);
+      await vi.advanceTimersByTimeAsync(1_500);
+
+      await expect(polling).resolves.toMatchObject({ status: "COMPLETED", progress: 100 });
+      expect(loadCount).toBe(4);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("导入状态使用文件格式检查文案", () => {

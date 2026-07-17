@@ -6,6 +6,7 @@ import com.meetingos.tduck.TduckService;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.stereotype.Service;
+import org.springframework.transaction.annotation.Propagation;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.util.StringUtils;
 
@@ -17,7 +18,6 @@ import java.util.List;
 import java.util.Locale;
 import java.util.Optional;
 import java.util.UUID;
-import java.util.function.Consumer;
 
 import static com.meetingos.invitation.InvitationApiModels.*;
 
@@ -52,116 +52,130 @@ public class PublicInvitationService {
                 : publicBaseUrl;
     }
 
-    @Transactional(readOnly = true)
+    @Transactional(propagation = Propagation.NOT_SUPPORTED)
     public PublicInvitationResponse detail(String shareToken) {
-        InvitationShareLink link = requireAvailableLink(shareToken);
-        MeetingInvitationVersion version = link.getCurrentVersion();
-        RegistrationInfo registration = tduckService.registrationInfo(link.getMeeting().getCode());
-        java.util.Set<Long> referencedAssets = designValidator.referencedAssetIds(version.getDesignDocument());
-        List<AssetResponse> assets = assetRepository.findByIdIn(referencedAssets).stream()
-                .filter(asset -> asset.getMeeting().getId().equals(link.getMeeting().getId()))
-                .map(this::toAsset)
-                .toList();
+        PublicInvitationSnapshot snapshot = transactionRunner.readOnly(() -> {
+            InvitationShareLink link = requireAvailableLink(shareToken);
+            MeetingInvitationVersion version = link.getCurrentVersion();
+            java.util.Set<Long> referencedAssets = designValidator.referencedAssetIds(version.getDesignDocument());
+            List<AssetResponse> assets = assetRepository.findByIdIn(referencedAssets).stream()
+                    .filter(asset -> asset.getMeeting().getId().equals(link.getMeeting().getId()))
+                    .map(this::toAsset)
+                    .toList();
+            return new PublicInvitationSnapshot(
+                    link.getInvitation().getId(), version.getVersionNo(), link.getChannelType(), link.getChannelName(),
+                    version.getDesignDocument(), version.getMeetingSnapshot(), link.getMeeting().getPublicQueryToken(),
+                    assets, link.getMeeting().getCode()
+            );
+        });
+        // TDuck 是外部网络调用，必须在数据库快照事务提交并释放连接后执行。
+        RegistrationInfo registration = tduckService.registrationInfo(snapshot.meetingCode());
         return new PublicInvitationResponse(
-                link.getInvitation().getId(), version.getVersionNo(), link.getChannelType(), link.getChannelName(),
-                version.getDesignDocument(), version.getMeetingSnapshot(),
-                link.getMeeting().getPublicQueryToken(), assets,
+                snapshot.invitationId(), snapshot.versionNo(), snapshot.channelType(), snapshot.channelName(),
+                snapshot.designDocument(), snapshot.meeting(), snapshot.publicQueryToken(), snapshot.assets(),
                 registration.open(), registration.message()
         );
     }
 
-    @Transactional
+    @Transactional(propagation = Propagation.NOT_SUPPORTED)
     public EventReceipt recordView(String shareToken,
                                    PublicEventRequest request,
                                    String rawVisitorId,
                                    String userAgent,
                                    String referrer) {
-        InvitationShareLink link = requireAvailableLink(shareToken);
         String clientEventId = normalizeUuid(request.clientEventId());
         EventWriteResult result = saveEventIdempotently(
-                link, InvitationEventType.PAGE_VIEW, clientEventId, rawVisitorId, userAgent, referrer,
-                ignored -> {
-                }
+                shareToken, InvitationEventType.PAGE_VIEW, clientEventId, rawVisitorId, userAgent, referrer
         );
         return new EventReceipt(result.recorded());
     }
 
-    @Transactional
+    @Transactional(propagation = Propagation.NOT_SUPPORTED)
     public RegistrationIntentResponse registrationIntent(String shareToken,
                                                           PublicEventRequest request,
                                                           String rawVisitorId,
                                                           String userAgent,
                                                           String referrer) {
-        InvitationShareLink link = requireAvailableLink(shareToken);
-        RegistrationInfo registration = tduckService.registrationInfo(link.getMeeting().getCode());
+        RegistrationTarget target = transactionRunner.readOnly(() -> {
+            InvitationShareLink link = requireAvailableLink(shareToken);
+            return new RegistrationTarget(link.getMeeting().getCode());
+        });
+        // 远程表单状态校验不占用数据库连接；写点击事件时会再次校验分享链接状态。
+        RegistrationInfo registration = tduckService.registrationInfo(target.meetingCode());
         if (!registration.open() || !StringUtils.hasText(registration.formKey())) {
             throw BusinessException.badRequest(registration.message());
         }
         String clientEventId = normalizeUuid(request.clientEventId());
-        LocalDateTime expiresAt = clickExpiry(link);
         EventWriteResult result = saveEventIdempotently(
-                link, InvitationEventType.CTA_CLICK, clientEventId, rawVisitorId, userAgent, referrer,
-                event -> {
-                    event.setClickPublicId(tokenService.newOpaqueId());
-                    event.setClickExpiresAt(expiresAt);
-                }
+                shareToken, InvitationEventType.CTA_CLICK, clientEventId, rawVisitorId, userAgent, referrer
         );
-        InvitationEvent event = result.event();
         String token = tokenService.create(
-                event.getClickPublicId(), link.getMeeting().getId(), registration.formKey(),
-                event.getClickExpiresAt().atZone(ZoneId.systemDefault()).toInstant()
+                result.clickPublicId(), result.meetingId(), registration.formKey(),
+                result.clickExpiresAt().atZone(ZoneId.systemDefault()).toInstant()
         );
         return new RegistrationIntentResponse(
                 token,
-                publicBaseUrl + "/r/" + link.getMeeting().getCode() + "#mos_at=" + token,
-                event.getClickExpiresAt()
+                publicBaseUrl + "/r/" + target.meetingCode() + "#mos_at=" + token,
+                result.clickExpiresAt()
         );
     }
 
-    private EventWriteResult saveEventIdempotently(InvitationShareLink link,
+    private EventWriteResult saveEventIdempotently(String shareToken,
                                                     InvitationEventType eventType,
                                                     String clientEventId,
                                                     String rawVisitorId,
                                                     String userAgent,
-                                                    String referrer,
-                                                    Consumer<InvitationEvent> configure) {
-        Optional<InvitationEvent> existing = eventRepository
-                .findByShareLinkIdAndClientEventId(link.getId(), clientEventId);
-        if (existing.isPresent()) {
-            return existingEvent(existing.get(), eventType);
-        }
+                                                    String referrer) {
         try {
             return transactionRunner.requiresNew(() -> {
+                InvitationShareLink link = requireAvailableLink(shareToken);
                 Optional<InvitationEvent> raced = eventRepository
                         .findByShareLinkIdAndClientEventId(link.getId(), clientEventId);
                 if (raced.isPresent()) {
-                    return existingEvent(raced.get(), eventType);
+                    return existingEvent(raced.get(), eventType, link.getMeeting().getId());
                 }
                 InvitationEvent event = newEvent(
                         link, eventType, clientEventId, rawVisitorId, userAgent, referrer
                 );
-                configure.accept(event);
-                return new EventWriteResult(eventRepository.saveAndFlush(event), true);
+                if (eventType == InvitationEventType.CTA_CLICK) {
+                    event.setClickPublicId(tokenService.newOpaqueId());
+                    event.setClickExpiresAt(clickExpiry(link));
+                }
+                return eventWriteResult(eventRepository.saveAndFlush(event), true, link.getMeeting().getId());
             });
         } catch (DataIntegrityViolationException ex) {
             /*
              * 两个请求可能同时通过首次查询。后提交事务由唯一键完整回滚后，再在新事务中
              * 读取胜出事件；若冲突来自其他唯一键（如极小概率 click ID 碰撞），则保留原异常。
              */
-            Optional<InvitationEvent> winner = transactionRunner.requiresNew(() -> eventRepository
-                    .findByShareLinkIdAndClientEventId(link.getId(), clientEventId));
-            if (winner.isEmpty()) {
-                throw ex;
-            }
-            return existingEvent(winner.get(), eventType);
+            return transactionRunner.requiresNew(() -> {
+                InvitationShareLink link = requireAvailableLink(shareToken);
+                Optional<InvitationEvent> winner = eventRepository
+                        .findByShareLinkIdAndClientEventId(link.getId(), clientEventId);
+                if (winner.isEmpty()) {
+                    throw ex;
+                }
+                return existingEvent(winner.get(), eventType, link.getMeeting().getId());
+            });
         }
     }
 
-    private EventWriteResult existingEvent(InvitationEvent event, InvitationEventType expectedType) {
+    private EventWriteResult existingEvent(InvitationEvent event,
+                                           InvitationEventType expectedType,
+                                           Long meetingId) {
         if (event.getEventType() != expectedType) {
             throw BusinessException.conflict("clientEventId 已用于其他事件");
         }
-        return new EventWriteResult(event, false);
+        return eventWriteResult(event, false, meetingId);
+    }
+
+    private EventWriteResult eventWriteResult(InvitationEvent event, boolean recorded, Long meetingId) {
+        return new EventWriteResult(
+                recorded,
+                event.getClickPublicId(),
+                event.getClickExpiresAt(),
+                meetingId
+        );
     }
 
     private InvitationShareLink requireAvailableLink(String shareToken) {
@@ -262,6 +276,27 @@ public class PublicInvitationService {
                 asset.getSizeBytes(), asset.getWidthPx(), asset.getHeightPx(), asset.getCreatedAt());
     }
 
-    private record EventWriteResult(InvitationEvent event, boolean recorded) {
+    private record PublicInvitationSnapshot(
+            Long invitationId,
+            int versionNo,
+            InvitationChannelType channelType,
+            String channelName,
+            InvitationDesignDocumentV1 designDocument,
+            InvitationMeetingSnapshot meeting,
+            String publicQueryToken,
+            List<AssetResponse> assets,
+            String meetingCode
+    ) {
+    }
+
+    private record RegistrationTarget(String meetingCode) {
+    }
+
+    private record EventWriteResult(
+            boolean recorded,
+            String clickPublicId,
+            LocalDateTime clickExpiresAt,
+            Long meetingId
+    ) {
     }
 }

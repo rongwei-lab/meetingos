@@ -11,6 +11,16 @@ import java.util.Optional;
 public interface InvitationShareLinkRepository extends JpaRepository<InvitationShareLink, Long> {
     List<InvitationShareLink> findByInvitationIdOrderByCreatedAtDesc(Long invitationId);
     List<InvitationShareLink> findByMeetingIdOrderByCreatedAtAsc(Long meetingId);
+
+    @Query("""
+            select l from InvitationShareLink l
+              join fetch l.invitation invitation
+            where l.meeting.id = :meetingId
+              and (:invitationId is null or invitation.id = :invitationId)
+            order by l.createdAt asc, l.id asc
+            """)
+    List<InvitationShareLink> findAnalyticsLinks(@Param("meetingId") Long meetingId,
+                                                @Param("invitationId") Long invitationId);
     int countByInvitationId(Long invitationId);
     Optional<InvitationShareLink> findByIdAndInvitationId(Long id, Long invitationId);
 

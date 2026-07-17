@@ -16,6 +16,10 @@ spring:
     username: meetingos
     password: meetingos
     driver-class-name: com.mysql.cj.jdbc.Driver
+    hikari:
+      maximum-pool-size: ${DB_POOL_MAX_SIZE:20}
+      minimum-idle: ${DB_POOL_MIN_IDLE:5}
+      connection-timeout: ${DB_POOL_CONNECTION_TIMEOUT_MS:30000}
   jpa:
     open-in-view: false
     hibernate:
@@ -36,6 +40,8 @@ springdoc:
     path: /swagger-ui.html
 
 meetingos:
+  http:
+    max-json-body-bytes: ${MEETINGOS_MAX_JSON_BODY_BYTES:1048576}
   app:
     public-base-url: "${MEETINGOS_PUBLIC_BASE_URL:http://localhost:5173}"
     upload-dir: "${MEETINGOS_UPLOAD_DIR:uploads}"
@@ -62,9 +68,16 @@ meetingos:
     captcha-enabled: ${PUBLIC_QUERY_CAPTCHA_ENABLED:false}
     captcha-ttl-seconds: ${PUBLIC_QUERY_CAPTCHA_TTL_SECONDS:300}
     trust-forward-headers: ${PUBLIC_QUERY_TRUST_FORWARD_HEADERS:false}
+    history-retention-days: ${PUBLIC_QUERY_HISTORY_RETENTION_DAYS:180}
+    history-cleanup-batch-size: ${PUBLIC_QUERY_HISTORY_CLEANUP_BATCH_SIZE:1000}
+    history-cleanup-max-batches: ${PUBLIC_QUERY_HISTORY_CLEANUP_MAX_BATCHES:10}
+    history-cleanup-cron: "${PUBLIC_QUERY_HISTORY_CLEANUP_CRON:0 15 4 * * *}"
   invitation:
     tracking-secret: "${MEETINGOS_INVITATION_TRACKING_SECRET:change-this-invitation-tracking-secret-at-least-32-bytes}"
     event-retention-days: ${MEETINGOS_INVITATION_EVENT_RETENTION_DAYS:180}
+    asset-max-width: ${MEETINGOS_INVITATION_ASSET_MAX_WIDTH:12000}
+    asset-max-height: ${MEETINGOS_INVITATION_ASSET_MAX_HEIGHT:12000}
+    asset-max-pixels: ${MEETINGOS_INVITATION_ASSET_MAX_PIXELS:40000000}
     amap-key: "${MEETINGOS_INVITATION_AMAP_KEY:}"
   operation-log:
     retention-days: ${MEETINGOS_OPERATION_LOG_RETENTION_DAYS:90}

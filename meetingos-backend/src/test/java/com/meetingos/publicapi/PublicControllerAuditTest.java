@@ -155,4 +155,25 @@ class PublicControllerAuditTest {
 
         verifyNoInteractions(operationLogService);
     }
+
+    @Test
+    void combinedQueryAppliesRateLimitAndCaptchaOnlyOnce() {
+        PublicQueryRequest request = new PublicQueryRequest(
+                "public-query-token",
+                Map.of(PublicQueryField.PHONE, "13800000001"),
+                "captcha-id",
+                "captcha-answer"
+        );
+        PublicCombinedQueryResponse combined = new PublicCombinedQueryResponse(
+                null, "尚未排座", null, "尚未安排房间", null, "尚未安排晚宴"
+        );
+        when(publicQueryService.publicCombinedQueryResponse(request, "203.0.113.11", null)).thenReturn(combined);
+
+        var response = controller.combinedQuery(request, httpRequest);
+
+        assertThat(response.data()).isSameAs(combined);
+        verify(publicRateLimitService).check(httpRequest);
+        verify(publicCaptchaService).verifyAndConsume("captcha-id", "captcha-answer");
+        verify(publicQueryService).publicCombinedQueryResponse(request, "203.0.113.11", null);
+    }
 }

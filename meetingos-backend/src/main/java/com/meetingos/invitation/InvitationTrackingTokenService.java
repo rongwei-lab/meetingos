@@ -110,7 +110,9 @@ public class InvitationTrackingTokenService {
 
     private byte[] decode(String value) {
         try {
-            return Base64.getUrlDecoder().decode(value);
+            byte[] decoded = Base64.getUrlDecoder().decode(value);
+            // 拒绝只修改未使用填充位、但解码后字节完全相同的非规范 Base64URL 别名。
+            return encode(decoded).equals(value) ? decoded : new byte[0];
         } catch (IllegalArgumentException ex) {
             return new byte[0];
         }

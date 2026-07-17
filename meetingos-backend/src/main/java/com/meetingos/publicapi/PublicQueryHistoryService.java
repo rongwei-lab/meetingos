@@ -8,7 +8,6 @@ import com.meetingos.meeting.Meeting;
 import com.meetingos.meeting.MeetingRepository;
 import org.springframework.data.domain.Sort;
 import org.springframework.stereotype.Service;
-import org.springframework.transaction.annotation.Propagation;
 import org.springframework.transaction.annotation.Transactional;
 
 import java.sql.Timestamp;
@@ -34,7 +33,7 @@ public class PublicQueryHistoryService {
         this.meetingRepository = meetingRepository;
     }
 
-    @Transactional(propagation = Propagation.REQUIRES_NEW)
+    @Transactional
     public void recordSuccess(Meeting meeting,
                               PublicQueryType queryType,
                               Map<PublicQueryField, String> values,
@@ -45,7 +44,33 @@ public class PublicQueryHistoryService {
         save(meeting, queryType, PublicQueryStatus.SUCCESS, values, attendee, resultSummary, null, clientIp, userAgent);
     }
 
-    @Transactional(propagation = Propagation.REQUIRES_NEW)
+    @Transactional
+    public void recordSuccessBatch(Meeting meeting,
+                                   PublicQueryType queryType,
+                                   Map<PublicQueryField, String> values,
+                                   List<Attendee> attendees,
+                                   List<String> resultSummaries,
+                                   String clientIp,
+                                   String userAgent) {
+        if (attendees.size() != resultSummaries.size()) {
+            throw new IllegalArgumentException("查询历史人员和结果数量不一致");
+        }
+        for (int index = 0; index < attendees.size(); index++) {
+            save(
+                    meeting,
+                    queryType,
+                    PublicQueryStatus.SUCCESS,
+                    values,
+                    attendees.get(index),
+                    resultSummaries.get(index),
+                    null,
+                    clientIp,
+                    userAgent
+            );
+        }
+    }
+
+    @Transactional
     public void recordFailure(Meeting meeting,
                               PublicQueryType queryType,
                               Map<PublicQueryField, String> values,

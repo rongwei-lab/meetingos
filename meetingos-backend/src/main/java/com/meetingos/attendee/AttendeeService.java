@@ -45,6 +45,8 @@ import java.util.Set;
 @Service
 public class AttendeeService {
 
+    private static final int IMPORT_BATCH_SIZE = 50;
+
     private static final Set<String> KNOWN_IMPORT_HEADERS = Set.of(
             "姓名", "name", "参会人", "attendeename",
             "手机号", "手机", "电话", "phone", "mobile", "tel",
@@ -325,16 +327,35 @@ public class AttendeeService {
         List<ImportFailure> failures = new ArrayList<>();
         int imported = 0;
 
-        for (TableRow row : rows) {
-            try {
-                importAttendeeRowWithCodeRetry(meetingId, row, extensionFieldKeys);
-                imported++;
-            } catch (BusinessException ex) {
-                failures.add(new ImportFailure(row.rowNumber(), ex.getMessage()));
-            } catch (RuntimeException ex) {
-                failures.add(new ImportFailure(row.rowNumber(), "数据格式不正确，请检查该行字段"));
+        for (int start = 0; start < rows.size(); start += IMPORT_BATCH_SIZE) {
+            List<TableRow> batch = rows.subList(start, Math.min(start + IMPORT_BATCH_SIZE, rows.size()));
+            if (importRowTransactionRunner.supportsBatchTransactions() && batch.size() > 1) {
+                try {
+                    importRowTransactionRunner.execute(() -> {
+                        for (TableRow row : batch) {
+                            importAttendeeRowWithinTransaction(meetingId, row, extensionFieldKeys);
+                        }
+                        return null;
+                    });
+                    imported += batch.size();
+                    progressListener.onProgress(imported + failures.size(), imported, failures.size());
+                    continue;
+                } catch (RuntimeException ignored) {
+                    // 整批已经回滚，下面逐行短事务重试，以保留原有失败行定位和部分成功语义。
+                }
             }
-            progressListener.onProgress(imported + failures.size(), imported, failures.size());
+
+            for (TableRow row : batch) {
+                try {
+                    importAttendeeRowWithCodeRetry(meetingId, row, extensionFieldKeys);
+                    imported++;
+                } catch (BusinessException ex) {
+                    failures.add(new ImportFailure(row.rowNumber(), ex.getMessage()));
+                } catch (RuntimeException ex) {
+                    failures.add(new ImportFailure(row.rowNumber(), "数据格式不正确，请检查该行字段"));
+                }
+                progressListener.onProgress(imported + failures.size(), imported, failures.size());
+            }
         }
         return ImportResult.of(rows.size(), imported, failures, "参会人");
     }
@@ -345,19 +366,7 @@ public class AttendeeService {
         for (int attempt = 1; attempt <= 3; attempt++) {
             try {
                 importRowTransactionRunner.execute(() -> {
-                    Meeting managedMeeting = meetingRepository.findById(meetingId)
-                            .orElseThrow(() -> BusinessException.notFound("会议不存在"));
-                    Attendee attendee = fromRow(managedMeeting, row, extensionFieldKeys);
-                    String requestedRoomNo = row.get("房间号", "房号", "roomNo", "room");
-                    Attendee saved = attendeeRepository.saveAndFlush(attendee);
-                    synchronizeRoomRequest(
-                            saved,
-                            attendee.isAccommodationRequired(),
-                            requestedRoomNo,
-                            attendee.getRoomRemark(),
-                            "ATTENDEE_IMPORT"
-                    );
-                    attendeeRepository.flush();
+                    importAttendeeRowWithinTransaction(meetingId, row, extensionFieldKeys);
                     return null;
                 });
                 return;
@@ -374,6 +383,24 @@ public class AttendeeService {
                 throw ex;
             }
         }
+    }
+
+    private void importAttendeeRowWithinTransaction(Long meetingId,
+                                                    TableRow row,
+                                                    Map<String, String> extensionFieldKeys) {
+        Meeting managedMeeting = meetingRepository.findById(meetingId)
+                .orElseThrow(() -> BusinessException.notFound("会议不存在"));
+        Attendee attendee = fromRow(managedMeeting, row, extensionFieldKeys);
+        String requestedRoomNo = row.get("房间号", "房号", "roomNo", "room");
+        Attendee saved = attendeeRepository.saveAndFlush(attendee);
+        synchronizeRoomRequest(
+                saved,
+                attendee.isAccommodationRequired(),
+                requestedRoomNo,
+                attendee.getRoomRemark(),
+                "ATTENDEE_IMPORT"
+        );
+        attendeeRepository.flush();
     }
 
     @Transactional(readOnly = true)

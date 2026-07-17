@@ -5,6 +5,9 @@ export interface FileTaskLike {
 export interface PollFileTaskOptions<T extends FileTaskLike> {
   signal?: AbortSignal;
   intervalMs?: number;
+  maxIntervalMs?: number;
+  backoffFactor?: number;
+  resetBackoffWhen?: (previous: T, current: T) => boolean;
   timeoutMs?: number;
   onUpdate?: (task: T) => void;
 }
@@ -37,18 +40,25 @@ export async function pollFileTask<T extends FileTaskLike>(
   options: PollFileTaskOptions<T> = {}
 ) {
   const intervalMs = options.intervalMs ?? 800;
+  const maxIntervalMs = Math.max(intervalMs, options.maxIntervalMs ?? intervalMs);
+  const backoffFactor = Math.max(1, options.backoffFactor ?? 1);
   const timeoutMs = options.timeoutMs ?? 15 * 60_000;
   const startedAt = Date.now();
   let current = initialTask;
+  let currentIntervalMs = intervalMs;
   options.onUpdate?.(current);
 
   while (!stopStatuses.has(current.status)) {
     if (Date.now() - startedAt >= timeoutMs) {
       throw new Error("任务处理时间过长，请稍后在任务记录中查看结果");
     }
-    await abortableDelay(intervalMs, options.signal);
+    await abortableDelay(currentIntervalMs, options.signal);
+    const previous = current;
     current = await loadTask();
     options.onUpdate?.(current);
+    currentIntervalMs = options.resetBackoffWhen?.(previous, current)
+      ? intervalMs
+      : Math.min(maxIntervalMs, Math.round(currentIntervalMs * backoffFactor));
   }
   return current;
 }

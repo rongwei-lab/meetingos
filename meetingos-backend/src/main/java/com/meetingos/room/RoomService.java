@@ -30,11 +30,14 @@ import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.function.Consumer;
 import java.util.function.Function;
 import java.util.stream.Collectors;
 
 @Service
 public class RoomService {
+
+    private static final int IMPORT_BATCH_SIZE = 50;
 
     private final MeetingRepository meetingRepository;
     private final RoomRepository roomRepository;
@@ -173,27 +176,13 @@ public class RoomService {
     public ImportResult importRoomRows(Long meetingId, List<TableRow> rows, ImportProgressListener progressListener) {
         meetingRepository.findById(meetingId)
                 .orElseThrow(() -> BusinessException.notFound("会议不存在"));
-        List<ImportFailure> failures = new ArrayList<>();
-        int imported = 0;
-
-        for (TableRow row : rows) {
-            try {
-                importRowTransactionRunner.execute(() -> {
-                    Meeting meeting = meetingRepository.findById(meetingId)
-                            .orElseThrow(() -> BusinessException.notFound("会议不存在"));
-                    Room room = fromRoomRow(meeting, row);
-                    roomRepository.saveAndFlush(room);
-                    return null;
-                });
-                imported++;
-            } catch (BusinessException ex) {
-                failures.add(new ImportFailure(row.rowNumber(), ex.getMessage()));
-            } catch (RuntimeException ex) {
-                failures.add(new ImportFailure(row.rowNumber(), "房间数据格式不正确，请检查该行字段"));
-            }
-            progressListener.onProgress(imported + failures.size(), imported, failures.size());
-        }
-        return ImportResult.of(rows.size(), imported, failures, "房间号");
+        return importRowsInBatches(
+                rows,
+                progressListener,
+                "房间号",
+                "房间数据格式不正确，请检查该行字段",
+                row -> importRoomRowWithinTransaction(meetingId, row)
+        );
     }
 
     public ImportResult importAssignments(Long meetingId, MultipartFile file) {
@@ -206,35 +195,77 @@ public class RoomService {
     public ImportResult importAssignmentRows(Long meetingId, List<TableRow> rows, ImportProgressListener progressListener) {
         meetingRepository.findById(meetingId)
                 .orElseThrow(() -> BusinessException.notFound("会议不存在"));
+        return importRowsInBatches(
+                rows,
+                progressListener,
+                "房间分配",
+                "分配数据格式不正确，请检查该行字段",
+                row -> importAssignmentRowWithinTransaction(meetingId, row)
+        );
+    }
+
+    private ImportResult importRowsInBatches(List<TableRow> rows,
+                                             ImportProgressListener progressListener,
+                                             String subject,
+                                             String genericError,
+                                             Consumer<TableRow> rowImporter) {
         List<ImportFailure> failures = new ArrayList<>();
         int imported = 0;
 
-        for (TableRow row : rows) {
-            try {
-                importRowTransactionRunner.execute(() -> {
-                    Attendee attendee = resolveAttendee(meetingId, row);
-                    attendee = lockAttendeeForRoomChange(attendee.getId());
-                    String roomNo = requiredMaxLength(row, 80, "房间号", "房号", "roomNo", "room");
-                    LockedRooms lockedRooms = lockRoomsForAssignment(attendee, roomNo);
-                    assignAttendeeToRoom(
-                            attendee,
-                            lockedRooms.target(),
-                            lockedRooms.previous(),
-                            optionalMaxLength(row.get("房间备注", "住宿备注", "remark", "roomRemark"), 160, "房间备注"),
-                            "IMPORT"
-                    );
-                    entityManager.flush();
-                    return null;
-                });
-                imported++;
-            } catch (BusinessException ex) {
-                failures.add(new ImportFailure(row.rowNumber(), ex.getMessage()));
-            } catch (RuntimeException ex) {
-                failures.add(new ImportFailure(row.rowNumber(), "分配数据格式不正确，请检查该行字段"));
+        for (int start = 0; start < rows.size(); start += IMPORT_BATCH_SIZE) {
+            List<TableRow> batch = rows.subList(start, Math.min(start + IMPORT_BATCH_SIZE, rows.size()));
+            if (importRowTransactionRunner.supportsBatchTransactions() && batch.size() > 1) {
+                try {
+                    importRowTransactionRunner.execute(() -> {
+                        batch.forEach(rowImporter);
+                        return null;
+                    });
+                    imported += batch.size();
+                    progressListener.onProgress(imported + failures.size(), imported, failures.size());
+                    continue;
+                } catch (RuntimeException ignored) {
+                    // 批次已完整回滚，逐行重试用于生成精确失败明细。
+                }
             }
-            progressListener.onProgress(imported + failures.size(), imported, failures.size());
+
+            for (TableRow row : batch) {
+                try {
+                    importRowTransactionRunner.execute(() -> {
+                        rowImporter.accept(row);
+                        return null;
+                    });
+                    imported++;
+                } catch (BusinessException ex) {
+                    failures.add(new ImportFailure(row.rowNumber(), ex.getMessage()));
+                } catch (RuntimeException ex) {
+                    failures.add(new ImportFailure(row.rowNumber(), genericError));
+                }
+                progressListener.onProgress(imported + failures.size(), imported, failures.size());
+            }
         }
-        return ImportResult.of(rows.size(), imported, failures, "房间分配");
+        return ImportResult.of(rows.size(), imported, failures, subject);
+    }
+
+    private void importRoomRowWithinTransaction(Long meetingId, TableRow row) {
+        Meeting meeting = meetingRepository.findById(meetingId)
+                .orElseThrow(() -> BusinessException.notFound("会议不存在"));
+        Room room = fromRoomRow(meeting, row);
+        roomRepository.saveAndFlush(room);
+    }
+
+    private void importAssignmentRowWithinTransaction(Long meetingId, TableRow row) {
+        Attendee attendee = resolveAttendee(meetingId, row);
+        attendee = lockAttendeeForRoomChange(attendee.getId());
+        String roomNo = requiredMaxLength(row, 80, "房间号", "房号", "roomNo", "room");
+        LockedRooms lockedRooms = lockRoomsForAssignment(attendee, roomNo);
+        assignAttendeeToRoom(
+                attendee,
+                lockedRooms.target(),
+                lockedRooms.previous(),
+                optionalMaxLength(row.get("房间备注", "住宿备注", "remark", "roomRemark"), 160, "房间备注"),
+                "IMPORT"
+        );
+        entityManager.flush();
     }
 
     @Transactional(readOnly = true)
@@ -517,7 +548,7 @@ public class RoomService {
         details.put("newRoomNo", newRoomNo);
         details.put("source", source);
         details.put("remark", remark);
-        operationLogService.record(
+        operationLogService.recordWithinTransaction(
                 "ROOM_ASSIGNMENT_CHANGE",
                 "ROOM",
                 attendee.getId() == null ? null : attendee.getId().toString(),

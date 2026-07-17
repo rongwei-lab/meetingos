@@ -11,7 +11,8 @@ import org.springframework.util.StringUtils;
 import org.springframework.web.multipart.MultipartFile;
 
 import javax.imageio.ImageIO;
-import java.awt.image.BufferedImage;
+import javax.imageio.ImageReader;
+import javax.imageio.stream.ImageInputStream;
 import java.io.IOException;
 import java.io.InputStream;
 import java.nio.charset.StandardCharsets;
@@ -20,6 +21,7 @@ import java.nio.file.Path;
 import java.time.LocalDate;
 import java.time.format.DateTimeFormatter;
 import java.util.Arrays;
+import java.util.Iterator;
 import java.util.Locale;
 import java.util.Map;
 import java.util.Set;
@@ -39,13 +41,22 @@ public class InvitationAssetService {
     private final Path uploadRoot;
     private final MeetingRepository meetingRepository;
     private final InvitationAssetRepository assetRepository;
+    private final int maxImageWidth;
+    private final int maxImageHeight;
+    private final long maxImagePixels;
 
     public InvitationAssetService(@Value("${meetingos.app.upload-dir:uploads}") String uploadDir,
                                   MeetingRepository meetingRepository,
-                                  InvitationAssetRepository assetRepository) {
+                                  InvitationAssetRepository assetRepository,
+                                  @Value("${meetingos.invitation.asset-max-width:12000}") int maxImageWidth,
+                                  @Value("${meetingos.invitation.asset-max-height:12000}") int maxImageHeight,
+                                  @Value("${meetingos.invitation.asset-max-pixels:40000000}") long maxImagePixels) {
         this.uploadRoot = Path.of(uploadDir).toAbsolutePath().normalize();
         this.meetingRepository = meetingRepository;
         this.assetRepository = assetRepository;
+        this.maxImageWidth = Math.max(1, maxImageWidth);
+        this.maxImageHeight = Math.max(1, maxImageHeight);
+        this.maxImagePixels = Math.max(1, maxImagePixels);
     }
 
     @Transactional(readOnly = true)
@@ -56,7 +67,6 @@ public class InvitationAssetService {
                 .toList();
     }
 
-    @Transactional
     public AssetResponse upload(Long meetingId, MultipartFile file) {
         Meeting meeting = ensureMeeting(meetingId);
         validateFile(file);
@@ -72,7 +82,7 @@ public class InvitationAssetService {
             Files.createDirectories(directory);
             file.transferTo(target);
             validateMagic(target, contentType);
-            BufferedImage image = ImageIO.read(target.toFile());
+            ImageDimensions dimensions = readAndValidateDimensions(target, contentType);
 
             InvitationAsset asset = new InvitationAsset();
             asset.setMeeting(meeting);
@@ -81,8 +91,8 @@ public class InvitationAssetService {
             asset.setPublicUrl("/uploads/images/invitations/" + meetingId + "/" + datePath + "/" + storageName);
             asset.setContentType(contentType);
             asset.setSizeBytes(file.getSize());
-            asset.setWidthPx(image == null ? null : image.getWidth());
-            asset.setHeightPx(image == null ? null : image.getHeight());
+            asset.setWidthPx(dimensions.width());
+            asset.setHeightPx(dimensions.height());
             asset.setCreatedBy(SecurityUtils.currentUsernameOrSystem());
             return toResponse(assetRepository.save(asset));
         } catch (IOException ex) {
@@ -128,6 +138,95 @@ public class InvitationAssetService {
         }
     }
 
+    private ImageDimensions readAndValidateDimensions(Path path, String contentType) throws IOException {
+        ImageDimensions dimensions = "image/webp".equals(contentType)
+                ? readWebpDimensions(path)
+                : readImageIoDimensions(path);
+        long pixels = (long) dimensions.width() * dimensions.height();
+        if (dimensions.width() < 1 || dimensions.height() < 1
+                || dimensions.width() > maxImageWidth
+                || dimensions.height() > maxImageHeight
+                || pixels > maxImagePixels) {
+            throw BusinessException.badRequest("图片尺寸过大，宽高或总像素超过系统限制");
+        }
+        return dimensions;
+    }
+
+    private ImageDimensions readImageIoDimensions(Path path) throws IOException {
+        try (ImageInputStream input = ImageIO.createImageInputStream(path.toFile())) {
+            if (input == null) {
+                throw BusinessException.badRequest("无法读取图片尺寸");
+            }
+            Iterator<ImageReader> readers = ImageIO.getImageReaders(input);
+            if (!readers.hasNext()) {
+                throw BusinessException.badRequest("图片格式无法识别");
+            }
+            ImageReader reader = readers.next();
+            try {
+                // 只解析图片头部尺寸，避免 ImageIO.read 为高压缩比图片分配完整像素缓冲区。
+                reader.setInput(input, true, true);
+                int width = reader.getWidth(0);
+                int height = reader.getHeight(0);
+                return new ImageDimensions(width, height);
+            } finally {
+                reader.dispose();
+            }
+        }
+    }
+
+    private ImageDimensions readWebpDimensions(Path path) throws IOException {
+        byte[] header;
+        try (InputStream input = Files.newInputStream(path)) {
+            header = input.readNBytes(30);
+        }
+        if (header.length < 25) {
+            throw BusinessException.badRequest("WebP 图片头不完整");
+        }
+        String chunkType = new String(header, 12, 4, StandardCharsets.US_ASCII);
+        return switch (chunkType) {
+            case "VP8X" -> {
+                requireWebpHeaderLength(header, 30);
+                yield new ImageDimensions(littleEndian24(header, 24) + 1, littleEndian24(header, 27) + 1);
+            }
+            case "VP8L" -> {
+                if ((header[20] & 0xff) != 0x2f) {
+                    throw BusinessException.badRequest("WebP 无损图片头无效");
+                }
+                int bits = (header[21] & 0xff)
+                        | ((header[22] & 0xff) << 8)
+                        | ((header[23] & 0xff) << 16)
+                        | ((header[24] & 0xff) << 24);
+                yield new ImageDimensions((bits & 0x3fff) + 1, ((bits >>> 14) & 0x3fff) + 1);
+            }
+            case "VP8 " -> {
+                requireWebpHeaderLength(header, 30);
+                if ((header[23] & 0xff) != 0x9d
+                        || (header[24] & 0xff) != 0x01
+                        || (header[25] & 0xff) != 0x2a) {
+                    throw BusinessException.badRequest("WebP 有损图片头无效");
+                }
+                yield new ImageDimensions(littleEndian16(header, 26) & 0x3fff, littleEndian16(header, 28) & 0x3fff);
+            }
+            default -> throw BusinessException.badRequest("WebP 图片格式无法识别");
+        };
+    }
+
+    private void requireWebpHeaderLength(byte[] header, int minimum) {
+        if (header.length < minimum) {
+            throw BusinessException.badRequest("WebP 图片头不完整");
+        }
+    }
+
+    private int littleEndian16(byte[] value, int offset) {
+        return (value[offset] & 0xff) | ((value[offset + 1] & 0xff) << 8);
+    }
+
+    private int littleEndian24(byte[] value, int offset) {
+        return (value[offset] & 0xff)
+                | ((value[offset + 1] & 0xff) << 8)
+                | ((value[offset + 2] & 0xff) << 16);
+    }
+
     private Meeting ensureMeeting(Long meetingId) {
         return meetingRepository.findById(meetingId)
                 .orElseThrow(() -> BusinessException.notFound("会议不存在"));
@@ -152,5 +251,8 @@ public class InvitationAssetService {
         } catch (IOException ignored) {
             // 数据库写入失败后的文件清理由后续运维兜底，不覆盖原始异常。
         }
+    }
+
+    private record ImageDimensions(int width, int height) {
     }
 }

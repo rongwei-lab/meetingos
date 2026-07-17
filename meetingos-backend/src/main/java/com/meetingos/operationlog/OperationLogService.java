@@ -52,6 +52,16 @@ public class OperationLogService {
     }
 
     /**
+     * 记录必须与调用方业务数据同生共灭的日志，例如批量导入中的房间、晚宴分配变更。
+     * MANDATORY 用于阻止调用方遗漏事务边界，避免日志先于业务数据独立提交。
+     */
+    @Transactional(propagation = Propagation.MANDATORY)
+    public void recordWithinTransaction(String action, String targetType, String targetId, boolean success,
+                                        String message, HttpServletRequest request, Map<String, Object> details) {
+        recordInternal(null, action, targetType, targetId, success, message, request, details);
+    }
+
+    /**
      * 认证成功发生在 SecurityContext 建立之前，默认操作人会退化为 system。
      * 仅允许这类已经完成身份校验的内部调用显式指定操作人，不能用于接收客户端传入的任意用户名。
      */

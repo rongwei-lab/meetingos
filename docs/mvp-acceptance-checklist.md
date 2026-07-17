@@ -10,7 +10,7 @@
 - [ ] `.env` 中所有 `CHANGE_ME` 均已替换。
 - [ ] 生产域名已配置 HTTPS。
 - [ ] `[自动化/MySQL 8.4]` 使用一次性空库执行 `MigrationChecksumTest` 和
-  `FlywayMySqlMigrationTest`，V1→V6、Flyway validate、迁移 SHA-256 清单和生产 V1 checksum 全部
+  `FlywayMySqlMigrationTest`，V1→V7、Flyway validate、迁移 SHA-256 清单和生产 V1 checksum 全部
   通过；缺少 `MEETINGOS_MYSQL_MIGRATION_TEST_*` 导致的测试跳过不计为通过，checksum 不一致时禁止
   修改 V1 或执行 `flyway repair`。
 

@@ -244,9 +244,24 @@
 
 <script setup lang="ts">
 import type { Component } from "vue";
-import { computed, h, nextTick, onMounted, ref, watch } from "vue";
+import { computed, getCurrentInstance, h, nextTick, onMounted, ref, watch } from "vue";
 import { useRoute, useRouter, type RouteRecordName } from "vue-router";
-import { NIcon, useMessage, type DropdownOption } from "naive-ui";
+import {
+  NBadge,
+  NCard,
+  NDrawer,
+  NDrawerContent,
+  NDropdown,
+  NEmpty,
+  NIcon,
+  NInputNumber,
+  NModal,
+  NSelect,
+  NTag,
+  NTooltip,
+  useMessage,
+  type DropdownOption
+} from "naive-ui";
 import {
   BarChartOutline,
   BedOutline,
@@ -279,6 +294,24 @@ import {
   openTduckLaunchTab,
   persistTduckBrowserSession
 } from "@/utils/tduckNavigation";
+
+const adminNaiveComponents = {
+  NBadge,
+  NCard,
+  NDrawer,
+  NDrawerContent,
+  NDropdown,
+  NEmpty,
+  NInputNumber,
+  NModal,
+  NSelect,
+  NTag,
+  NTooltip
+};
+const app = getCurrentInstance()?.appContext.app;
+Object.entries(adminNaiveComponents).forEach(([name, component]) => {
+  if (app && !app.component(name)) app.component(name, component);
+});
 
 const route = useRoute();
 const router = useRouter();

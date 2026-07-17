@@ -31,6 +31,7 @@
 <script setup lang="ts">
 import { computed } from "vue";
 import { CheckmarkOutline, ColorPaletteOutline } from "@vicons/ionicons5";
+import { NPopover } from "naive-ui";
 import { usePreferenceStore } from "@/stores/preferences";
 
 withDefaults(

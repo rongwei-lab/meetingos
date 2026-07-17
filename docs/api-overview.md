@@ -42,11 +42,13 @@
 | `GET` | `/api/admin/tduck/sync-logs?meetingId={meetingId}` | 查询同步日志，兼容 `/api/tduck/sync-logs` |
 | `POST` | `/api/admin/tduck/sync/manual` | 手工补偿同步单条 TDuck 报名数据 |
 | `POST` | `/api/admin/tduck/sync/pull` | 使用 TDuck 管理接口按 dataId 拉取单条报名详情并补偿同步 |
+| `POST` | `/api/admin/tduck/sync/pull/all` | 创建全量拉取同步任务，参数为 `meetingId`、可选 `limit` 和 `idempotencyKey` |
+| `GET` | `/api/admin/tduck/sync/pull/tasks/{taskId}?meetingId={meetingId}` | 查询全量拉取同步任务进度和有限失败样例 |
 | `POST` | `/api/integrations/tduck/webhook` | 接收 TDuck Webhook |
 
 Webhook 优先校验基于原始 body 的 `X-TDuck-Signature`，兼容 `X-MeetingOS-Webhook-Token` 和仅内网 fallback 的 query token。校验失败不应返回具体密钥错误细节。
 `form_data_delete` 以及删除/撤回类事件会按 `formKey + dataId` 定位原参会人并自动置为 `CANCELLED`，保留参会人记录和同步日志用于审计，不做物理删除。
-补偿同步复用字段映射、手机号唯一和同步日志幂等规则；`manual` 适合导入 TDuck 导出的单条 payload，`pull` 会通过 `TDUCK_ADMIN_EMAIL`/`TDUCK_ADMIN_PASSWORD` 登录 TDuck 后读取 `/user/form/data/details/{dataId}`。
+补偿同步复用字段映射、手机号唯一和同步日志幂等规则；`manual` 适合导入 TDuck 导出的单条 payload，`pull` 会通过 `TDUCK_ADMIN_EMAIL`/`TDUCK_ADMIN_PASSWORD` 登录 TDuck 后读取 `/user/form/data/details/{dataId}`。`pull/all` 返回持久化任务，任务按会议互斥，使用幂等键、租约和独立有界执行器保证重试与服务重启后的恢复。
 
 ## 公开报名中转
 
@@ -243,4 +245,4 @@ MEETINGOS-CHECKIN:{meetingId}:{attendeeCode}
 - `GET /api/public/query-settings?meetingId=...|meetingCode=...` 返回会议查询开关、查询字段和匹配方式。
 - 公开查询仅返回唯一匹配、审核通过且已安排座位/房间/晚宴的参会人信息；模糊命中多人时只提示补充信息，不返回候选名单。
 - 会议查询配置包含 `dinnerQueryEnabled` 和 `dinnerNotice`。`dinnerNotice` 默认值为“请按现场指引前往晚宴区域入座，如有调整请以会务组通知为准。”。
-- 查询历史 `queryType` 支持 `SEAT`、`ROOM`、`DINNER`、`CHECKIN`，会记录晚宴查询成功/失败。
+- 查询历史 `queryType` 支持 `SEAT`、`ROOM`、`DINNER`、`CHECKIN`，会记录晚宴查询成功/失败；默认保留 180 天，后端按配置分批清理过期记录。

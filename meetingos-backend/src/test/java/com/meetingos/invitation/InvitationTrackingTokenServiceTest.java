@@ -27,9 +27,14 @@ class InvitationTrackingTokenServiceTest {
     void rejectsTamperedExpiredAndOversizedTokens() {
         String valid = service.create("abcdefghijklmnopqrstuvwx", 42L, "form-key", Instant.now().plusSeconds(3600));
         String tampered = valid.substring(0, valid.length() - 1) + (valid.endsWith("A") ? "B" : "A");
+        String alphabet = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_";
+        int lastIndex = alphabet.indexOf(valid.charAt(valid.length() - 1));
+        char nonCanonicalAlias = alphabet.charAt((lastIndex & ~3) | ((lastIndex + 1) & 3));
+        String equivalentButNonCanonical = valid.substring(0, valid.length() - 1) + nonCanonicalAlias;
         String expired = service.create("abcdefghijklmnopqrstuvwx", 42L, "form-key", Instant.now().minusSeconds(1));
 
         assertThat(service.verify(tampered)).isEmpty();
+        assertThat(service.verify(equivalentButNonCanonical)).isEmpty();
         assertThat(service.verify(expired)).isEmpty();
         assertThat(service.verify("a".repeat(256))).isEmpty();
     }

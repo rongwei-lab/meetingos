@@ -13,13 +13,21 @@ import java.util.function.Supplier;
 @Component
 public class InvitationEventTransactionRunner {
     private final TransactionTemplate requiresNewTransaction;
+    private final TransactionTemplate readOnlyTransaction;
 
     public InvitationEventTransactionRunner(PlatformTransactionManager transactionManager) {
         this.requiresNewTransaction = new TransactionTemplate(transactionManager);
         this.requiresNewTransaction.setPropagationBehavior(TransactionDefinition.PROPAGATION_REQUIRES_NEW);
+        this.readOnlyTransaction = new TransactionTemplate(transactionManager);
+        this.readOnlyTransaction.setPropagationBehavior(TransactionDefinition.PROPAGATION_REQUIRES_NEW);
+        this.readOnlyTransaction.setReadOnly(true);
     }
 
     public <T> T requiresNew(Supplier<T> action) {
         return requiresNewTransaction.execute(status -> action.get());
+    }
+
+    public <T> T readOnly(Supplier<T> action) {
+        return readOnlyTransaction.execute(status -> action.get());
     }
 }

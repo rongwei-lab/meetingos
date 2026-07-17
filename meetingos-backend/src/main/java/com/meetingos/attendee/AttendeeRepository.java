@@ -14,7 +14,7 @@ import java.util.Collection;
 import java.util.List;
 import java.util.Optional;
 
-public interface AttendeeRepository extends JpaRepository<Attendee, Long> {
+public interface AttendeeRepository extends JpaRepository<Attendee, Long>, AttendeePublicQueryRepository {
 
     @Lock(LockModeType.PESSIMISTIC_WRITE)
     @Query("select a from Attendee a where a.id = :id")

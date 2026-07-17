@@ -157,6 +157,17 @@ a {
     gap: 10px;
   }
 
+  .mobile-paged-list {
+    min-width: 0;
+    display: grid;
+    gap: 14px;
+  }
+
+  .mobile-pagination {
+    max-width: 100%;
+    justify-self: center;
+  }
+
   .mobile-data-card {
     min-width: 0;
     border: 1px solid var(--border-color);

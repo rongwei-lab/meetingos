@@ -115,9 +115,9 @@ import { useRouteMeeting } from "@/composables/useRouteMeeting";
 import { useMeetingStore, type StatisticsOverviewDto } from "@/stores/meeting";
 import { attendeeTypeLabel } from "@/utils/meetingDisplay";
 
-type ChartInstance = import("echarts").ECharts;
-type EChartsModule = typeof import("echarts");
-type EChartsOption = Parameters<ChartInstance["setOption"]>[0];
+type ChartInstance = import("@/utils/echarts").ChartInstance;
+type EChartsModule = typeof import("@/utils/echarts");
+type EChartsOption = import("@/utils/echarts").ChartOption;
 
 const store = useMeetingStore();
 const router = useRouter();
@@ -131,6 +131,8 @@ const attendeeTypeChartRef = ref<HTMLDivElement | null>(null);
 const roomChartRef = ref<HTMLDivElement | null>(null);
 const organizationChartRef = ref<HTMLDivElement | null>(null);
 const chartInstances: ChartInstance[] = [];
+let lastRenderedOverview: StatisticsOverviewDto | null = null;
+let chartRenderGeneration = 0;
 
 function loadDashboardSummary() {
   const meetingId = routeMeetingId.value || store.currentMeetingId;
@@ -140,7 +142,7 @@ function loadDashboardSummary() {
    * 工作区首屏只展示会议报名概览，不需要完整工作区列表。
    * 这里单独拉统计概览，避免刚进入会议后触发参会人/座位/住宿等大列表请求。
    */
-  void store.loadStatistics(meetingId).then(renderDashboardCharts);
+  void store.loadStatistics(meetingId);
 }
 
 const overview = computed(() => store.overview);
@@ -166,10 +168,12 @@ function goRegistration() {
 
 onMounted(() => {
   loadDashboardSummary();
+  void renderDashboardCharts();
   window.addEventListener("resize", resizeDashboardCharts);
 });
 
 onBeforeUnmount(() => {
+  chartRenderGeneration += 1;
   window.removeEventListener("resize", resizeDashboardCharts);
   chartInstances.splice(0).forEach((chart) => chart.dispose());
 });
@@ -232,21 +236,23 @@ const overviewItems = computed(() => [
 
 async function ensureEcharts() {
   if (!echartsModule.value) {
-    echartsModule.value = await import("echarts");
+    echartsModule.value = await import("@/utils/echarts");
   }
   return echartsModule.value;
 }
 
 async function renderDashboardCharts() {
-  await nextTick();
+  const generation = ++chartRenderGeneration;
   const data = overview.value;
-  if (!data) return;
-
+  if (!data || data === lastRenderedOverview) return;
+  await nextTick();
   const echarts = await ensureEcharts();
+  if (generation !== chartRenderGeneration || data !== overview.value) return;
   renderTrendChart(echarts, data);
   renderAttendeeTypeChart(echarts, data);
   renderRoomChart(echarts, data);
   renderOrganizationChart(echarts, data);
+  lastRenderedOverview = data;
 }
 
 function chartFor(echarts: EChartsModule, element: HTMLDivElement | null) {

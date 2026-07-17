@@ -21,6 +21,7 @@ import org.springframework.data.domain.Sort;
 import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Service;
+import org.springframework.transaction.annotation.Propagation;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.util.DigestUtils;
 import org.springframework.util.StringUtils;
@@ -38,6 +39,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.Locale;
 import java.util.Optional;
+import java.util.function.Consumer;
 import java.util.function.Supplier;
 
 @Service
@@ -193,7 +195,7 @@ public class TduckService {
         return withRebindingLockStatus(validateExistingBinding(binding), meetingId);
     }
 
-    @Transactional(readOnly = true)
+    @Transactional(propagation = Propagation.NOT_SUPPORTED)
     public List<TduckFormOption> formOptions(String keyword, int page, int size) {
         try {
             return tduckClient.listForms(keyword, page, size);
@@ -426,7 +428,7 @@ public class TduckService {
         return PageResponse.from(syncLogRepository.findByMeetingId(meetingId, pageRequest));
     }
 
-    @Transactional(readOnly = true)
+    @Transactional(propagation = Propagation.NOT_SUPPORTED)
     public String resolveRedirectUrl(String meetingCode) {
         RegistrationInfo info = registrationInfo(meetingCode);
         if (!info.open()) {
@@ -435,7 +437,6 @@ public class TduckService {
         return info.registrationUrl();
     }
 
-    @Transactional(readOnly = true)
     public RegistrationInfo registrationInfo(String meetingCode) {
         Meeting meeting = meetingRepository.findByCode(meetingCode)
                 .orElseThrow(() -> BusinessException.notFound("会议不存在"));
@@ -497,7 +498,7 @@ public class TduckService {
                 "重复 Webhook 已忽略",
                 () -> handleVerifiedWebhook(request, eventId)
         );
-        return applyInvitationAttribution(request, result);
+        return applyInvitationAttribution(request, result, false);
     }
 
     private TduckWebhookResult handleVerifiedWebhook(TduckWebhookRequest request, String eventId) {
@@ -569,13 +570,20 @@ public class TduckService {
         return runTrustedSync(webhookRequest, "pull-sync");
     }
 
+    @Transactional(propagation = Propagation.NOT_SUPPORTED)
     public TduckBatchPullSyncResponse batchPullSync(TduckBatchPullSyncRequest request) {
         TduckFormBinding binding = bindingRepository.findByMeetingId(request.meetingId())
                 .orElseThrow(() -> BusinessException.notFound("会议未绑定 TDuck 表单"));
-        int limit = normalizeBatchLimit(request.limit());
+        return batchPullSync(binding.getFormKey(), normalizeBatchLimit(request.limit()), ignored -> { });
+    }
+
+    @Transactional(propagation = Propagation.NOT_SUPPORTED)
+    public TduckBatchPullSyncResponse batchPullSync(String formKey,
+                                                    int limit,
+                                                    Consumer<TduckBatchPullSyncProgress> progressConsumer) {
         List<String> dataIds;
         try {
-            dataIds = tduckClient.listFormDataIds(binding.getFormKey(), limit);
+            dataIds = tduckClient.listFormDataIds(formKey, normalizeBatchLimit(limit));
         } catch (TduckClientException ex) {
             throw BusinessException.badRequest("调用 TDuck 报名列表失败: " + ex.getMessage());
         }
@@ -584,14 +592,18 @@ public class TduckService {
         int duplicateIgnored = 0;
         int failed = 0;
         List<TduckBatchPullSyncFailure> failures = new ArrayList<>();
+        progressConsumer.accept(new TduckBatchPullSyncProgress(
+                dataIds.size(), 0, success, duplicateIgnored, failed, List.copyOf(failures)
+        ));
+        int processed = 0;
         for (String dataId : dataIds) {
             try {
-                TduckFormDataDetails details = fetchRemoteData(binding.getFormKey(), dataId);
-                ensureRemoteDataBelongsToBinding(binding.getFormKey(), details);
+                TduckFormDataDetails details = fetchRemoteData(formKey, dataId);
+                ensureRemoteDataBelongsToBinding(formKey, details);
                 TduckWebhookRequest webhookRequest = new TduckWebhookRequest(
-                        "pull-sync-" + binding.getFormKey() + "-" + details.dataId(),
+                        "pull-sync-" + formKey + "-" + details.dataId(),
                         "PULL_SYNC",
-                        binding.getFormKey(),
+                        formKey,
                         details.dataId(),
                         details.extValue(),
                         details.formData(),
@@ -614,6 +626,11 @@ public class TduckService {
                  */
                 failed++;
                 addBatchFailure(failures, dataId, ex.getMessage());
+            } finally {
+                processed++;
+                progressConsumer.accept(new TduckBatchPullSyncProgress(
+                        dataIds.size(), processed, success, duplicateIgnored, failed, List.copyOf(failures)
+                ));
             }
         }
         String message = "已扫描 " + dataIds.size()
@@ -786,12 +803,19 @@ public class TduckService {
                 "重复补偿同步已忽略",
                 () -> syncTrusted(request, source)
         );
-        return applyInvitationAttribution(request, result);
+        /*
+         * 主动拉取代表 TDuck 当前快照，不是历史事件重放。即使参会人同步已幂等命中，
+         * 也要重试幂等归因，补偿上一次在主事务提交后进程退出或归因仓储瞬时失败。
+         */
+        return applyInvitationAttribution(request, result, true);
     }
 
-    private TduckWebhookResult applyInvitationAttribution(TduckWebhookRequest request, TduckWebhookResult result) {
+    private TduckWebhookResult applyInvitationAttribution(TduckWebhookRequest request,
+                                                           TduckWebhookResult result,
+                                                           boolean retryDuplicate) {
         if (result == null
-                || result.status() != SyncStatus.SUCCESS
+                || (result.status() != SyncStatus.SUCCESS
+                    && !(retryDuplicate && result.status() == SyncStatus.DUPLICATE_IGNORED))
                 || result.attendeeId() == null
                 || request == null
                 || !StringUtils.hasText(request.formKey())

@@ -36,4 +36,11 @@ public class ImportRowTransactionRunner {
         }
         return transactionTemplate.execute(status -> action.get());
     }
+
+    /**
+     * 批次失败后需要依赖事务回滚再逐行重试；纯单元测试的 direct 模式不具备该能力。
+     */
+    public boolean supportsBatchTransactions() {
+        return transactionTemplate != null;
+    }
 }

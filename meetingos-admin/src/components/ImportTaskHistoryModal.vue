@@ -86,7 +86,7 @@
 
 <script setup lang="ts">
 import type { DataTableColumns } from "naive-ui";
-import { NButton, NDataTable, NTag, useMessage } from "naive-ui";
+import { NButton, NDataTable, NPagination, NTabPane, NTabs, NTag, useMessage } from "naive-ui";
 import { RefreshOutline } from "@vicons/ionicons5";
 import { computed, h, onBeforeUnmount, ref, watch } from "vue";
 import { isRequestCanceled } from "@/api/http";
@@ -124,6 +124,7 @@ const pageSize = 10;
 const requests = new LatestRequestRegistry();
 let failureDownloadController: AbortController | null = null;
 let refreshTimer: ReturnType<typeof setTimeout> | null = null;
+const activeStatuses = new Set(["PENDING", "PREFLIGHTING", "PREVIEW_READY", "RUNNING"]);
 
 const allowedTypes = computed(() => new Set(props.typeOptions.map((option) => option.value)));
 const filteredTasks = computed(() => tasks.value.filter((task) => task.type === selectedType.value));
@@ -192,7 +193,10 @@ watch(
 
 watch(selectedType, () => {
   page.value = 1;
+  scheduleRefreshIfNeeded();
 });
+
+watch(page, scheduleRefreshIfNeeded);
 
 watch(pageCount, (count) => {
   if (page.value > count) page.value = count;
@@ -262,8 +266,38 @@ async function downloadFailures(task: ImportTaskDto) {
 
 function scheduleRefreshIfNeeded() {
   stopScheduledRefresh();
-  if (!props.show || !tasks.value.some((task) => ["PENDING", "PREFLIGHTING", "PREVIEW_READY", "RUNNING"].includes(task.status))) return;
-  refreshTimer = globalThis.setTimeout(() => void loadHistory(), 2500);
+  if (!props.show || !visibleTasks.value.some((task) => activeStatuses.has(task.status))) return;
+  refreshTimer = globalThis.setTimeout(() => void refreshVisibleActiveTasks(), 2500);
+}
+
+async function refreshVisibleActiveTasks() {
+  const meetingId = props.meetingId;
+  const activeTasks = visibleTasks.value.filter((task) => activeStatuses.has(task.status));
+  if (!props.show || !meetingId || !activeTasks.length) return;
+
+  const request = requests.begin("import-history");
+  try {
+    const settled = await Promise.allSettled(
+      activeTasks.map((task) => store.loadImportTask(task.id, { meetingId, signal: request.signal }))
+    );
+    assertCurrentRequest(request, meetingId);
+    const updatesById = new Map(
+      settled.flatMap((result) => result.status === "fulfilled" ? [[result.value.id, result.value] as const] : [])
+    );
+    tasks.value = tasks.value.map((task) => updatesById.get(task.id) || task);
+    const failed = settled.find((result) => result.status === "rejected");
+    loadError.value = failed?.status === "rejected"
+      ? (failed.reason instanceof Error ? failed.reason.message : "部分导入任务状态刷新失败")
+      : "";
+  } catch (error) {
+    if (isRequestCanceled(error) || !requests.isCurrent(request)) return;
+    loadError.value = error instanceof Error ? error.message : "导入任务状态刷新失败";
+  } finally {
+    if (requests.isCurrent(request)) {
+      requests.finish(request);
+      scheduleRefreshIfNeeded();
+    }
+  }
 }
 
 function stopScheduledRefresh() {
@@ -289,7 +323,7 @@ function typeLabel(type: ImportTaskType) {
 }
 
 function resultText(task: ImportTaskDto) {
-  if (["PENDING", "PREFLIGHTING", "PREVIEW_READY", "RUNNING"].includes(task.status)) {
+  if (activeStatuses.has(task.status)) {
     return `已处理 ${task.processedRows} / ${task.totalRows || "-"}`;
   }
   return `成功 ${task.importedRows}，失败 ${task.failedRows}，共 ${task.totalRows}`;
@@ -297,7 +331,7 @@ function resultText(task: ImportTaskDto) {
 
 function statusTagType(status: string) {
   if (status === "COMPLETED") return "success" as const;
-  if (["PENDING", "PREFLIGHTING", "PREVIEW_READY", "RUNNING"].includes(status)) return "warning" as const;
+  if (activeStatuses.has(status)) return "warning" as const;
   if (["FAILED", "EXPIRED"].includes(status)) return "error" as const;
   return "default" as const;
 }

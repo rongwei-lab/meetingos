@@ -28,6 +28,9 @@ class TduckControllerAuditTest {
     private TduckService tduckService;
 
     @Mock
+    private TduckPullSyncTaskService pullSyncTaskService;
+
+    @Mock
     private OperationLogService operationLogService;
 
     @Mock
@@ -37,7 +40,7 @@ class TduckControllerAuditTest {
 
     @BeforeEach
     void setUp() {
-        controller = new TduckController(tduckService, operationLogService);
+        controller = new TduckController(tduckService, pullSyncTaskService, operationLogService);
     }
 
     @Test

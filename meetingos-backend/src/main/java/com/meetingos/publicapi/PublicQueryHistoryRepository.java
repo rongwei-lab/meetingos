@@ -3,13 +3,38 @@ package com.meetingos.publicapi;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.Pageable;
 import org.springframework.data.jpa.repository.JpaRepository;
+import org.springframework.data.jpa.repository.Modifying;
 import org.springframework.data.jpa.repository.Query;
 import org.springframework.data.repository.query.Param;
 
 import java.util.Collection;
+import java.time.LocalDateTime;
 import java.util.List;
 
 public interface PublicQueryHistoryRepository extends JpaRepository<PublicQueryHistory, Long> {
+
+    @Query(value = """
+            select h.id
+            from public_query_history h
+            where h.created_at < :cutoff
+              and (
+                  h.attendee_id is null
+                  or h.query_type not in ('SEAT', 'ROOM', 'DINNER')
+                  or exists (
+                      select 1
+                      from public_query_history newer
+                      where newer.attendee_id = h.attendee_id
+                        and newer.query_type = h.query_type
+                        and newer.id > h.id
+                  )
+              )
+            order by h.created_at, h.id
+            """, nativeQuery = true)
+    List<Long> findDeletableExpiredIds(@Param("cutoff") LocalDateTime cutoff, Pageable pageable);
+
+    @Modifying
+    @Query("delete from PublicQueryHistory h where h.id in :ids")
+    int deleteByIdIn(@Param("ids") Collection<Long> ids);
 
     @Query("""
             select h from PublicQueryHistory h

@@ -9,6 +9,8 @@ import com.meetingos.tduck.TduckService;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.dao.DataIntegrityViolationException;
+import org.springframework.transaction.annotation.Propagation;
+import org.springframework.transaction.annotation.Transactional;
 
 import java.time.LocalDateTime;
 import java.util.List;
@@ -20,7 +22,6 @@ import java.util.function.Supplier;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
-import static org.mockito.Mockito.doAnswer;
 import static org.mockito.Mockito.doThrow;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
@@ -55,6 +56,10 @@ class PublicInvitationServiceTest {
             Supplier<?> action = invocation.getArgument(0, Supplier.class);
             return action.get();
         });
+        when(transactionRunner.readOnly(any())).thenAnswer(invocation -> {
+            Supplier<?> action = invocation.getArgument(0, Supplier.class);
+            return action.get();
+        });
         link = publishedLink();
         when(shareLinkRepository.findPublicLink("share-token")).thenReturn(Optional.of(link));
     }
@@ -76,6 +81,24 @@ class PublicInvitationServiceTest {
         verify(assetRepository).findByIdIn(Set.of(5L));
         verify(assetRepository, never()).findByMeetingIdOrderByCreatedAtDesc(1L);
         assertThat(draftOnly.getId()).isEqualTo(6L);
+    }
+
+    @Test
+    void publicMethodsSuspendCallerTransactionBeforeRemoteValidation() throws Exception {
+        for (String methodName : List.of("detail", "recordView", "registrationIntent")) {
+            Class<?>[] parameterTypes = switch (methodName) {
+                case "detail" -> new Class<?>[]{String.class};
+                default -> new Class<?>[]{
+                        String.class, InvitationApiModels.PublicEventRequest.class,
+                        String.class, String.class, String.class
+                };
+            };
+            Transactional transactional = PublicInvitationService.class
+                    .getMethod(methodName, parameterTypes)
+                    .getAnnotation(Transactional.class);
+            assertThat(transactional).isNotNull();
+            assertThat(transactional.propagation()).isEqualTo(Propagation.NOT_SUPPORTED);
+        }
     }
 
     @Test
@@ -116,11 +139,7 @@ class PublicInvitationServiceTest {
         when(eventRepository.findByShareLinkIdAndClientEventId(4L, eventId))
                 .thenReturn(Optional.empty(), Optional.of(winner));
         doThrow(new DataIntegrityViolationException("concurrent unique key"))
-                .doAnswer(invocation -> {
-                    Supplier<?> action = invocation.getArgument(0, Supplier.class);
-                    return action.get();
-                })
-                .when(transactionRunner).requiresNew(any());
+                .when(eventRepository).saveAndFlush(any());
 
         InvitationApiModels.EventReceipt receipt = service.recordView(
                 "share-token", new InvitationApiModels.PublicEventRequest(eventId),
@@ -144,11 +163,7 @@ class PublicInvitationServiceTest {
                 "报名表", "form-key", "https://tduck.test/s/form-key"
         ));
         doThrow(new DataIntegrityViolationException("concurrent unique key"))
-                .doAnswer(invocation -> {
-                    Supplier<?> action = invocation.getArgument(0, Supplier.class);
-                    return action.get();
-                })
-                .when(transactionRunner).requiresNew(any());
+                .when(eventRepository).saveAndFlush(any());
 
         InvitationApiModels.RegistrationIntentResponse response = service.registrationIntent(
                 "share-token", new InvitationApiModels.PublicEventRequest(eventId),
