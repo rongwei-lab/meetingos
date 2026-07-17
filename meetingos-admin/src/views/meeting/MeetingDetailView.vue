@@ -254,6 +254,14 @@
                           placeholder="选择参会人需要填写的字段"
                         />
                       </n-form-item>
+                      <n-form-item label="必填字段">
+                        <n-select
+                          v-model:value="queryForm.requiredFields"
+                          multiple
+                          :options="requiredFieldSelectOptions"
+                          placeholder="从查询字段中选择必须填写的字段"
+                        />
+                      </n-form-item>
                       <n-form-item label="匹配方式">
                         <n-radio-group v-model:value="queryForm.matchMode">
                           <n-radio-button value="FUZZY">模糊匹配</n-radio-button>
@@ -318,6 +326,15 @@
                             <span>当前页查询成功后显示签到按钮，关闭后该页不展示并由后端拦截提交</span>
                           </div>
                           <n-switch v-model:value="activePageContent.checkinEnabled" />
+                        </div>
+                      </n-form-item>
+                      <n-form-item v-if="activeContentPage.hasAutoCheckin" label="查询后立即签到" class="content-full-field">
+                        <div class="toggle-row compact-toggle-row page-checkin-toggle">
+                          <div>
+                            <strong>核验后直接签到</strong>
+                            <span>关闭后，参会人核验身份后还需点击“确认签到”，才会写入签到记录</span>
+                          </div>
+                          <n-switch v-model:value="activePageContent.autoCheckinEnabled" />
                         </div>
                       </n-form-item>
                       <n-form-item v-if="activeContentPageKey === 'combined'" label="综合查询展示内容" class="content-full-field">
@@ -730,7 +747,7 @@ const loadingQuerySummary = ref(false);
 const uploadingAsset = ref<"logo" | "background" | null>(null);
 const queryHistoryRows = ref<PublicQueryHistory[]>([]);
 const querySummaryRows = ref<PublicQuerySummary[]>([]);
-type PublicQueryLinkKey = "combined" | "seat" | "room" | "dinner" | "checkin";
+type PublicQueryLinkKey = "entry" | "combined" | "seat" | "room" | "dinner" | "checkin";
 
 interface PublicQueryLink {
   key: PublicQueryLinkKey;
@@ -751,6 +768,7 @@ interface PublicContentPage {
   hasEmptyMessage: boolean;
   hasNotice: boolean;
   hasResultCheckin: boolean;
+  hasAutoCheckin?: boolean;
 }
 
 const defaultPageContents: Record<PublicPageKey, PublicPageContent> = {
@@ -786,7 +804,7 @@ const defaultPageContents: Record<PublicPageKey, PublicPageContent> = {
     notice: "请按现场指引前往晚宴区域入座，如有调整请以会务组通知为准。",
     checkinEnabled: true
   },
-  checkin: { title: "", description: "", announcement: "", publisher: "", buttonText: "自助签到" }
+  checkin: { title: "", description: "", announcement: "", publisher: "", buttonText: "自助签到", autoCheckinEnabled: true }
 };
 
 const publicContentPages: PublicContentPage[] = [
@@ -854,7 +872,8 @@ const publicContentPages: PublicContentPage[] = [
     hasButton: true,
     hasEmptyMessage: false,
     hasNotice: false,
-    hasResultCheckin: false
+    hasResultCheckin: false,
+    hasAutoCheckin: true
   }
 ];
 
@@ -866,6 +885,7 @@ const queryForm = reactive({
   selfCheckinEnabled: true,
   queryPaused: false,
   fields: ["PHONE", "NAME"] as PublicQueryField[],
+  requiredFields: ["PHONE", "NAME"] as PublicQueryField[],
   matchMode: "FUZZY" as PublicQueryMatchMode,
   allowMultipleResults: false,
   combinedQueryTypes: ["SEAT", "ROOM", "DINNER"] as Array<"SEAT" | "ROOM" | "DINNER">,
@@ -954,6 +974,7 @@ const historyPagination = reactive({
   itemCount: 0
 });
 const fieldSelectOptions = computed(() => fieldOptions.value.map((item) => ({ label: item.label, value: item.field })));
+const requiredFieldSelectOptions = computed(() => queryForm.fields.map((field) => ({ label: fieldLabel(field), value: field })));
 const resultFieldSelectOptions = computed(() => resultFieldOptions.value.map((item) => ({ label: item.label, value: item.field })));
 const activeContentPage = computed(() => publicContentPages.find((item) => item.key === activeContentPageKey.value) || publicContentPages[0]);
 const activePageContent = computed(() => queryForm.pageContents[activeContentPageKey.value] || queryForm.pageContents.combined);
@@ -1041,6 +1062,13 @@ const publicQueryLinks = computed<PublicQueryLink[]>(() => {
   const token = encodeURIComponent(meeting.value.publicQueryToken || "");
   const query = `token=${token}`;
   return [
+    {
+      key: "entry" as const,
+      label: "查询入口页",
+      shortLabel: "入口",
+      description: "展示已开放的查询与自助签到入口，适合需要让参会人自行选择服务的场景。",
+      url: `${window.location.origin}/public/entry?${query}`
+    },
     {
       key: "combined" as const,
       label: "综合查询入口",
@@ -1222,6 +1250,7 @@ function loadQuerySettings(targetMeetingId = meetingId.value, generation = detai
     queryForm.selfCheckinEnabled = settings.selfCheckinEnabled;
     queryForm.queryPaused = settings.queryPaused;
     queryForm.fields = [...settings.fields];
+    queryForm.requiredFields = [...settings.requiredFields];
     queryForm.matchMode = settings.matchMode;
     queryForm.allowMultipleResults = settings.allowMultipleResults;
     queryForm.combinedQueryTypes = [...settings.combinedQueryTypes];
@@ -1367,6 +1396,14 @@ function saveQuerySettings() {
     message.warning("请至少选择一个查询字段");
     return;
   }
+  const requiredFields = queryForm.requiredFields.filter((field) => queryForm.fields.includes(field));
+  if (requiredFields.length === 0) {
+    message.warning("请至少选择一个必填查询字段");
+    return;
+  }
+  if (requiredFields.length !== queryForm.requiredFields.length) {
+    queryForm.requiredFields = requiredFields;
+  }
   try {
     assertSafeImageUrl(queryForm.logoUrl, "Logo URL");
     assertSafeImageUrl(queryForm.backgroundUrl, "背景图 URL");
@@ -1387,6 +1424,7 @@ function saveQuerySettings() {
       selfCheckinEnabled: queryForm.selfCheckinEnabled,
       queryPaused: queryForm.queryPaused,
       fields: queryForm.fields,
+      requiredFields,
       matchMode: queryForm.matchMode,
       allowMultipleResults: queryForm.allowMultipleResults,
       combinedQueryTypes: queryForm.combinedQueryTypes,
@@ -1682,6 +1720,17 @@ watch(historyView, (value) => {
 watch(() => [historyFilters.type, historyFilters.status], () => {
   if (currentSection.value === "history" && historyView.value === "logs") loadQueryHistory(1);
 });
+watch(
+  () => queryForm.fields,
+  (fields) => {
+    const selectedFields = new Set(fields);
+    const requiredFields = queryForm.requiredFields.filter((field) => selectedFields.has(field));
+    if (requiredFields.length !== queryForm.requiredFields.length) {
+      queryForm.requiredFields = requiredFields;
+    }
+  },
+  { deep: true }
+);
 watch(
   () => [
     queryForm.seatVisibleResultFields,

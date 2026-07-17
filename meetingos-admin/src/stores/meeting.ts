@@ -21,6 +21,7 @@ import type {
   MeetingQuerySettings,
   PublicPageContent,
   PublicPageKey,
+  PublicCheckinPreview,
   PublicCheckinSource,
   PublicCheckinResult,
   PublicQueryField,
@@ -61,6 +62,7 @@ interface MeetingSummaryDto {
   checkinEnabled?: boolean;
   selfCheckinEnabled?: boolean;
   publicQueryFields?: string;
+  publicQueryRequiredFields?: string;
   publicQueryMatchMode?: PublicQueryMatchMode;
 }
 
@@ -93,6 +95,7 @@ interface MeetingDetailDto {
     checkinEnabled?: boolean;
     selfCheckinEnabled?: boolean;
     publicQueryFields?: string;
+    publicQueryRequiredFields?: string;
     publicQueryMatchMode?: PublicQueryMatchMode;
   };
   registrationCount?: number;
@@ -216,6 +219,7 @@ interface MeetingQuerySettingsDto {
   selfCheckinEnabled?: boolean;
   queryPaused?: boolean;
   fields: PublicQueryField[];
+  requiredFields?: PublicQueryField[];
   matchMode: PublicQueryMatchMode;
   allowMultipleResults?: boolean;
   combinedQueryTypes?: CombinedQueryType[];
@@ -1265,6 +1269,7 @@ export const useMeetingStore = defineStore("meeting", {
         | "selfCheckinEnabled"
         | "queryPaused"
         | "fields"
+        | "requiredFields"
         | "matchMode"
         | "allowMultipleResults"
         | "combinedQueryTypes"
@@ -1310,6 +1315,7 @@ export const useMeetingStore = defineStore("meeting", {
               selfCheckinEnabled: settings.selfCheckinEnabled,
               queryPaused: settings.queryPaused,
               fields: settings.fields,
+              requiredFields: settings.requiredFields,
               matchMode: settings.matchMode,
               allowMultipleResults: settings.allowMultipleResults,
               combinedQueryTypes: settings.combinedQueryTypes,
@@ -1358,6 +1364,7 @@ export const useMeetingStore = defineStore("meeting", {
           selfCheckinEnabled: settings.selfCheckinEnabled,
           queryPaused: settings.queryPaused,
           fields: [...settings.fields],
+          requiredFields: [...settings.requiredFields],
           matchMode: settings.matchMode,
           allowMultipleResults: settings.allowMultipleResults,
           combinedQueryTypes: [...settings.combinedQueryTypes],
@@ -1534,6 +1541,21 @@ export const useMeetingStore = defineStore("meeting", {
         return localPublicSelfCheckin(this, payload);
       }
     },
+    async publicSelfCheckinPreview(payload: {
+      publicQueryToken?: string | null;
+      values: Record<PublicQueryField, string>;
+      captchaId?: string | null;
+      captchaAnswer?: string | null;
+      checkinSource?: PublicCheckinSource;
+      checkinPage?: PublicPageKey;
+    }) {
+      try {
+        return unwrapApi(await http.post<PublicCheckinPreview>("/public/checkin-preview", payload));
+      } catch (error) {
+        if (!canUseDemoFallback(error)) throw new Error(extractErrorMessage(error, "签到信息核验失败"));
+        return localPublicSelfCheckinPreview(this, payload);
+      }
+    },
     async adminQueryCandidates(meetingId: string, type: "seat" | "room", values: Record<PublicQueryField, string>) {
       const targetMeetingId = requireMeetingId(meetingId);
       try {
@@ -1616,6 +1638,7 @@ export const useMeetingStore = defineStore("meeting", {
       meeting.selfCheckinEnabled = settings.selfCheckinEnabled;
       meeting.publicQueryAllowMultipleResults = settings.allowMultipleResults;
       meeting.publicQueryFields = [...settings.fields];
+      meeting.publicQueryRequiredFields = [...settings.requiredFields];
       meeting.publicQueryMatchMode = settings.matchMode;
     },
     async loadMeetingWorkspace(meetingId?: string) {
@@ -2092,6 +2115,7 @@ export const useMeetingStore = defineStore("meeting", {
           checkinEnabled: payload.checkinEnabled ?? true,
           selfCheckinEnabled: payload.selfCheckinEnabled ?? true,
           publicQueryFields: payload.publicQueryFields || ["PHONE", "NAME"],
+          publicQueryRequiredFields: payload.publicQueryRequiredFields || payload.publicQueryFields || ["PHONE", "NAME"],
           publicQueryMatchMode: payload.publicQueryMatchMode || "FUZZY"
         };
         this.meetings.unshift(meeting);
@@ -2135,6 +2159,7 @@ export const useMeetingStore = defineStore("meeting", {
           checkinEnabled: request.checkinEnabled,
           selfCheckinEnabled: request.selfCheckinEnabled,
           publicQueryFields: request.publicQueryFields,
+          publicQueryRequiredFields: [...request.publicQueryFields],
           publicQueryMatchMode: request.publicQueryMatchMode
         };
         this.upsertMeeting(meeting);
@@ -3385,6 +3410,7 @@ function mapMeetingSummary(item: MeetingSummaryDto): Meeting {
     checkinEnabled: item.checkinEnabled ?? true,
     selfCheckinEnabled: item.selfCheckinEnabled ?? true,
     publicQueryFields: parseQueryFields(item.publicQueryFields),
+    publicQueryRequiredFields: normalizeRequiredQueryFields(item.publicQueryRequiredFields, parseQueryFields(item.publicQueryFields)),
     publicQueryMatchMode: item.publicQueryMatchMode || "FUZZY"
   };
 }
@@ -3438,6 +3464,7 @@ function mapMeetingEntity(item: MeetingDetailDto["meeting"]): Meeting {
     checkinEnabled: item.checkinEnabled ?? true,
     selfCheckinEnabled: item.selfCheckinEnabled ?? true,
     publicQueryFields: parseQueryFields(item.publicQueryFields),
+    publicQueryRequiredFields: normalizeRequiredQueryFields(item.publicQueryRequiredFields, parseQueryFields(item.publicQueryFields)),
     publicQueryMatchMode: item.publicQueryMatchMode || "FUZZY"
   };
 }
@@ -3549,6 +3576,18 @@ function parseQueryFields(value?: string | PublicQueryField[]) {
     .map((item) => item.trim())
     .filter((item): item is PublicQueryField => defaultQueryFieldOptions.some((option) => option.field === item));
   return fields.length ? fields : (["PHONE", "NAME"] as PublicQueryField[]);
+}
+
+function normalizeRequiredQueryFields(value: string | PublicQueryField[] | undefined, fields: PublicQueryField[]) {
+  const candidateFields = Array.isArray(value)
+    ? value
+    : (value || "")
+      .split(",")
+      .map((item) => item.trim())
+      .filter((item): item is PublicQueryField => defaultQueryFieldOptions.some((option) => option.field === item));
+  const requiredFields = Array.from(new Set(candidateFields.filter((field) => fields.includes(field))));
+  // 缺少新字段的历史接口响应，继续采用原来的“全部查询字段必填”规则。
+  return requiredFields.length ? requiredFields : [...fields];
 }
 
 function parseResultFields(value?: string | PublicQueryResultField[], fallback: PublicQueryResultField[] = defaultVisibleResultFields) {
@@ -3680,7 +3719,7 @@ function buildDefaultPageContents(base: {
       notice: base.dinnerNotice || defaultDinnerNotice,
       checkinEnabled: resultCheckinEnabled
     },
-    checkin: { title, description, announcement, publisher, buttonText: "自助签到" }
+    checkin: { title, description, announcement, publisher, buttonText: "自助签到", autoCheckinEnabled: true }
   };
 }
 
@@ -3705,6 +3744,8 @@ function normalizeCombinedQueryTypes(types: CombinedQueryType[] | undefined): Co
 }
 
 function mapQuerySettings(item: MeetingQuerySettingsDto): MeetingQuerySettings {
+  const fields = parseQueryFields(item.fields);
+  const requiredFields = normalizeRequiredQueryFields(item.requiredFields, fields);
   const visibleResultFields = parseResultFields(item.visibleResultFields, defaultVisibleResultFields);
   const maskedResultFields = parseResultFields(item.maskedResultFields, []);
   const highlightResultFields = parseResultFields(item.highlightResultFields, ["SEAT_CODE", "ROOM_NO", "DINNER_TABLE_NO"]);
@@ -3759,7 +3800,8 @@ function mapQuerySettings(item: MeetingQuerySettingsDto): MeetingQuerySettings {
     checkinEnabled: item.checkinEnabled ?? true,
     selfCheckinEnabled: item.selfCheckinEnabled ?? true,
     queryPaused: Boolean(item.queryPaused),
-    fields: parseQueryFields(item.fields),
+    fields,
+    requiredFields,
     matchMode: item.matchMode || "FUZZY",
     allowMultipleResults: Boolean(item.allowMultipleResults),
     combinedQueryTypes: normalizeCombinedQueryTypes(item.combinedQueryTypes),
@@ -3799,6 +3841,8 @@ function mapQuerySettings(item: MeetingQuerySettingsDto): MeetingQuerySettings {
 
 function meetingToQuerySettings(meeting?: Meeting | null): MeetingQuerySettings {
   const meetingName = meeting?.name || "当前会议";
+  const fields = meeting?.publicQueryFields?.length ? meeting.publicQueryFields : (["PHONE", "NAME"] as PublicQueryField[]);
+  const requiredFields = normalizeRequiredQueryFields(meeting?.publicQueryRequiredFields, fields);
   const pageContents = buildDefaultPageContents({
     meetingName,
     pageTitle: `${meetingName}查询`,
@@ -3823,7 +3867,8 @@ function meetingToQuerySettings(meeting?: Meeting | null): MeetingQuerySettings 
     checkinEnabled: meeting?.checkinEnabled ?? true,
     selfCheckinEnabled: meeting?.selfCheckinEnabled ?? true,
     queryPaused: false,
-    fields: meeting?.publicQueryFields?.length ? meeting.publicQueryFields : ["PHONE", "NAME"],
+    fields,
+    requiredFields,
     matchMode: meeting?.publicQueryMatchMode || "FUZZY",
     allowMultipleResults: Boolean(meeting?.publicQueryAllowMultipleResults),
     combinedQueryTypes: [...defaultCombinedQueryTypes],
@@ -4033,6 +4078,37 @@ function localPublicSelfCheckin(
   };
 }
 
+function localPublicSelfCheckinPreview(
+  store: ReturnType<typeof useMeetingStore>,
+  payload: { publicQueryToken?: string | null; values: Record<PublicQueryField, string>; checkinSource?: PublicCheckinSource; checkinPage?: PublicPageKey }
+): PublicCheckinPreview {
+  const meeting = resolveLocalMeeting(store, payload);
+  if (!meeting.selfCheckinEnabled) {
+    throw new Error("签到独立页尚未开放");
+  }
+  const attendee = resolveSingleLocalAttendee(store, meeting, payload.values);
+  if (attendee.auditStatus !== "APPROVED") {
+    throw new Error("报名尚未审核通过");
+  }
+  if (attendee.checkinStatus === "CHECKED_IN") {
+    return {
+      ready: false,
+      attendeeId: Number(attendee.id),
+      attendeeName: attendee.name,
+      phone: maskPhone(attendee.phone),
+      checkedInAt: attendee.checkinTime,
+      message: "您已完成签到，请勿重复提交。"
+    };
+  }
+  return {
+    ready: true,
+    attendeeId: Number(attendee.id),
+    attendeeName: attendee.name,
+    phone: maskPhone(attendee.phone),
+    message: "身份核验通过，请确认签到。"
+  };
+}
+
 function normalizeLocalResultCheckinPage(pageKey?: PublicPageKey): Extract<PublicPageKey, "combined" | "seat" | "room" | "dinner"> {
   return pageKey === "seat" || pageKey === "room" || pageKey === "dinner" ? pageKey : "combined";
 }
@@ -4072,12 +4148,14 @@ function resolveSingleLocalAttendee(store: ReturnType<typeof useMeetingStore>, m
 
 function localMatchingAttendees(store: ReturnType<typeof useMeetingStore>, meeting: Meeting, values: Record<PublicQueryField, string>) {
   const fields = meeting.publicQueryFields?.length ? meeting.publicQueryFields : (["PHONE", "NAME"] as PublicQueryField[]);
-  for (const field of fields) {
+  const requiredFields = normalizeRequiredQueryFields(meeting.publicQueryRequiredFields, fields);
+  for (const field of requiredFields) {
     if (!values[field]?.trim()) throw new Error(`请填写${queryFieldLabel(field)}`);
   }
+  const matchFields = fields.filter((field) => values[field]?.trim());
   return store.attendees
     .filter((attendee) => attendee.meetingId === meeting.id)
-    .filter((attendee) => fields.every((field) => localFieldMatches(attendee, field, values[field], meeting.publicQueryMatchMode)));
+    .filter((attendee) => matchFields.every((field) => localFieldMatches(attendee, field, values[field], meeting.publicQueryMatchMode)));
 }
 
 function localFieldMatches(attendee: Attendee, field: PublicQueryField, rawValue: string, mode: PublicQueryMatchMode) {

@@ -240,9 +240,10 @@ MEETINGOS-CHECKIN:{meetingId}:{attendeeCode}
 
 ## 公共查询安全
 
-- `/api/public/seat-query`、`/api/public/room-query`、`/api/public/dinner-query` 和 `/api/public/checkin` 使用本机滑动窗口限流。
+- `/api/public/seat-query`、`/api/public/room-query`、`/api/public/dinner-query`、`/api/public/checkin` 和 `/api/public/checkin-preview` 使用本机滑动窗口限流。
 - 默认单 IP 每分钟 30 次，可通过 `PUBLIC_QUERY_RATE_LIMIT_PER_MINUTE` 调整。
-- `GET /api/public/query-settings?meetingId=...|meetingCode=...` 返回会议查询开关、查询字段和匹配方式。
+- `GET /api/public/query-settings?meetingId=...|meetingCode=...` 返回会议查询开关、查询字段、必填字段和匹配方式；未填写的可选字段不会参与查询，填写后会与必填字段一起参与匹配。
 - 公开查询仅返回唯一匹配、审核通过且已安排座位/房间/晚宴的参会人信息；模糊命中多人时只提示补充信息，不返回候选名单。
 - 会议查询配置包含 `dinnerQueryEnabled` 和 `dinnerNotice`。`dinnerNotice` 默认值为“请按现场指引前往晚宴区域入座，如有调整请以会务组通知为准。”。
 - 查询历史 `queryType` 支持 `SEAT`、`ROOM`、`DINNER`、`CHECKIN`，会记录晚宴查询成功/失败；默认保留 180 天，后端按配置分批清理过期记录。
+- `POST /api/public/checkin-preview` 仅在关闭“查询后立即签到”时用于核验身份，沿用限流与验证码校验，不写入签到状态；前端确认后仍调用 `/api/public/checkin` 完成签到。

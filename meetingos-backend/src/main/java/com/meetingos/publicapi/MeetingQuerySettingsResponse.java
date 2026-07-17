@@ -18,6 +18,7 @@ public record MeetingQuerySettingsResponse(
         boolean selfCheckinEnabled,
         boolean queryPaused,
         List<PublicQueryField> fields,
+        List<PublicQueryField> requiredFields,
         PublicQueryMatchMode matchMode,
         boolean allowMultipleResults,
         List<PublicQueryType> combinedQueryTypes,

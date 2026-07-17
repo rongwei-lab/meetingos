@@ -14,6 +14,7 @@ public record PublicQueryPageContent(
         String buttonText,
         String emptyMessage,
         String notice,
-        Boolean checkinEnabled
+        Boolean checkinEnabled,
+        Boolean autoCheckinEnabled
 ) {
 }

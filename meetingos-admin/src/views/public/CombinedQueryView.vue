@@ -20,7 +20,7 @@
       </n-alert>
 
       <n-form v-else-if="settings && !hasFinalResult" label-placement="top" class="public-form">
-        <n-form-item v-for="field in activeFields" :key="field" :label="fieldLabel(field)">
+        <n-form-item v-for="field in activeFields" :key="field" :label="fieldLabel(field)" :required="requiredFields.includes(field)">
           <n-input v-model:value="values[field]" :placeholder="`请输入${fieldLabel(field)}`" />
         </n-form-item>
         <n-form-item v-if="settings.captchaEnabled" :label="captchaQuestion || '验证码'">
@@ -178,6 +178,7 @@ const values = reactive<Record<PublicQueryField, string>>({
 
 const publicQueryToken = computed(() => String(route.query.token || ""));
 const activeFields = computed(() => settings.value?.fields || []);
+const requiredFields = computed(() => settings.value?.requiredFields || activeFields.value);
 const combinedQueryTypeSet = computed(() => new Set(settings.value?.combinedQueryTypes || ["SEAT", "ROOM", "DINNER"]));
 const combinedSeatEnabled = computed(() => Boolean(settings.value?.seatQueryEnabled && combinedQueryTypeSet.value.has("SEAT")));
 const combinedRoomEnabled = computed(() => Boolean(settings.value?.roomQueryEnabled && combinedQueryTypeSet.value.has("ROOM")));
@@ -256,7 +257,7 @@ async function loadSettings() {
 
 async function query() {
   if (!settings.value || !anyPublicEntryEnabled.value) return;
-  for (const field of activeFields.value) {
+  for (const field of requiredFields.value) {
     if (!values[field].trim()) {
       message.warning(`请输入${fieldLabel(field)}`);
       return;

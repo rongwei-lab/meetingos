@@ -58,7 +58,7 @@ class FlywayMySqlMigrationTest {
                 }
             }
 
-            assertEquals(List.of("1", "2", "3", "4", "5", "6", "7"), versions,
+            assertEquals(List.of("1", "2", "3", "4", "5", "6", "7", "8"), versions,
                 "CI 必须从 V1 完整迁移到仓库当前最新版本");
             assertEquals(PRODUCTION_V1_CHECKSUM, v1Checksum,
                 "V1 必须与生产库已经记录的 Flyway checksum 完全一致");

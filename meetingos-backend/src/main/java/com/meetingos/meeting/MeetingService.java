@@ -307,10 +307,19 @@ public class MeetingService {
             meeting.setSelfCheckinEnabled(request.selfCheckinEnabled());
         }
         if (request.publicQueryFields() != null && !request.publicQueryFields().isEmpty()) {
-            meeting.setPublicQueryFields(request.publicQueryFields().stream()
-                    .map(PublicQueryField::name)
+            List<PublicQueryField> publicQueryFields = request.publicQueryFields().stream()
+                    .filter(java.util.Objects::nonNull)
                     .distinct()
+                    .toList();
+            if (publicQueryFields.isEmpty()) {
+                throw BusinessException.badRequest("请至少选择一个有效查询字段");
+            }
+            meeting.setPublicQueryFields(publicQueryFields.stream()
+                    .map(PublicQueryField::name)
                     .collect(Collectors.joining(",")));
+            meeting.setPublicQueryRequiredFields(retainRequiredQueryFields(
+                    meeting.getPublicQueryRequiredFields(), publicQueryFields
+            ));
         }
         if (request.publicQueryMatchMode() != null) {
             meeting.setPublicQueryMatchMode(request.publicQueryMatchMode().name());
@@ -319,6 +328,28 @@ public class MeetingService {
 
     private String blankToNull(String value) {
         return value == null || value.isBlank() ? null : value;
+    }
+
+    private String retainRequiredQueryFields(String currentRequiredFields,
+                                              List<PublicQueryField> configuredFields) {
+        Set<PublicQueryField> configured = Set.copyOf(configuredFields);
+        LinkedHashSet<PublicQueryField> required = new LinkedHashSet<>();
+        if (currentRequiredFields != null) {
+            for (String token : currentRequiredFields.split(",")) {
+                try {
+                    PublicQueryField field = PublicQueryField.valueOf(token.trim());
+                    if (configured.contains(field)) {
+                        required.add(field);
+                    }
+                } catch (IllegalArgumentException ignored) {
+                    // 历史脏数据不能阻断会议编辑；后续回退全必填保证查询身份核验不被放宽。
+                }
+            }
+        }
+        if (required.isEmpty()) {
+            required.addAll(configuredFields);
+        }
+        return required.stream().map(Enum::name).collect(Collectors.joining(","));
     }
 
     private String limit(String value, int maxLength) {

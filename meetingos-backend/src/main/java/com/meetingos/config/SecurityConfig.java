@@ -43,7 +43,8 @@ public class SecurityConfig {
                                 "/api/public/room-query",
                                 "/api/public/dinner-query",
                                 "/api/public/combined-query",
-                                "/api/public/checkin"
+                                "/api/public/checkin",
+                                "/api/public/checkin-preview"
                         ).permitAll()
                         .requestMatchers(HttpMethod.GET, "/r/**", "/api/public/**").permitAll()
                         .anyRequest().authenticated()

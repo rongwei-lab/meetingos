@@ -21,8 +21,8 @@
         签到独立页尚未开放。
       </n-alert>
 
-      <n-form v-else-if="settings && settings.selfCheckinEnabled && windowState.available && !result" label-placement="top" class="public-form">
-        <n-form-item v-for="field in activeFields" :key="field" :label="fieldLabel(field)">
+      <n-form v-else-if="settings && settings.selfCheckinEnabled && windowState.available && !result && !preview" label-placement="top" class="public-form">
+        <n-form-item v-for="field in activeFields" :key="field" :label="fieldLabel(field)" :required="requiredFields.includes(field)">
           <n-input v-model:value="values[field]" :placeholder="`请输入${fieldLabel(field)}`" />
         </n-form-item>
         <n-form-item v-if="settings.captchaEnabled" :label="captchaQuestion || '验证码'">
@@ -32,9 +32,35 @@
           </div>
         </n-form-item>
         <n-button type="primary" block :color="settings.themeColor" :loading="loading" @click="submitCheckin">
-          {{ buttonText }}
+          {{ autoCheckinEnabled ? buttonText : "查询签到信息" }}
         </n-button>
       </n-form>
+
+      <section v-if="preview" class="self-checkin-result" :class="preview.ready ? 'self-checkin-result-success' : 'self-checkin-result-warning'">
+        <div class="self-checkin-icon">{{ preview.ready ? "✓" : "!" }}</div>
+        <h2>{{ preview.ready ? "身份核验通过" : "已签到" }}</h2>
+        <p>{{ preview.message || (preview.ready ? "请确认是否完成签到。" : "您已完成签到，请勿重复提交。") }}</p>
+        <div class="self-checkin-meta">
+          <div v-if="preview.attendeeName">
+            <span>参会人</span>
+            <strong>{{ preview.attendeeName }}</strong>
+          </div>
+          <div v-if="preview.phone">
+            <span>手机号</span>
+            <strong>{{ preview.phone }}</strong>
+          </div>
+          <div v-if="preview.checkedInAt">
+            <span>签到时间</span>
+            <strong>{{ formatDateTimeSecondLabel(preview.checkedInAt) }}</strong>
+          </div>
+        </div>
+        <n-button v-if="preview.ready" type="primary" block :color="settings?.themeColor" :loading="loading" @click="confirmCheckin">
+          确认签到
+        </n-button>
+        <n-button block secondary :color="settings?.themeColor" @click="resetForm">
+          返回
+        </n-button>
+      </section>
 
       <section v-if="result" class="self-checkin-result" :class="`self-checkin-result-${resultTone}`">
         <div class="self-checkin-icon">{{ resultIcon }}</div>
@@ -72,7 +98,7 @@ import { useRoute } from "vue-router";
 import { useMessage } from "naive-ui";
 import { useMeetingStore } from "@/stores/meeting";
 import { formatDateTimeSecondLabel } from "@/utils/meetingDisplay";
-import type { MeetingQuerySettings, PublicCheckinResult, PublicQueryField } from "@/utils/types";
+import type { MeetingQuerySettings, PublicCheckinPreview, PublicCheckinResult, PublicQueryField } from "@/utils/types";
 import { sanitizeImageUrl } from "@/utils/safeUrl";
 import { normalizePublicQueryError, pageAnnouncementFor, pageButtonTextFor, pageDescriptionFor, pagePublisherFor, pageTitleFor, publicPageStyle, queryWindowState } from "./queryDisplay";
 
@@ -82,6 +108,7 @@ const message = useMessage();
 const loading = ref(false);
 const settings = ref<MeetingQuerySettings | null>(null);
 const result = ref<PublicCheckinResult | null>(null);
+const preview = ref<PublicCheckinPreview | null>(null);
 const errorText = ref("");
 const captchaId = ref<string | null>(null);
 const captchaQuestion = ref("");
@@ -99,10 +126,12 @@ const values = reactive<Record<PublicQueryField, string>>({
 
 const publicQueryToken = computed(() => String(route.query.token || ""));
 const activeFields = computed(() => settings.value?.fields || []);
+const requiredFields = computed(() => settings.value?.requiredFields || activeFields.value);
 const publisher = computed(() => pagePublisherFor(settings.value, "checkin"));
 const subtitle = computed(() => pageDescriptionFor(settings.value, "checkin", "请填写报名信息完成现场签到"));
 const announcement = computed(() => pageAnnouncementFor(settings.value, "checkin"));
 const buttonText = computed(() => pageButtonTextFor(settings.value, "checkin", "自助签到"));
+const autoCheckinEnabled = computed(() => settings.value?.pageContents.checkin.autoCheckinEnabled !== false);
 const windowState = computed(() => queryWindowState(settings.value));
 const safeLogoUrl = computed(() => sanitizeImageUrl(settings.value?.logoUrl));
 const resultTone = computed(() => {
@@ -145,7 +174,7 @@ async function loadSettings() {
 
 async function submitCheckin() {
   if (!settings.value) return;
-  for (const field of activeFields.value) {
+  for (const field of requiredFields.value) {
     if (!values[field].trim()) {
       message.warning(`请输入${fieldLabel(field)}`);
       return;
@@ -156,8 +185,49 @@ async function submitCheckin() {
     return;
   }
 
-  loading.value = true;
   result.value = null;
+  errorText.value = "";
+  if (autoCheckinEnabled.value) {
+    await confirmCheckin();
+    return;
+  }
+
+  loading.value = true;
+  try {
+    preview.value = await store.publicSelfCheckinPreview({
+      publicQueryToken: publicQueryToken.value || settings.value.publicQueryToken,
+      values,
+      captchaId: captchaId.value,
+      captchaAnswer: captchaAnswer.value,
+      checkinSource: "SELF"
+    });
+    if (preview.value.ready) {
+      message.success("身份核验通过，请确认签到");
+    } else {
+      message.warning(preview.value.message || "您已完成签到");
+    }
+  } catch (error) {
+    const rawMessage = error instanceof Error ? error.message : "签到信息核验失败";
+    const failedResult = toFailedCheckinResult(rawMessage);
+    if (failedResult) {
+      result.value = failedResult;
+      message.warning(failedResult.message || "暂不能签到");
+    } else {
+      errorText.value = normalizePublicQueryError(rawMessage, settings.value, "checkin");
+      message.error(errorText.value);
+      if (settings.value.captchaEnabled) {
+        await loadCaptcha();
+      }
+    }
+  } finally {
+    loading.value = false;
+  }
+}
+
+async function confirmCheckin() {
+  if (!settings.value || loading.value) return;
+
+  loading.value = true;
   errorText.value = "";
   try {
     result.value = await store.publicSelfCheckin({
@@ -167,6 +237,7 @@ async function submitCheckin() {
       captchaAnswer: captchaAnswer.value,
       checkinSource: "SELF"
     });
+    preview.value = null;
     if (result.value.status === "SUCCESS") {
       message.success("签到成功");
     } else if (result.value.status === "DUPLICATE") {
@@ -179,6 +250,7 @@ async function submitCheckin() {
     const failedResult = toFailedCheckinResult(rawMessage);
     if (failedResult) {
       result.value = failedResult;
+      preview.value = null;
       message.warning(failedResult.message || "暂不能签到");
     } else {
       errorText.value = normalizePublicQueryError(rawMessage, settings.value, "checkin");
@@ -208,6 +280,7 @@ async function loadCaptcha() {
 
 async function resetForm() {
   result.value = null;
+  preview.value = null;
   errorText.value = "";
   if (settings.value?.captchaEnabled) {
     await loadCaptcha();

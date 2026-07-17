@@ -160,6 +160,14 @@ public class PublicController {
         }
     }
 
+    @PostMapping("/checkin-preview")
+    public ApiResponse<PublicCheckinPreviewResponse> previewSelfCheckin(@Valid @RequestBody PublicQueryRequest queryRequest,
+                                                                         HttpServletRequest request) {
+        publicRateLimitService.check(request);
+        verifyCaptcha(queryRequest);
+        return ApiResponse.ok(publicQueryService.previewSelfCheckin(queryRequest));
+    }
+
     @GetMapping("/meetings/{meetingCode}/registration")
     public ApiResponse<RegistrationInfo> registration(@PathVariable String meetingCode) {
         return ApiResponse.ok(tduckService.registrationInfo(meetingCode));

@@ -4,6 +4,7 @@ import com.meetingos.attendee.Attendee;
 import com.meetingos.attendee.AttendeeMatchCandidate;
 import com.meetingos.attendee.AttendeePublicQueryCriteria;
 import com.meetingos.attendee.AttendeeRepository;
+import com.meetingos.attendee.CheckinStatus;
 import com.meetingos.attendee.ReviewStatus;
 import com.meetingos.common.BusinessException;
 import com.meetingos.common.SensitiveDataMasker;
@@ -154,6 +155,34 @@ public class PublicQueryService {
         return identifySingleMatchedAttendee(meeting, request.values());
     }
 
+    /**
+     * 关闭“查询后立即签到”时，公开页先完成身份核验，再由参会人显式确认。
+     * 该方法不写签到记录；最终状态变更仍统一走 CheckinService 的悲观锁流程。
+     */
+    @Transactional(readOnly = true)
+    public PublicCheckinPreviewResponse previewSelfCheckin(PublicQueryRequest request) {
+        PublicAttendeeMatch match = resolvePublicAttendee(request);
+        Attendee attendee = match.attendee();
+        if (attendee.getCheckinStatus() == CheckinStatus.CHECKED_IN) {
+            return new PublicCheckinPreviewResponse(
+                    false,
+                    attendee.getId(),
+                    attendee.getName(),
+                    SensitiveDataMasker.maskPhone(attendee.getPhone()),
+                    attendee.getCheckedInAt(),
+                    "您已完成签到，请勿重复提交。"
+            );
+        }
+        return new PublicCheckinPreviewResponse(
+                true,
+                attendee.getId(),
+                attendee.getName(),
+                SensitiveDataMasker.maskPhone(attendee.getPhone()),
+                null,
+                "身份核验通过，请确认签到。"
+        );
+    }
+
     public void recordPublicCheckin(PublicQueryRequest request,
                                     Attendee attendee,
                                     String resultSummary,
@@ -173,6 +202,7 @@ public class PublicQueryService {
         Meeting meeting = meetingRepository.findById(meetingId)
                 .orElseThrow(() -> BusinessException.notFound("会议不存在"));
         List<PublicQueryField> fields = normalizeFields(request.fields());
+        List<PublicQueryField> requiredFields = normalizeRequiredFields(request.requiredFields(), fields);
         meeting.setSeatQueryEnabled(request.seatQueryEnabled());
         meeting.setRoomQueryEnabled(request.roomQueryEnabled());
         meeting.setDinnerQueryEnabled(request.dinnerQueryEnabled());
@@ -180,6 +210,7 @@ public class PublicQueryService {
         meeting.setSelfCheckinEnabled(request.selfCheckinEnabled());
         meeting.setPublicQueryPaused(request.queryPaused());
         meeting.setPublicQueryFields(serializeFields(fields));
+        meeting.setPublicQueryRequiredFields(serializeFields(requiredFields));
         meeting.setPublicQueryMatchMode((request.matchMode() == null ? PublicQueryMatchMode.FUZZY : request.matchMode()).name());
         meeting.setPublicQueryAllowMultipleResults(request.allowMultipleResults());
         meeting.setPublicCombinedQueryTypes(serializeQueryTypes(normalizeCombinedQueryTypes(request.combinedQueryTypes())));
@@ -636,10 +667,18 @@ public class PublicQueryService {
     private List<Attendee> matchAttendees(Meeting meeting,
                                           Map<PublicQueryField, String> values,
                                           ReviewStatus reviewStatus) {
-        List<PublicQueryField> fields = parseFields(meeting);
+        List<PublicQueryField> configuredFields = parseFields(meeting);
+        List<PublicQueryField> requiredFields = parseRequiredFields(meeting);
         PublicQueryMatchMode mode = parseMatchMode(meeting);
         boolean exact = mode == PublicQueryMatchMode.EXACT;
-        requireConfiguredValues(fields, values);
+        requireRequiredValues(requiredFields, values);
+        /*
+         * 非必填项为空时不应参与条件过滤；填写后则与必填项一起参与匹配，
+         * 这样既允许少填，又不会忽略用户主动补充的身份信息。
+         */
+        List<PublicQueryField> matchFields = configuredFields.stream()
+                .filter(field -> values.get(field) != null && !values.get(field).isBlank())
+                .toList();
         List<Attendee> matches = new ArrayList<>(PUBLIC_QUERY_CANDIDATE_LIMIT);
         int offset = 0;
         while (matches.size() < PUBLIC_QUERY_CANDIDATE_LIMIT) {
@@ -647,13 +686,13 @@ public class PublicQueryService {
                     meeting.getId(),
                     exact,
                     reviewStatus,
-                    normalizedValue(fields, values, PublicQueryField.ATTENDEE_CODE, exact),
-                    normalizedValue(fields, values, PublicQueryField.PHONE, exact),
-                    normalizedValue(fields, values, PublicQueryField.PHONE_LAST4, exact),
-                    normalizedValue(fields, values, PublicQueryField.EMAIL, exact),
-                    normalizedValue(fields, values, PublicQueryField.NAME, exact),
-                    normalizedValue(fields, values, PublicQueryField.ORGANIZATION, exact),
-                    normalizedValue(fields, values, PublicQueryField.TITLE, exact),
+                    normalizedValue(matchFields, values, PublicQueryField.ATTENDEE_CODE, exact),
+                    normalizedValue(matchFields, values, PublicQueryField.PHONE, exact),
+                    normalizedValue(matchFields, values, PublicQueryField.PHONE_LAST4, exact),
+                    normalizedValue(matchFields, values, PublicQueryField.EMAIL, exact),
+                    normalizedValue(matchFields, values, PublicQueryField.NAME, exact),
+                    normalizedValue(matchFields, values, PublicQueryField.ORGANIZATION, exact),
+                    normalizedValue(matchFields, values, PublicQueryField.TITLE, exact),
                     offset,
                     PUBLIC_QUERY_CANDIDATE_LIMIT
             );
@@ -669,7 +708,7 @@ public class PublicQueryService {
                     .map(candidate -> attendeesById.get(candidate.id()))
                     .filter(Objects::nonNull)
                     // 数据库 ai_ci 排序规则会折叠重音；复用原规则复核，避免匹配语义随排序规则变化。
-                    .filter(attendee -> fields.stream().allMatch(field -> matches(attendee, field, values.get(field), mode)))
+                    .filter(attendee -> matchFields.stream().allMatch(field -> matches(attendee, field, values.get(field), mode)))
                     .limit(PUBLIC_QUERY_CANDIDATE_LIMIT - matches.size())
                     .forEach(matches::add);
             offset += candidates.size();
@@ -730,7 +769,7 @@ public class PublicQueryService {
         }
     }
 
-    private void requireConfiguredValues(List<PublicQueryField> fields, Map<PublicQueryField, String> values) {
+    private void requireRequiredValues(List<PublicQueryField> fields, Map<PublicQueryField, String> values) {
         if (values == null) {
             throw BusinessException.badRequest("请填写查询信息");
         }
@@ -1090,6 +1129,7 @@ public class PublicQueryService {
                 meeting.isSelfCheckinEnabled(),
                 meeting.isPublicQueryPaused(),
                 parseFields(meeting),
+                parseRequiredFields(meeting),
                 parseMatchMode(meeting),
                 meeting.isPublicQueryAllowMultipleResults(),
                 parseCombinedQueryTypes(meeting),
@@ -1166,8 +1206,8 @@ public class PublicQueryService {
 
         Map<String, PublicQueryPageContent> defaults = new LinkedHashMap<>();
         boolean resultCheckinEnabled = meeting.isCheckinEnabled();
-        defaults.put("entry", new PublicQueryPageContent(title, description, announcement, publisher, null, null, null, null));
-        defaults.put("combined", new PublicQueryPageContent(title, description, announcement, publisher, buttonText, emptyMessage, null, resultCheckinEnabled));
+        defaults.put("entry", new PublicQueryPageContent(title, description, announcement, publisher, null, null, null, null, null));
+        defaults.put("combined", new PublicQueryPageContent(title, description, announcement, publisher, buttonText, emptyMessage, null, resultCheckinEnabled, null));
         defaults.put("seat", new PublicQueryPageContent(
                 title,
                 description,
@@ -1176,7 +1216,8 @@ public class PublicQueryService {
                 buttonText,
                 emptyMessage,
                 firstNonBlank(meeting.getPublicQuerySeatNotice(), DEFAULT_SEAT_NOTICE),
-                resultCheckinEnabled
+                resultCheckinEnabled,
+                null
         ));
         defaults.put("room", new PublicQueryPageContent(
                 title,
@@ -1186,7 +1227,8 @@ public class PublicQueryService {
                 buttonText,
                 emptyMessage,
                 firstNonBlank(meeting.getPublicQueryRoomNotice(), DEFAULT_ROOM_NOTICE),
-                resultCheckinEnabled
+                resultCheckinEnabled,
+                null
         ));
         defaults.put("dinner", new PublicQueryPageContent(
                 title,
@@ -1196,9 +1238,11 @@ public class PublicQueryService {
                 buttonText,
                 emptyMessage,
                 firstNonBlank(meeting.getPublicQueryDinnerNotice(), DEFAULT_DINNER_NOTICE),
-                resultCheckinEnabled
+                resultCheckinEnabled,
+                null
         ));
-        defaults.put("checkin", new PublicQueryPageContent(title, description, announcement, publisher, "自助签到", null, null, null));
+        // 历史页面配置没有该字段时，保留原有“一次提交直接签到”的行为。
+        defaults.put("checkin", new PublicQueryPageContent(title, description, announcement, publisher, "自助签到", null, null, null, true));
         return defaults;
     }
 
@@ -1214,7 +1258,8 @@ public class PublicQueryService {
                 stored.buttonText() == null ? fallback.buttonText() : stored.buttonText(),
                 stored.emptyMessage() == null ? fallback.emptyMessage() : stored.emptyMessage(),
                 stored.notice() == null ? fallback.notice() : stored.notice(),
-                stored.checkinEnabled() == null ? fallback.checkinEnabled() : stored.checkinEnabled()
+                stored.checkinEnabled() == null ? fallback.checkinEnabled() : stored.checkinEnabled(),
+                stored.autoCheckinEnabled() == null ? fallback.autoCheckinEnabled() : stored.autoCheckinEnabled()
         );
     }
 
@@ -1227,7 +1272,8 @@ public class PublicQueryService {
                 limitOptional(raw.buttonText(), 40),
                 limitOptional(raw.emptyMessage(), 255),
                 limitOptional(raw.notice(), 2000),
-                raw.checkinEnabled()
+                raw.checkinEnabled(),
+                raw.autoCheckinEnabled()
         );
     }
 
@@ -1254,6 +1300,27 @@ public class PublicQueryService {
         return fields.isEmpty() ? DEFAULT_FIELDS : List.copyOf(fields);
     }
 
+    private List<PublicQueryField> parseRequiredFields(Meeting meeting) {
+        List<PublicQueryField> configuredFields = parseFields(meeting);
+        String raw = meeting.getPublicQueryRequiredFields();
+        if (raw == null || raw.isBlank()) {
+            // 升级前没有单独配置，保持“所有查询字段均必填”的既有规则。
+            return configuredFields;
+        }
+        Set<PublicQueryField> requiredFields = new LinkedHashSet<>();
+        for (String token : raw.split(",")) {
+            try {
+                PublicQueryField field = PublicQueryField.valueOf(token.trim());
+                if (configuredFields.contains(field)) {
+                    requiredFields.add(field);
+                }
+            } catch (IllegalArgumentException ignored) {
+                // 忽略历史脏数据；若全部无效则回退全必填，避免降低身份核验要求。
+            }
+        }
+        return requiredFields.isEmpty() ? configuredFields : List.copyOf(requiredFields);
+    }
+
     private List<PublicQueryField> normalizeFields(List<PublicQueryField> fields) {
         if (fields == null || fields.isEmpty()) {
             throw BusinessException.badRequest("请至少选择一个查询字段");
@@ -1266,6 +1333,25 @@ public class PublicQueryService {
                 .toList();
         if (normalized.isEmpty()) {
             throw BusinessException.badRequest("请至少选择一个有效查询字段");
+        }
+        return normalized;
+    }
+
+    private List<PublicQueryField> normalizeRequiredFields(List<PublicQueryField> requiredFields,
+                                                            List<PublicQueryField> configuredFields) {
+        if (requiredFields == null) {
+            // 兼容尚未升级的后台：继续将所有查询字段视为必填。
+            return configuredFields;
+        }
+        List<PublicQueryField> normalized = requiredFields.stream()
+                .filter(Objects::nonNull)
+                .distinct()
+                .toList();
+        if (normalized.isEmpty()) {
+            throw BusinessException.badRequest("请至少选择一个必填查询字段");
+        }
+        if (!configuredFields.containsAll(normalized)) {
+            throw BusinessException.badRequest("必填字段必须包含在查询字段中");
         }
         return normalized;
     }

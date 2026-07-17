@@ -69,6 +69,7 @@ export interface Meeting {
   selfCheckinEnabled: boolean;
   publicQueryAllowMultipleResults?: boolean;
   publicQueryFields: PublicQueryField[];
+  publicQueryRequiredFields?: PublicQueryField[];
   publicQueryMatchMode: PublicQueryMatchMode;
 }
 
@@ -157,6 +158,7 @@ export interface PublicPageContent {
   emptyMessage?: string;
   notice?: string;
   checkinEnabled?: boolean;
+  autoCheckinEnabled?: boolean;
 }
 
 export interface MeetingQuerySettings {
@@ -171,6 +173,7 @@ export interface MeetingQuerySettings {
   selfCheckinEnabled: boolean;
   queryPaused: boolean;
   fields: PublicQueryField[];
+  requiredFields: PublicQueryField[];
   matchMode: PublicQueryMatchMode;
   allowMultipleResults: boolean;
   combinedQueryTypes: CombinedQueryType[];
@@ -303,6 +306,15 @@ export interface PublicCheckinResult {
   checkedInAt?: string;
   entrance?: string;
   operator?: string;
+  message?: string;
+}
+
+export interface PublicCheckinPreview {
+  ready: boolean;
+  attendeeId?: number;
+  attendeeName?: string;
+  phone?: string;
+  checkedInAt?: string;
   message?: string;
 }
 

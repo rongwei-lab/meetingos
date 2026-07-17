@@ -45,7 +45,8 @@ public record MeetingQuerySettingsRequest(
         List<PublicQueryResultField> dinnerVisibleResultFields,
         List<PublicQueryResultField> dinnerMaskedResultFields,
         List<PublicQueryResultField> dinnerHighlightResultFields,
-        Boolean allowMultipleResults
+        Boolean allowMultipleResults,
+        List<PublicQueryField> requiredFields
 ) {
     public MeetingQuerySettingsRequest {
         /*
@@ -127,7 +128,8 @@ public record MeetingQuerySettingsRequest(
                 null,
                 null,
                 null,
-                false
+                false,
+                null
         );
     }
 

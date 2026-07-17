@@ -40,6 +40,8 @@
 | `created_by` | bigint | 创建人 |
 | `dinner_query_enabled` | tinyint | 是否开放晚宴查询 |
 | `public_query_dinner_notice` | text | 晚宴查询结果提示 |
+| `public_query_fields` | varchar(255) | 公开查询可填写字段集合 |
+| `public_query_required_fields` | varchar(255) | 公开查询必填字段集合，必须是 `public_query_fields` 的子集 |
 | `created_at` | datetime | 创建时间 |
 | `updated_at` | datetime | 更新时间 |
 

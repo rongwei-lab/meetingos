@@ -26,6 +26,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.ArgumentMatchers.isNull;
+import static org.mockito.Mockito.lenient;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.when;
@@ -70,7 +71,7 @@ class PublicControllerAuditTest {
                 checkinService,
                 operationLogService
         );
-        when(publicRateLimitService.resolveClientIp(httpRequest)).thenReturn("203.0.113.11");
+        lenient().when(publicRateLimitService.resolveClientIp(httpRequest)).thenReturn("203.0.113.11");
     }
 
     @AfterEach
@@ -154,6 +155,33 @@ class PublicControllerAuditTest {
         controller.selfCheckin(request, httpRequest);
 
         verifyNoInteractions(operationLogService);
+    }
+
+    @Test
+    void checkinPreviewOnlyVerifiesIdentityWithoutWritingCheckin() {
+        PublicQueryRequest request = new PublicQueryRequest(
+                "public-query-token",
+                Map.of(PublicQueryField.PHONE, "13800000001"),
+                "captcha-id",
+                "captcha-answer"
+        );
+        PublicCheckinPreviewResponse preview = new PublicCheckinPreviewResponse(
+                true,
+                29L,
+                "参会人",
+                "****0001",
+                null,
+                "身份核验通过，请确认签到。"
+        );
+        when(publicQueryService.previewSelfCheckin(request)).thenReturn(preview);
+
+        var response = controller.previewSelfCheckin(request, httpRequest);
+
+        assertThat(response.data()).isSameAs(preview);
+        verify(publicRateLimitService).check(httpRequest);
+        verify(publicCaptchaService).verify("captcha-id", "captcha-answer");
+        verify(publicQueryService).previewSelfCheckin(request);
+        verifyNoInteractions(checkinService, operationLogService);
     }
 
     @Test

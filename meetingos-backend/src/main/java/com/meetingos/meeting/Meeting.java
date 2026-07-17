@@ -94,6 +94,9 @@ public class Meeting extends BaseEntity {
     @Column(nullable = false, length = 255)
     private String publicQueryFields = "PHONE,NAME";
 
+    @Column(nullable = false, length = 255)
+    private String publicQueryRequiredFields = "PHONE,NAME";
+
     @Column(nullable = false, length = 20)
     private String publicQueryMatchMode = "FUZZY";
 
@@ -410,6 +413,14 @@ public class Meeting extends BaseEntity {
 
     public void setPublicQueryFields(String publicQueryFields) {
         this.publicQueryFields = publicQueryFields;
+    }
+
+    public String getPublicQueryRequiredFields() {
+        return publicQueryRequiredFields;
+    }
+
+    public void setPublicQueryRequiredFields(String publicQueryRequiredFields) {
+        this.publicQueryRequiredFields = publicQueryRequiredFields;
     }
 
     public String getPublicQueryMatchMode() {
