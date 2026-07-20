@@ -47,7 +47,12 @@
     </div>
 
     <n-card class="surface section-card" :bordered="false" title="签到记录">
-      <n-data-table v-if="!isMobile" :columns="recordColumns" :data="store.currentCheckinRecords" :pagination="{ pageSize: 8 }" />
+      <n-data-table
+        v-if="!isMobile"
+        :columns="recordColumns"
+        :data="store.currentCheckinRecords"
+        :pagination="{ defaultPageSize: 10, showSizePicker: true, pageSizes: PAGINATION_PAGE_SIZES, prefix: paginationSummary }"
+      />
       <div v-else class="mobile-card-list checkin-record-cards">
         <article v-for="record in store.currentCheckinRecords" :key="`${record.checkinTime}-${record.attendeeName}`" class="mobile-data-card">
           <div class="mobile-card-head">
@@ -82,6 +87,7 @@ import { useRouteMeeting } from "@/composables/useRouteMeeting";
 import { useIsMobile } from "@/composables/useResponsive";
 import { useMeetingStore } from "@/stores/meeting";
 import { formatDateTimeLabel } from "@/utils/meetingDisplay";
+import { PAGINATION_PAGE_SIZES, paginationSummary } from "@/utils/pagination";
 import type { Attendee } from "@/utils/types";
 
 const store = useMeetingStore();

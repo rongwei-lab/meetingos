@@ -97,7 +97,7 @@
         <n-data-table
           :columns="meetingColumns"
           :data="filteredMeetings"
-          :pagination="{ pageSize: 8 }"
+          :pagination="{ defaultPageSize: 10, showSizePicker: true, pageSizes: PAGINATION_PAGE_SIZES, prefix: paginationSummary }"
           :row-key="meetingRowKey"
           :scroll-x="1020"
         />
@@ -156,6 +156,7 @@ import { useIsMobile } from "@/composables/useResponsive";
 import { useAuthStore } from "@/stores/auth";
 import { useMeetingStore } from "@/stores/meeting";
 import { meetingSummaryLabel } from "@/utils/meetingDisplay";
+import { PAGINATION_PAGE_SIZES, paginationSummary } from "@/utils/pagination";
 import {
   DEFAULT_NEW_MEETING_STATUS,
   isMeetingRestartTransition,

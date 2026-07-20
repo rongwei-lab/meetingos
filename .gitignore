@@ -10,6 +10,7 @@ coverage/
 
 # Java / Spring Boot
 target/
+**/.m2/
 .mvn/wrapper/maven-wrapper.jar
 
 # IDE

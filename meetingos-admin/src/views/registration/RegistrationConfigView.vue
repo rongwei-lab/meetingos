@@ -158,7 +158,11 @@
             </n-space>
           </div>
           <div class="mobile-scroll-table">
-            <n-data-table :columns="mappingColumns" :data="fieldMappings" :pagination="{ pageSize: 8 }" />
+            <n-data-table
+              :columns="mappingColumns"
+              :data="fieldMappings"
+              :pagination="{ defaultPageSize: 10, showSizePicker: true, pageSizes: PAGINATION_PAGE_SIZES, prefix: paginationSummary }"
+            />
           </div>
         </div>
 
@@ -194,7 +198,11 @@
         </div>
       </template>
       <div class="mobile-scroll-table">
-        <n-data-table :columns="logColumns" :data="currentSyncLogs" :pagination="{ pageSize: 5 }" />
+        <n-data-table
+          :columns="logColumns"
+          :data="currentSyncLogs"
+          :pagination="{ defaultPageSize: 10, showSizePicker: true, pageSizes: PAGINATION_PAGE_SIZES, prefix: paginationSummary }"
+        />
       </div>
     </n-card>
 
@@ -213,6 +221,7 @@ import { useRouteMeeting } from "@/composables/useRouteMeeting";
 import { useMeetingStore, type TduckBindingDto, type TduckFieldMappingDto, type TduckFieldSyncItemDto, type TduckFormOptionDto } from "@/stores/meeting";
 import { attendeeFieldOptions, inferAttendeeField } from "@/utils/attendeeFields";
 import { formatDateTimeLabel } from "@/utils/meetingDisplay";
+import { PAGINATION_PAGE_SIZES, paginationSummary } from "@/utils/pagination";
 import { closeTduckLaunchTab, navigateTduckLaunchTab, openTduckLaunchTab, persistTduckBrowserSession } from "@/utils/tduckNavigation";
 import type { SyncLog } from "@/utils/types";
 

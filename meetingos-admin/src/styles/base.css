@@ -164,8 +164,23 @@ a {
   }
 
   .mobile-pagination {
+    width: 100%;
     max-width: 100%;
     justify-self: center;
+  }
+
+  /* 分页摘要、页码和页大小选择器在窄屏分行，避免相互挤压。 */
+  .n-pagination {
+    max-width: 100%;
+    flex-wrap: wrap;
+    justify-content: center;
+    gap: 8px 4px;
+  }
+
+  .n-pagination-prefix {
+    flex: 1 0 100%;
+    justify-content: center;
+    margin: 0;
   }
 
   .mobile-data-card {

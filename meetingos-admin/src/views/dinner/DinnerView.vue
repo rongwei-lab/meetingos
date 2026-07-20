@@ -83,7 +83,7 @@
         v-if="!isMobile"
         :columns="tableColumns"
         :data="sortedDinnerTables"
-        :pagination="{ pageSize: 8 }"
+        :pagination="{ defaultPageSize: 10, showSizePicker: true, pageSizes: PAGINATION_PAGE_SIZES, prefix: paginationSummary }"
         :row-key="tableRowKey"
       >
         <template #empty>
@@ -121,12 +121,14 @@
         <n-empty v-if="!sortedDinnerTables.length" description="暂无桌号，请先新增或导入晚宴分配" />
         </div>
         <n-pagination
-          v-if="mobileDinnerTableItemCount > mobileDinnerTablePageSize"
+          v-if="mobileDinnerTableItemCount > 0"
           v-model:page="mobileDinnerTablePage"
+          v-model:page-size="mobileDinnerTablePageSize"
           class="mobile-pagination"
-          :page-count="mobileDinnerTablePageCount"
-          :page-size="mobileDinnerTablePageSize"
+          :page-sizes="PAGINATION_PAGE_SIZES"
           :item-count="mobileDinnerTableItemCount"
+          :prefix="paginationSummary"
+          show-size-picker
           :page-slot="5"
           aria-label="晚宴桌号列表分页"
         />
@@ -156,7 +158,7 @@
         v-if="!isMobile"
         :columns="dinnerAttendeeColumns"
         :data="filteredDinnerAttendeeRows"
-        :pagination="{ pageSize: 10 }"
+        :pagination="{ defaultPageSize: 10, showSizePicker: true, pageSizes: PAGINATION_PAGE_SIZES, prefix: paginationSummary }"
         :row-key="dinnerAttendeeRowKey"
       >
         <template #empty>
@@ -196,12 +198,14 @@
         <n-empty v-if="!filteredDinnerAttendeeRows.length" description="暂无符合条件的参会人" />
         </div>
         <n-pagination
-          v-if="mobileDinnerAttendeeItemCount > mobileDinnerAttendeePageSize"
+          v-if="mobileDinnerAttendeeItemCount > 0"
           v-model:page="mobileDinnerAttendeePage"
+          v-model:page-size="mobileDinnerAttendeePageSize"
           class="mobile-pagination"
-          :page-count="mobileDinnerAttendeePageCount"
-          :page-size="mobileDinnerAttendeePageSize"
+          :page-sizes="PAGINATION_PAGE_SIZES"
           :item-count="mobileDinnerAttendeeItemCount"
+          :prefix="paginationSummary"
+          show-size-picker
           :page-slot="5"
           aria-label="晚宴参会人列表分页"
         />
@@ -293,7 +297,7 @@
           v-if="!isMobile"
           :columns="tableMemberColumns"
           :data="selectedTableAssignments"
-          :pagination="{ pageSize: 10 }"
+          :pagination="{ defaultPageSize: 10, showSizePicker: true, pageSizes: PAGINATION_PAGE_SIZES, prefix: paginationSummary }"
           :row-key="rowKey"
         >
           <template #empty>
@@ -323,12 +327,14 @@
           <n-empty v-if="!selectedTableAssignments.length" description="本桌暂无就餐人员" />
           </div>
           <n-pagination
-            v-if="mobileTableMemberItemCount > mobileTableMemberPageSize"
+            v-if="mobileTableMemberItemCount > 0"
             v-model:page="mobileTableMemberPage"
+            v-model:page-size="mobileTableMemberPageSize"
             class="mobile-pagination"
-            :page-count="mobileTableMemberPageCount"
-            :page-size="mobileTableMemberPageSize"
+            :page-sizes="PAGINATION_PAGE_SIZES"
             :item-count="mobileTableMemberItemCount"
+            :prefix="paginationSummary"
+            show-size-picker
             :page-slot="5"
             aria-label="本桌人员列表分页"
           />
@@ -480,6 +486,7 @@ import { useIsMobile } from "@/composables/useResponsive";
 import type { DinnerAssignment, DinnerTable } from "@/utils/types";
 import { useMeetingStore } from "@/stores/meeting";
 import { attendeeTypeLabel } from "@/utils/meetingDisplay";
+import { PAGINATION_PAGE_SIZES, paginationSummary } from "@/utils/pagination";
 import { downloadXlsxTemplate } from "@/utils/xlsxTemplate";
 
 type DinnerStatusFilter = "ALL" | "ASSIGNED" | "UNASSIGNED";
@@ -626,11 +633,10 @@ const statusFilterOptions = [
 const sortedDinnerTables = computed(() => [...store.currentDinnerTables].sort((a, b) => a.tableNo.localeCompare(b.tableNo, "zh-Hans-CN")));
 const {
   page: mobileDinnerTablePage,
-  pageCount: mobileDinnerTablePageCount,
   pageSize: mobileDinnerTablePageSize,
   itemCount: mobileDinnerTableItemCount,
   visibleItems: mobileDinnerTables
-} = useClientPagination(sortedDinnerTables, 12, routeMeetingId);
+} = useClientPagination(sortedDinnerTables, 10, routeMeetingId);
 const totalDinnerCapacity = computed(() => store.currentDinnerTables.reduce((sum, table) => sum + table.capacity, 0));
 const remainingDinnerSeats = computed(() => store.currentDinnerTables.reduce((sum, table) => sum + table.remainingCount, 0));
 const tableDraftTotalCapacity = computed(() => tableDrafts.value.reduce((sum, draft) => sum + normalizedTableCapacity(draft.capacity), 0));
@@ -659,7 +665,6 @@ const selectedTableAssignments = computed(() => {
 });
 const {
   page: mobileTableMemberPage,
-  pageCount: mobileTableMemberPageCount,
   pageSize: mobileTableMemberPageSize,
   itemCount: mobileTableMemberItemCount,
   visibleItems: mobileSelectedTableAssignments
@@ -745,7 +750,6 @@ const filteredDinnerAttendeeRows = computed(() => {
 });
 const {
   page: mobileDinnerAttendeePage,
-  pageCount: mobileDinnerAttendeePageCount,
   pageSize: mobileDinnerAttendeePageSize,
   itemCount: mobileDinnerAttendeeItemCount,
   visibleItems: mobileDinnerAttendeeRows

@@ -98,14 +98,18 @@
         </div>
       </n-spin>
       <n-pagination
-        v-if="totalElements > pageSize"
+        v-if="totalElements > 0"
         :page="currentPage"
         :page-size="pageSize"
         :item-count="totalElements"
+        :prefix="paginationSummary"
+        show-size-picker
+        :page-sizes="PAGINATION_PAGE_SIZES"
         show-quick-jumper
         class="log-pagination"
         aria-label="操作日志分页"
         @update:page="handlePageChange"
+        @update:page-size="handlePageSizeChange"
       />
     </n-card>
   </div>
@@ -126,6 +130,7 @@ import {
   operationTargetLabel,
   type OperationLogCategory
 } from "@/utils/meetingDisplay";
+import { PAGINATION_PAGE_SIZES, paginationSummary } from "@/utils/pagination";
 
 interface OperationLogDto {
   id: number;
@@ -187,7 +192,7 @@ const appliedFilters = ref<AppliedOperationLogFilters>(snapshotFilters(filterFor
 const loadError = ref("");
 const loading = ref(false);
 const currentPage = ref(1);
-const pageSize = 20;
+const pageSize = ref(20);
 const totalElements = ref(0);
 const logSnapshotId = ref<string | null>(null);
 const lastLoadedPage = ref(1);
@@ -275,6 +280,19 @@ function handlePageChange(page: number) {
   void loadLogs();
 }
 
+function handlePageSizeChange(nextPageSize: number) {
+  if (nextPageSize === pageSize.value) return;
+  // 页大小变化会改变同一请求页的内容，旧请求返回后不能覆盖新的第一页。
+  latestRequestId += 1;
+  pageSize.value = nextPageSize;
+  currentPage.value = 1;
+  logs.value = [];
+  lastLoadedPage.value = 1;
+  failedPage.value = null;
+  loadError.value = "";
+  void loadLogs();
+}
+
 function retryLoad() {
   if (accessForbidden.value) return;
   currentPage.value = failedPage.value ?? currentPage.value;
@@ -284,7 +302,7 @@ function retryLoad() {
 function requestParams(filters: AppliedOperationLogFilters, page: number): OperationLogRequestParams {
   const params: OperationLogRequestParams = {
     page: page - 1,
-    size: pageSize,
+    size: pageSize.value,
     includeDraftSaves: filters.includeDraftSaves
   };
   if (filters.category) params.category = filters.category;

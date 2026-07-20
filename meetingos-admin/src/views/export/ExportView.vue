@@ -136,14 +136,17 @@
       </n-spin>
 
       <n-pagination
-        v-if="totalElements > pageSize"
+        v-if="totalElements > 0"
         v-model:page="page"
         class="task-pagination"
-        :page-count="Math.max(1, totalPages)"
         :page-size="pageSize"
         :item-count="totalElements"
+        :prefix="paginationSummary"
+        show-size-picker
+        :page-sizes="PAGINATION_PAGE_SIZES"
         show-quick-jumper
         aria-label="导出记录分页"
+        @update:page-size="handlePageSizeChange"
       />
     </section>
   </div>
@@ -175,6 +178,7 @@ import { useRouteMeeting } from "@/composables/useRouteMeeting";
 import { useIsMobile } from "@/composables/useResponsive";
 import { useMeetingStore, type ExportTaskDto } from "@/stores/meeting";
 import { formatDateTimeLabel } from "@/utils/meetingDisplay";
+import { PAGINATION_PAGE_SIZES, paginationSummary } from "@/utils/pagination";
 import { LatestRequestRegistry } from "@/utils/requestControl";
 
 type RangeMode = "today" | "7d" | "30d" | "custom";
@@ -198,9 +202,8 @@ const loading = ref(false);
 const loadError = ref("");
 const downloadingTaskId = ref("");
 const page = ref(1);
-const pageSize = 20;
+const pageSize = ref(20);
 const totalElements = ref(0);
-const totalPages = ref(0);
 const requests = new LatestRequestRegistry();
 let refreshTimer: ReturnType<typeof setTimeout> | null = null;
 
@@ -305,11 +308,10 @@ async function loadTasks() {
   loading.value = true;
   loadError.value = "";
   try {
-    const result = await store.loadExportTasks({ meetingId, page: page.value - 1, size: pageSize, signal: request.signal });
+    const result = await store.loadExportTasks({ meetingId, page: page.value - 1, size: pageSize.value, signal: request.signal });
     if (!requests.isCurrent(request) || meetingId !== (routeMeetingId.value || store.currentMeetingId)) return;
     tasks.value = result.content;
     totalElements.value = result.totalElements;
-    totalPages.value = result.totalPages;
     scheduleRefreshIfNeeded();
   } catch (error) {
     if (isRequestCanceled(error) || !requests.isCurrent(request)) return;
@@ -359,7 +361,15 @@ async function downloadTask(task: ExportTaskDto) {
 function upsertVisibleTask(task: ExportTaskDto) {
   const index = tasks.value.findIndex((item) => item.taskId === task.taskId);
   if (index >= 0) tasks.value[index] = task;
-  else if (page.value === 1) tasks.value = [task, ...tasks.value].slice(0, pageSize);
+  else if (page.value === 1) tasks.value = [task, ...tasks.value].slice(0, pageSize.value);
+}
+
+function handlePageSizeChange(nextPageSize: number) {
+  if (nextPageSize === pageSize.value) return;
+  const wasFirstPage = page.value === 1;
+  pageSize.value = nextPageSize;
+  page.value = 1;
+  if (wasFirstPage) void loadTasks();
 }
 
 function scheduleRefreshIfNeeded() {

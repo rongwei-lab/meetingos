@@ -87,8 +87,9 @@
         :row-key="rowKey"
         :columns="columns"
         :data="filteredAttendees"
-        :pagination="{ pageSize: 10 }"
+        :pagination="{ defaultPageSize: 10, showSizePicker: true, pageSizes: PAGINATION_PAGE_SIZES, prefix: paginationSummary }"
         :scroll-x="tableScrollX"
+        :on-unstable-column-resize="handleAttendeeColumnResize"
       />
       <div v-else class="mobile-paged-list">
         <div class="mobile-card-list attendee-card-list">
@@ -172,12 +173,14 @@
         <n-empty v-if="!filteredAttendees.length" description="没有匹配的参会人" />
         </div>
         <n-pagination
-          v-if="mobileAttendeeItemCount > mobileAttendeePageSize"
+          v-if="mobileAttendeeItemCount > 0"
           v-model:page="mobileAttendeePage"
+          v-model:page-size="mobileAttendeePageSize"
           class="mobile-pagination"
-          :page-count="mobileAttendeePageCount"
-          :page-size="mobileAttendeePageSize"
+          :page-sizes="PAGINATION_PAGE_SIZES"
           :item-count="mobileAttendeeItemCount"
+          :prefix="paginationSummary"
+          show-size-picker
           :page-slot="5"
           aria-label="参会人列表分页"
         />
@@ -561,7 +564,7 @@
 </template>
 
 <script setup lang="ts">
-import type { SelectOption, UploadCustomRequestOptions } from "naive-ui";
+import type { DataTableBaseColumn, DataTableColumnKey, SelectOption, UploadCustomRequestOptions } from "naive-ui";
 import { NButton, NDataTable, NDivider, NDynamicTags, NForm, NFormItem, NModal, NPagination, NSpace, NSwitch, NTag, NUpload, useDialog, useMessage } from "naive-ui";
 import { TimeOutline } from "@vicons/ionicons5";
 import { computed, defineAsyncComponent, h, nextTick, onBeforeUnmount, onMounted, ref, watch } from "vue";
@@ -580,6 +583,7 @@ import type { MeetingPrintFieldSettingsDto, TduckFieldMappingDto } from "@/store
 import { useMeetingStore } from "@/stores/meeting";
 import { attendeeFieldLabel, normalizedAttendeeFieldText } from "@/utils/attendeeFields";
 import { attendeeTypeLabel, formatDateLikeValue, formatDateTimeLabel, seatTypeLabel } from "@/utils/meetingDisplay";
+import { PAGINATION_PAGE_SIZES, paginationSummary } from "@/utils/pagination";
 import { isAllowedUploadImage, sanitizeImageUrl } from "@/utils/safeUrl";
 import type { Attendee, AuditStatus, DinnerTable } from "@/utils/types";
 import { downloadXlsxTemplate } from "@/utils/xlsxTemplate";
@@ -596,6 +600,17 @@ const hasSeat = ref<boolean | null>(null);
 const selectedTags = ref<string[]>([]);
 const remoteFilteredAttendees = ref<Attendee[] | null>(null);
 const checkedKeys = ref<string[]>([]);
+const attendeeTableColumnWidths = ref<Record<string, number>>({});
+const attendeeTextCollator = new Intl.Collator("zh-Hans-CN", { numeric: true, sensitivity: "base" });
+const ATTENDEE_TABLE_COLUMN_WIDTH_STORAGE_KEY = "meetingos.attendee-table.column-widths.v1";
+const MIN_PERSISTED_TABLE_COLUMN_WIDTH = 72;
+const MAX_PERSISTED_TABLE_COLUMN_WIDTH = 2400;
+const auditStatusSortOrder: Record<AuditStatus, number> = {
+  PENDING: 0,
+  APPROVED: 1,
+  REJECTED: 2,
+  CANCELLED: 3
+};
 const {
   importing,
   uploadingFile: uploadingImportFile,
@@ -664,6 +679,7 @@ const auditStatusValues = new Set<AuditStatus>(["PENDING", "APPROVED", "REJECTED
 let attendeePageLoadToken = 0;
 let attendeeFilterGeneration = 0;
 let attendeeFilterTimer: number | null = null;
+let attendeeTableColumnWidthSaveTimer: number | null = null;
 let nameplateSettingsSaveTimer: number | null = null;
 let nameplatePreviewResizeObserver: ResizeObserver | null = null;
 let fieldVisibilityInitialized = false;
@@ -789,7 +805,6 @@ const localFilteredAttendees = computed(() =>
 const filteredAttendees = computed(() => remoteFilteredAttendees.value || localFilteredAttendees.value);
 const {
   page: mobileAttendeePage,
-  pageCount: mobileAttendeePageCount,
   pageSize: mobileAttendeePageSize,
   itemCount: mobileAttendeeItemCount,
   visibleItems: mobileAttendees
@@ -911,6 +926,91 @@ function rowKey(row: Attendee) {
   return row.id;
 }
 
+function attendeeColumnWidthKey(key: DataTableColumnKey) {
+  return String(key);
+}
+
+function storedAttendeeColumnWidth(key: DataTableColumnKey, minWidth: number) {
+  const width = attendeeTableColumnWidths.value[attendeeColumnWidthKey(key)];
+  return typeof width === "number" && Number.isFinite(width) && width >= minWidth ? width : undefined;
+}
+
+function attendeeColumnDisplayWidth(key: DataTableColumnKey, minWidth: number) {
+  return storedAttendeeColumnWidth(key, minWidth) || minWidth;
+}
+
+function loadAttendeeColumnWidths() {
+  if (typeof window === "undefined") return;
+  try {
+    const stored = window.localStorage.getItem(ATTENDEE_TABLE_COLUMN_WIDTH_STORAGE_KEY);
+    if (!stored) return;
+    const parsed: unknown = JSON.parse(stored);
+    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) return;
+
+    const widths = Object.entries(parsed as Record<string, unknown>).reduce<Record<string, number>>((result, [key, value]) => {
+      if (
+        typeof value === "number" &&
+        Number.isFinite(value) &&
+        value >= MIN_PERSISTED_TABLE_COLUMN_WIDTH &&
+        value <= MAX_PERSISTED_TABLE_COLUMN_WIDTH
+      ) {
+        result[key] = Math.round(value);
+      }
+      return result;
+    }, {});
+    attendeeTableColumnWidths.value = widths;
+  } catch {
+    // 无痕模式或异常存储内容不应阻断参会人列表加载。
+  }
+}
+
+function persistAttendeeColumnWidths() {
+  if (typeof window === "undefined") return;
+  try {
+    window.localStorage.setItem(ATTENDEE_TABLE_COLUMN_WIDTH_STORAGE_KEY, JSON.stringify(attendeeTableColumnWidths.value));
+  } catch {
+    // 存储不可用时保留当前页面内的列宽即可。
+  }
+}
+
+function scheduleAttendeeColumnWidthSave() {
+  if (typeof window === "undefined") return;
+  if (attendeeTableColumnWidthSaveTimer !== null) {
+    window.clearTimeout(attendeeTableColumnWidthSaveTimer);
+  }
+  attendeeTableColumnWidthSaveTimer = window.setTimeout(() => {
+    attendeeTableColumnWidthSaveTimer = null;
+    persistAttendeeColumnWidths();
+  }, 180);
+}
+
+function handleAttendeeColumnResize(_resizedWidth: number, limitedWidth: number, column: DataTableBaseColumn) {
+  if (!Number.isFinite(limitedWidth)) return;
+  const width = Math.min(MAX_PERSISTED_TABLE_COLUMN_WIDTH, Math.max(MIN_PERSISTED_TABLE_COLUMN_WIDTH, Math.round(limitedWidth)));
+  attendeeTableColumnWidths.value = {
+    ...attendeeTableColumnWidths.value,
+    [attendeeColumnWidthKey(column.key)]: width
+  };
+  scheduleAttendeeColumnWidthSave();
+}
+
+function compareAttendeeText(left: unknown, right: unknown) {
+  const leftText = left == null ? "" : String(left).trim();
+  const rightText = right == null ? "" : String(right).trim();
+  if (!leftText && !rightText) return 0;
+  if (!leftText) return 1;
+  if (!rightText) return -1;
+  return attendeeTextCollator.compare(leftText, rightText);
+}
+
+function compareAttendeeBoolean(left: boolean | undefined, right: boolean | undefined) {
+  return Number(Boolean(left)) - Number(Boolean(right));
+}
+
+function compareAttendeeAuditStatus(left: Attendee, right: Attendee) {
+  return auditStatusSortOrder[left.auditStatus] - auditStatusSortOrder[right.auditStatus];
+}
+
 const fallbackFormMappings = computed<TduckFieldMappingDto[]>(() => [
   { attendeeField: "NAME", tduckFieldKey: "name", tduckFieldLabel: "姓名", requiredMapping: true },
   { attendeeField: "PHONE", tduckFieldKey: "phone", tduckFieldLabel: "手机号", requiredMapping: true },
@@ -931,7 +1031,7 @@ const fieldVisibilityOptions = computed(() =>
       label: fieldDisplayLabel(mapping),
       value: fieldKeyOf(mapping)
     })),
-    ...systemColumnDefinitions.map((column) => ({
+    ...systemColumnDefinitions.value.map((column) => ({
       label: column.title,
       value: systemFieldKey(column.key)
     }))
@@ -939,45 +1039,121 @@ const fieldVisibilityOptions = computed(() =>
 );
 
 const formColumns = computed(() =>
-  visibleFormMappings.value.map((mapping, index) => ({
-    title: fieldDisplayLabel(mapping),
-    key: `form-${fieldKeyOf(mapping)}`,
-    minWidth: formColumnWidth(mapping),
-    ellipsis: shouldEllipsisFormColumn(mapping) ? { tooltip: true } : false,
-    render: (row: Attendee) => {
-      const value = attendeeMappedValue(row, mapping);
-      if (index === 0 || mapping.attendeeField === "NAME") {
-        return h(NButton, { text: true, type: "primary", onClick: () => openDetail(row) }, { default: () => value || "-" });
+  visibleFormMappings.value.map((mapping, index) => {
+    const key = `form-${fieldKeyOf(mapping)}`;
+    const minWidth = formColumnWidth(mapping);
+    return {
+      title: fieldDisplayLabel(mapping),
+      key,
+      minWidth,
+      maxWidth: MAX_PERSISTED_TABLE_COLUMN_WIDTH,
+      width: storedAttendeeColumnWidth(key, minWidth),
+      resizable: true,
+      sorter: (left: Attendee, right: Attendee) => compareAttendeeText(attendeeMappedValue(left, mapping), attendeeMappedValue(right, mapping)),
+      ellipsis: shouldEllipsisFormColumn(mapping) ? { tooltip: true } : false,
+      render: (row: Attendee) => {
+        const value = attendeeMappedValue(row, mapping);
+        if (index === 0 || mapping.attendeeField === "NAME") {
+          return h(NButton, { text: true, type: "primary", onClick: () => openDetail(row) }, { default: () => value || "-" });
+        }
+        return value || "-";
       }
-      return value || "-";
-    }
-  }))
+    };
+  })
 );
 
-const systemColumnDefinitions = [
+const systemColumnDefinitions = computed(() => [
   {
     title: "标签",
     key: "tags" as const,
     minWidth: 120,
+    maxWidth: MAX_PERSISTED_TABLE_COLUMN_WIDTH,
+    width: storedAttendeeColumnWidth("tags", 120),
+    resizable: true,
+    sorter: (left: Attendee, right: Attendee) => compareAttendeeText(left.tags.join("、"), right.tags.join("、")),
     render: (row: Attendee) =>
       row.tags.length
         ? h(NSpace, { size: 4 }, { default: () => row.tags.map((tag) => h(NTag, { size: "small" }, { default: () => tag })) })
         : "-"
   },
-  { title: "审核", key: "auditStatus" as const, minWidth: 96, render: (row: Attendee) => h(StatusTag, { value: row.auditStatus }) },
-  { title: "座位", key: "seatLabel" as const, minWidth: 160, render: (row: Attendee) => h("span", seatLabelCellProps(), row.seatLabel || "-") },
-  { title: "房间", key: "roomNo" as const, minWidth: 96, render: (row: Attendee) => row.roomNo || "-" },
-  { title: "座位查询", key: "seatQueried" as const, minWidth: 100, render: (row: Attendee) => renderQueryTag(row.seatQueried) },
-  { title: "住宿查询", key: "roomQueried" as const, minWidth: 100, render: (row: Attendee) => renderQueryTag(row.roomQueried) },
-  { title: "签到", key: "checkinStatus" as const, minWidth: 96, render: (row: Attendee) => h(StatusTag, { value: row.checkinStatus }) },
-  { title: "参会人备注", key: "remark" as const, minWidth: 180, ellipsis: { tooltip: true }, render: (row: Attendee) => row.remark || "-" }
-];
+  {
+    title: "审核",
+    key: "auditStatus" as const,
+    minWidth: 96,
+    maxWidth: MAX_PERSISTED_TABLE_COLUMN_WIDTH,
+    width: storedAttendeeColumnWidth("auditStatus", 96),
+    resizable: true,
+    sorter: compareAttendeeAuditStatus,
+    render: (row: Attendee) => h(StatusTag, { value: row.auditStatus })
+  },
+  {
+    title: "座位",
+    key: "seatLabel" as const,
+    minWidth: 160,
+    maxWidth: MAX_PERSISTED_TABLE_COLUMN_WIDTH,
+    width: storedAttendeeColumnWidth("seatLabel", 160),
+    resizable: true,
+    sorter: (left: Attendee, right: Attendee) => compareAttendeeText(left.seatLabel, right.seatLabel),
+    render: (row: Attendee) => h("span", seatLabelCellProps(), row.seatLabel || "-")
+  },
+  {
+    title: "房间",
+    key: "roomNo" as const,
+    minWidth: 96,
+    maxWidth: MAX_PERSISTED_TABLE_COLUMN_WIDTH,
+    width: storedAttendeeColumnWidth("roomNo", 96),
+    resizable: true,
+    sorter: (left: Attendee, right: Attendee) => compareAttendeeText(left.roomNo, right.roomNo),
+    render: (row: Attendee) => row.roomNo || "-"
+  },
+  {
+    title: "座位查询",
+    key: "seatQueried" as const,
+    minWidth: 100,
+    maxWidth: MAX_PERSISTED_TABLE_COLUMN_WIDTH,
+    width: storedAttendeeColumnWidth("seatQueried", 100),
+    resizable: true,
+    sorter: (left: Attendee, right: Attendee) => compareAttendeeBoolean(left.seatQueried, right.seatQueried),
+    render: (row: Attendee) => renderQueryTag(row.seatQueried)
+  },
+  {
+    title: "住宿查询",
+    key: "roomQueried" as const,
+    minWidth: 100,
+    maxWidth: MAX_PERSISTED_TABLE_COLUMN_WIDTH,
+    width: storedAttendeeColumnWidth("roomQueried", 100),
+    resizable: true,
+    sorter: (left: Attendee, right: Attendee) => compareAttendeeBoolean(left.roomQueried, right.roomQueried),
+    render: (row: Attendee) => renderQueryTag(row.roomQueried)
+  },
+  {
+    title: "签到",
+    key: "checkinStatus" as const,
+    minWidth: 96,
+    maxWidth: MAX_PERSISTED_TABLE_COLUMN_WIDTH,
+    width: storedAttendeeColumnWidth("checkinStatus", 96),
+    resizable: true,
+    sorter: (left: Attendee, right: Attendee) => compareAttendeeBoolean(left.checkinStatus === "CHECKED_IN", right.checkinStatus === "CHECKED_IN"),
+    render: (row: Attendee) => h(StatusTag, { value: row.checkinStatus })
+  },
+  {
+    title: "参会人备注",
+    key: "remark" as const,
+    minWidth: 180,
+    maxWidth: MAX_PERSISTED_TABLE_COLUMN_WIDTH,
+    width: storedAttendeeColumnWidth("remark", 180),
+    resizable: true,
+    sorter: (left: Attendee, right: Attendee) => compareAttendeeText(left.remark, right.remark),
+    ellipsis: { tooltip: true },
+    render: (row: Attendee) => row.remark || "-"
+  }
+]);
 
-const defaultSystemFieldKeys = systemColumnDefinitions.map((column) => systemFieldKey(column.key));
+const defaultSystemFieldKeys = computed(() => systemColumnDefinitions.value.map((column) => systemFieldKey(column.key)));
 
 const visibleSystemColumns = computed(() => {
   const selectedKeys = new Set(visibleFieldKeys.value);
-  return systemColumnDefinitions.filter((column) => selectedKeys.has(systemFieldKey(column.key)));
+  return systemColumnDefinitions.value.filter((column) => selectedKeys.has(systemFieldKey(column.key)));
 });
 
 const actionColumn = {
@@ -1001,8 +1177,14 @@ const actionColumn = {
 
 const tableScrollX = computed(() => {
   const selectionWidth = 56;
-  const formWidth = visibleFormMappings.value.reduce((total, mapping) => total + formColumnWidth(mapping), selectionWidth);
-  const systemWidth = visibleSystemColumns.value.reduce((total, column) => total + column.minWidth, actionColumn.width);
+  const formWidth = visibleFormMappings.value.reduce(
+    (total, mapping) => total + attendeeColumnDisplayWidth(`form-${fieldKeyOf(mapping)}`, formColumnWidth(mapping)),
+    selectionWidth
+  );
+  const systemWidth = visibleSystemColumns.value.reduce(
+    (total, column) => total + attendeeColumnDisplayWidth(column.key, column.minWidth),
+    actionColumn.width
+  );
   return formWidth + systemWidth;
 });
 
@@ -1116,6 +1298,7 @@ const detailDinnerTableOptions = computed<SelectOption[]>(() => {
 });
 
 onMounted(() => {
+  loadAttendeeColumnWidths();
   void loadAttendeePageData();
 });
 
@@ -1124,6 +1307,11 @@ onBeforeUnmount(() => {
   if (attendeeFilterTimer !== null) {
     window.clearTimeout(attendeeFilterTimer);
     attendeeFilterTimer = null;
+  }
+  if (attendeeTableColumnWidthSaveTimer !== null) {
+    window.clearTimeout(attendeeTableColumnWidthSaveTimer);
+    attendeeTableColumnWidthSaveTimer = null;
+    persistAttendeeColumnWidths();
   }
   store.cancelAttendeeSearch(routeMeetingId.value || store.currentMeetingId);
   if (nameplateSettingsSaveTimer) {
@@ -2557,13 +2745,13 @@ function reconcileVisibleFields(mappings: TduckFieldMappingDto[]) {
   if (!fieldVisibilityInitialized) {
     visibleFieldKeys.value = [
       ...defaultVisibleMappings(mappings).map(fieldKeyOf),
-      ...defaultSystemFieldKeys
+      ...defaultSystemFieldKeys.value
     ];
     fieldVisibilityInitialized = true;
     return;
   }
 
-  const systemKeys = new Set(defaultSystemFieldKeys);
+  const systemKeys = new Set(defaultSystemFieldKeys.value);
   const selectedFormKeys = visibleFieldKeys.value.filter((key) => !systemKeys.has(key));
   const keptFormKeys = selectedFormKeys.filter((key) => availableFormKeys.has(key));
   const nextFormKeys = selectedFormKeys.length > 0 && keptFormKeys.length === 0

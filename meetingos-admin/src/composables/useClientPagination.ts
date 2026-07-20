@@ -7,11 +7,17 @@ export function useClientPagination<T>(
 ) {
   const normalizedPageSize = Math.max(1, Math.floor(pageSize) || 1);
   const page = ref(1);
+  const currentPageSize = ref(normalizedPageSize);
   const items = computed(() => toValue(source));
-  const pageCount = computed(() => Math.max(1, Math.ceil(items.value.length / normalizedPageSize)));
+  const pageCount = computed(() => Math.max(1, Math.ceil(items.value.length / currentPageSize.value)));
   const visibleItems = computed(() => {
-    const start = (page.value - 1) * normalizedPageSize;
-    return items.value.slice(start, start + normalizedPageSize);
+    const start = (page.value - 1) * currentPageSize.value;
+    return items.value.slice(start, start + currentPageSize.value);
+  });
+
+  // 改变每页数量后从第一页开始，避免当前页超出新页数或让用户错过前面的记录。
+  watch(currentPageSize, () => {
+    page.value = 1;
   });
 
   if (resetKey !== undefined) {
@@ -28,7 +34,7 @@ export function useClientPagination<T>(
   return {
     page,
     pageCount,
-    pageSize: normalizedPageSize,
+    pageSize: currentPageSize,
     itemCount: computed(() => items.value.length),
     visibleItems
   };

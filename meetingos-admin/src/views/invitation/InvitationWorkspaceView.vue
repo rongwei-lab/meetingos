@@ -34,7 +34,14 @@
       </div>
 
       <n-spin :show="loadingInvitations">
-        <n-data-table v-if="!isMobile" :columns="invitationColumns" :data="filteredInvitations" :row-key="rowKey" :pagination="{ pageSize: 10 }" :scroll-x="930" />
+        <n-data-table
+          v-if="!isMobile"
+          :columns="invitationColumns"
+          :data="filteredInvitations"
+          :row-key="rowKey"
+          :pagination="{ defaultPageSize: 10, showSizePicker: true, pageSizes: PAGINATION_PAGE_SIZES, prefix: paginationSummary }"
+          :scroll-x="930"
+        />
         <div v-else class="mobile-plan-list">
           <article v-for="item in filteredInvitations" :key="item.id" class="mobile-plan-item">
             <div>
@@ -237,6 +244,7 @@ import type {
   InvitationSummary
 } from "@/types/invitation";
 import { createBlankInvitationDocument, createDefaultInvitationDocument, validateInvitationDocument } from "@/utils/invitationDocument";
+import { PAGINATION_PAGE_SIZES, paginationSummary } from "@/utils/pagination";
 import {
   invitationShareLinkAvailability,
   isInvitationShareLinkAvailable,

@@ -23,10 +23,17 @@ vi.mock("naive-ui", () => {
     inheritAttrs: false,
     setup: (_props, { attrs, slots }) => () => h("div", attrs, slots.default?.())
   });
+  const paginationPassthrough = defineComponent({
+    props: {
+      prefix: Function
+    },
+    inheritAttrs: false,
+    setup: (_props, { attrs, slots }) => () => h("div", attrs, slots.default?.())
+  });
   return {
     NButton: passthrough,
     NDataTable: passthrough,
-    NPagination: passthrough,
+    NPagination: paginationPassthrough,
     NTag: passthrough,
     useMessage: () => ({ error: vi.fn(), success: vi.fn() })
   };

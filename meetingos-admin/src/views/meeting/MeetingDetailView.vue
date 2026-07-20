@@ -588,7 +588,7 @@
                         v-if="adminQueryTouched || queryResults.length"
                         :columns="queryResultColumns"
                         :data="queryResults"
-                        :pagination="{ pageSize: 5 }"
+                        :pagination="{ defaultPageSize: 10, showSizePicker: true, pageSizes: PAGINATION_PAGE_SIZES, prefix: paginationSummary }"
                       />
                       <div v-else class="admin-query-placeholder">
                         填写字段后执行后台查询，最多返回 20 条候选记录。
@@ -653,8 +653,9 @@
                   v-model:page="historyPagination.page"
                   v-model:page-size="historyPagination.pageSize"
                   show-size-picker
-                  :page-sizes="[10, 20, 50]"
+                  :page-sizes="PAGINATION_PAGE_SIZES"
                   :item-count="historyPagination.itemCount"
+                  :prefix="paginationSummary"
                   @update:page="handleHistoryPageChange"
                   @update:page-size="handleHistoryPageSizeChange"
                 />
@@ -666,7 +667,7 @@
               :columns="querySummaryColumns"
               :data="querySummaryRows"
               :loading="loadingQuerySummary"
-              :pagination="{ pageSize: 20 }"
+              :pagination="{ defaultPageSize: 20, showSizePicker: true, pageSizes: PAGINATION_PAGE_SIZES, prefix: paginationSummary }"
               :bordered="false"
               :scroll-x="900"
             />
@@ -698,6 +699,7 @@ import PageHeader from "@/components/PageHeader.vue";
 import StatusTag from "@/components/StatusTag.vue";
 import { useMeetingStore } from "@/stores/meeting";
 import { formatDateTimeLabel } from "@/utils/meetingDisplay";
+import { PAGINATION_PAGE_SIZES, paginationSummary } from "@/utils/pagination";
 import { assertSafeImageUrl, isAllowedUploadImage } from "@/utils/safeUrl";
 import type {
   AdminQueryCandidate,

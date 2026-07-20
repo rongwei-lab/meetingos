@@ -101,7 +101,7 @@
         v-if="!isMobile"
         :columns="roomColumns"
         :data="filteredRooms"
-        :pagination="{ pageSize: 8 }"
+        :pagination="{ defaultPageSize: 10, showSizePicker: true, pageSizes: PAGINATION_PAGE_SIZES, prefix: paginationSummary }"
         :row-key="roomRowKey"
       >
         <template #empty>
@@ -143,12 +143,14 @@
         <n-empty v-if="!filteredRooms.length" description="还没有可分配的房源" />
         </div>
         <n-pagination
-          v-if="mobileRoomItemCount > mobileRoomPageSize"
+          v-if="mobileRoomItemCount > 0"
           v-model:page="mobileRoomPage"
+          v-model:page-size="mobileRoomPageSize"
           class="mobile-pagination"
-          :page-count="mobileRoomPageCount"
-          :page-size="mobileRoomPageSize"
+          :page-sizes="PAGINATION_PAGE_SIZES"
           :item-count="mobileRoomItemCount"
+          :prefix="paginationSummary"
+          show-size-picker
           :page-slot="5"
           aria-label="房源列表分页"
         />
@@ -184,7 +186,7 @@
         v-if="!isMobile"
         :columns="roomAttendeeColumns"
         :data="filteredRoomAttendeeRows"
-        :pagination="{ pageSize: 10 }"
+        :pagination="{ defaultPageSize: 10, showSizePicker: true, pageSizes: PAGINATION_PAGE_SIZES, prefix: paginationSummary }"
         :row-key="roomAttendeeRowKey"
       >
         <template #empty>
@@ -224,12 +226,14 @@
         <n-empty v-if="!filteredRoomAttendeeRows.length" description="暂无符合条件的参会人" />
         </div>
         <n-pagination
-          v-if="mobileRoomAttendeeItemCount > mobileRoomAttendeePageSize"
+          v-if="mobileRoomAttendeeItemCount > 0"
           v-model:page="mobileRoomAttendeePage"
+          v-model:page-size="mobileRoomAttendeePageSize"
           class="mobile-pagination"
-          :page-count="mobileRoomAttendeePageCount"
-          :page-size="mobileRoomAttendeePageSize"
+          :page-sizes="PAGINATION_PAGE_SIZES"
           :item-count="mobileRoomAttendeeItemCount"
+          :prefix="paginationSummary"
+          show-size-picker
           :page-slot="5"
           aria-label="住宿参会人列表分页"
         />
@@ -451,6 +455,7 @@ import { useIsMobile } from "@/composables/useResponsive";
 import type { CreateRoomPayload } from "@/stores/meeting";
 import { useMeetingStore } from "@/stores/meeting";
 import { attendeeTypeLabel } from "@/utils/meetingDisplay";
+import { PAGINATION_PAGE_SIZES, paginationSummary } from "@/utils/pagination";
 import { downloadXlsxTemplate } from "@/utils/xlsxTemplate";
 import type { Attendee, Room, RoomStatus } from "@/utils/types";
 
@@ -709,13 +714,12 @@ const filteredRooms = computed(() => {
 });
 const {
   page: mobileRoomPage,
-  pageCount: mobileRoomPageCount,
   pageSize: mobileRoomPageSize,
   itemCount: mobileRoomItemCount,
   visibleItems: mobileRooms
 } = useClientPagination(
   filteredRooms,
-  12,
+  10,
   computed(() => [routeMeetingId.value, filters.keyword, filters.hotelName, filters.roomType, filters.status])
 );
 
@@ -761,7 +765,6 @@ const filteredRoomAttendeeRows = computed(() => {
 });
 const {
   page: mobileRoomAttendeePage,
-  pageCount: mobileRoomAttendeePageCount,
   pageSize: mobileRoomAttendeePageSize,
   itemCount: mobileRoomAttendeeItemCount,
   visibleItems: mobileRoomAttendeeRows

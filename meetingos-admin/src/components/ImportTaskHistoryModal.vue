@@ -72,12 +72,14 @@
     </n-spin>
 
     <n-pagination
-      v-if="filteredTasks.length > pageSize"
+      v-if="filteredTasks.length > 0"
       v-model:page="page"
+      v-model:page-size="pageSize"
       class="history-pagination"
-      :page-count="pageCount"
-      :page-size="pageSize"
+      :page-sizes="PAGINATION_PAGE_SIZES"
       :item-count="filteredTasks.length"
+      :prefix="paginationSummary"
+      show-size-picker
       show-quick-jumper
       aria-label="导入记录分页"
     />
@@ -94,6 +96,7 @@ import { useIsMobile } from "@/composables/useResponsive";
 import { useMeetingStore, type ImportTaskDto, type ImportTaskType } from "@/stores/meeting";
 import { importTaskStatusText } from "@/utils/fileTasks";
 import { formatDateTimeLabel } from "@/utils/meetingDisplay";
+import { PAGINATION_PAGE_SIZES, paginationSummary } from "@/utils/pagination";
 import { LatestRequestRegistry } from "@/utils/requestControl";
 
 interface ImportTypeOption {
@@ -120,7 +123,7 @@ const loading = ref(false);
 const loadError = ref("");
 const downloadingTaskId = ref("");
 const page = ref(1);
-const pageSize = 10;
+const pageSize = ref(10);
 const requests = new LatestRequestRegistry();
 let failureDownloadController: AbortController | null = null;
 let refreshTimer: ReturnType<typeof setTimeout> | null = null;
@@ -128,10 +131,10 @@ const activeStatuses = new Set(["PENDING", "PREFLIGHTING", "PREVIEW_READY", "RUN
 
 const allowedTypes = computed(() => new Set(props.typeOptions.map((option) => option.value)));
 const filteredTasks = computed(() => tasks.value.filter((task) => task.type === selectedType.value));
-const pageCount = computed(() => Math.max(1, Math.ceil(filteredTasks.value.length / pageSize)));
+const pageCount = computed(() => Math.max(1, Math.ceil(filteredTasks.value.length / pageSize.value)));
 const visibleTasks = computed(() => {
-  const start = (page.value - 1) * pageSize;
-  return filteredTasks.value.slice(start, start + pageSize);
+  const start = (page.value - 1) * pageSize.value;
+  return filteredTasks.value.slice(start, start + pageSize.value);
 });
 
 const columns: DataTableColumns<ImportTaskDto> = [
@@ -197,6 +200,11 @@ watch(selectedType, () => {
 });
 
 watch(page, scheduleRefreshIfNeeded);
+
+watch(pageSize, () => {
+  page.value = 1;
+  scheduleRefreshIfNeeded();
+});
 
 watch(pageCount, (count) => {
   if (page.value > count) page.value = count;

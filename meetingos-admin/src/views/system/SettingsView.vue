@@ -155,7 +155,7 @@
                 :columns="userColumns"
                 :data="users"
                 :loading="loadingSecurity"
-                :pagination="{ pageSize: 8 }"
+                :pagination="{ defaultPageSize: 10, showSizePicker: true, pageSizes: PAGINATION_PAGE_SIZES, prefix: paginationSummary }"
                 :scroll-x="980"
                 size="small"
               />
@@ -273,6 +273,7 @@ import MeetingAuthorizationPicker from "@/components/MeetingAuthorizationPicker.
 import PageHeader from "@/components/PageHeader.vue";
 import { useMeetingStore, type AdminUserDto, type MeetingUserPermissionDto } from "@/stores/meeting";
 import { hasGlobalMeetingAccess, planMeetingAuthorizationChanges } from "@/utils/meetingPermissions";
+import { PAGINATION_PAGE_SIZES, paginationSummary } from "@/utils/pagination";
 import { assertSafeImageUrl, isAllowedUploadImage, sanitizeImageUrl } from "@/utils/safeUrl";
 
 const store = useMeetingStore();
