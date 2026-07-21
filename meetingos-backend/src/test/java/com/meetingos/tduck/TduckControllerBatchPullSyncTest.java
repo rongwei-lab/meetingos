@@ -5,6 +5,7 @@ import com.meetingos.operationlog.OperationLogService;
 import org.junit.jupiter.api.Test;
 
 import java.util.List;
+import java.util.Map;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.Mockito.mock;
@@ -45,6 +46,24 @@ class TduckControllerBatchPullSyncTest {
         ApiResponse<TduckBatchPullSyncResponse> actual = controller.batchPullSyncTask(72L, 7L);
 
         assertThat(actual.data()).isSameAs(running);
+    }
+
+    @Test
+    void syncLogDetailDelegatesToScopedServiceLookup() {
+        TduckService tduckService = mock(TduckService.class);
+        TduckController controller = new TduckController(
+                tduckService, mock(TduckPullSyncTaskService.class), mock(OperationLogService.class)
+        );
+        TduckSyncLogDetailResponse detail = new TduckSyncLogDetailResponse(
+                91L, 7L, "form-7", "PULL_SYNC", SyncStatus.SUCCESS,
+                "同步成功", "211809", null, Map.of("phone", "13800138000")
+        );
+        when(tduckService.syncLogDetail(7L, 91L)).thenReturn(detail);
+
+        ApiResponse<TduckSyncLogDetailResponse> actual = controller.syncLogDetail(91L, 7L);
+
+        assertThat(actual.data()).isSameAs(detail);
+        verify(tduckService).syncLogDetail(7L, 91L);
     }
 
     private TduckBatchPullSyncResponse response(Long id, TduckPullSyncTaskStatus status) {

@@ -213,14 +213,16 @@ public class TduckClient {
         if (!StringUtils.hasText(formKey)) {
             throw new TduckClientException("TDuck formKey 不能为空");
         }
-        int maxRows = Math.min(Math.max(limit, 1), 1_000);
+        // limit <= 0 表示全量扫描。任务端使用 0 保存该语义，避免把未知总量误截断为固定条数。
+        boolean fetchAll = limit <= 0;
+        int maxRows = fetchAll ? Integer.MAX_VALUE : Math.max(limit, 1);
         int pageSize = Math.min(maxRows, 100);
         List<String> result = new ArrayList<>();
         /*
          * TDuck 管理端列表接口按 id 倒序返回，且 current 是 0 基页码。这里先只分页读取数据 ID，
          * 详情由调用方逐条拉取，确保单条异常不会让整批补偿同步直接中断。
          */
-        for (int current = 0; result.size() < maxRows; current++) {
+        for (int current = 0; fetchAll || result.size() < maxRows; current++) {
             Map<String, Object> body = new LinkedHashMap<>();
             body.put("formKey", formKey.trim());
             body.put("current", current);

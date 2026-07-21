@@ -1,5 +1,6 @@
 package com.meetingos.invitation;
 
+import com.meetingos.tduck.TduckSubmissionStatus;
 import jakarta.persistence.LockModeType;
 import org.springframework.data.jpa.repository.JpaRepository;
 import org.springframework.data.jpa.repository.Lock;
@@ -23,7 +24,7 @@ public interface RegistrationAttributionRepository extends JpaRepository<Registr
     Optional<RegistrationAttribution> findForUpdate(@Param("meetingId") Long meetingId,
                                                      @Param("dataId") String dataId);
 
-    @Modifying
+    @Modifying(flushAutomatically = true)
     @Query("""
             update RegistrationAttribution a set a.active = :active
             where a.meeting.id = :meetingId and a.attendee.id = :attendeeId
@@ -31,6 +32,27 @@ public interface RegistrationAttributionRepository extends JpaRepository<Registr
     int updateActiveByMeetingIdAndAttendeeId(@Param("meetingId") Long meetingId,
                                               @Param("attendeeId") Long attendeeId,
                                               @Param("active") boolean active);
+
+    /**
+     * TDuck 同手机号重复报名时，只有当前被采用的 dataId 才能继续计入有效归因。
+     * 这里通过 submission 历史表判定，而不是根据 attendees.tduck_data_id 推断，
+     * 这样待处理、已忽略、已替代和已撤回的历史提交都会稳定保持 inactive。
+     */
+    @Modifying(flushAutomatically = true)
+    @Query("""
+            update RegistrationAttribution a set a.active = true
+            where a.meeting.id = :meetingId
+              and a.attendee.id = :attendeeId
+              and a.tduckDataId in (
+                  select s.tduckDataId from TduckSubmission s
+                  where s.meeting.id = :meetingId
+                    and s.attendee.id = :attendeeId
+                    and s.status = :activeStatus
+              )
+            """)
+    int activateCurrentTduckSubmissionAttributions(@Param("meetingId") Long meetingId,
+                                                    @Param("attendeeId") Long attendeeId,
+                                                    @Param("activeStatus") TduckSubmissionStatus activeStatus);
 
     @Query("""
             select coalesce(sum(case when a.attributionStatus = :attributed then 1 else 0 end), 0),

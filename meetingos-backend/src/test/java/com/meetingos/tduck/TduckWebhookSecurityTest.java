@@ -46,6 +46,8 @@ class TduckWebhookSecurityTest {
     @Mock
     private TduckSyncLogRepository syncLogRepository;
     @Mock
+    private TduckSubmissionRepository submissionRepository;
+    @Mock
     private AttendeeRepository attendeeRepository;
     @Mock
     private SystemSettingsService settingsService;
@@ -69,6 +71,7 @@ class TduckWebhookSecurityTest {
                 bindingRepository,
                 mappingRepository,
                 syncLogRepository,
+                submissionRepository,
                 attendeeRepository,
                 new TduckFieldMapper(),
                 settingsService,
@@ -143,6 +146,7 @@ class TduckWebhookSecurityTest {
         TduckSyncLog winningLog = new TduckSyncLog();
         winningLog.setId(41L);
         winningLog.setAttendeeId(51L);
+        winningLog.setStatus(SyncStatus.SUCCESS);
         when(syncLogRepository.findBySuccessEventId("event-race"))
                 .thenReturn(Optional.of(winningLog));
         when(transactionRunner.requiresNew(any()))
@@ -214,8 +218,8 @@ class TduckWebhookSecurityTest {
 
     @Test
     void sameDataIdWithChangedPhoneUpdatesOriginalAttendee() {
-        stubSuccessfulTransaction();
         Meeting meeting = meeting();
+        stubSuccessfulTransaction(meeting);
         TduckFormBinding binding = binding(meeting);
         Attendee existing = attendee(meeting, 21L, "13800000001", "data-1");
 
@@ -254,8 +258,8 @@ class TduckWebhookSecurityTest {
 
     @Test
     void attributionFailureDoesNotChangeSuccessfulWebhookResult() {
-        stubSuccessfulTransaction();
         Meeting meeting = meeting();
+        stubSuccessfulTransaction(meeting);
         TduckFormBinding binding = binding(meeting);
         Attendee existing = attendee(meeting, 21L, "13800000001", "data-attr-failure");
 
@@ -289,8 +293,8 @@ class TduckWebhookSecurityTest {
 
     @Test
     void cancellationMarksExistingAttributionInactiveWithoutReplacingIt() {
-        stubSuccessfulTransaction();
         Meeting meeting = meeting();
+        stubSuccessfulTransaction(meeting);
         TduckFormBinding binding = binding(meeting);
         Attendee existing = attendee(meeting, 21L, "13800000001", "data-cancel");
 
@@ -325,6 +329,7 @@ class TduckWebhookSecurityTest {
         TduckSyncLog existingLog = new TduckSyncLog();
         existingLog.setId(37L);
         existingLog.setAttendeeId(21L);
+        existingLog.setStatus(SyncStatus.SUCCESS);
 
         when(bindingRepository.findByMeetingId(1L)).thenReturn(Optional.of(binding));
         when(bindingRepository.findMeetingIdByFormKey("form-1")).thenReturn(Optional.of(1L));
@@ -356,15 +361,12 @@ class TduckWebhookSecurityTest {
 
     @Test
     void missingDataIdCannotOverwritePhoneFallbackThatAlreadyHasBinding() {
-        stubSuccessfulTransaction();
         Meeting meeting = meeting();
+        stubSuccessfulTransaction(meeting);
         TduckFormBinding binding = binding(meeting);
-        Attendee existing = attendee(meeting, 21L, "13800000001", "bound-data-id");
 
         when(bindingRepository.findByFormKey("form-1")).thenReturn(Optional.of(binding));
         when(mappingRepository.findByMeetingId(1L)).thenReturn(mappings(meeting));
-        when(attendeeRepository.findByMeetingIdAndPhoneForUpdate(1L, "13800000001"))
-                .thenReturn(Optional.of(existing));
         TduckSyncLog failedLog = new TduckSyncLog();
         failedLog.setId(32L);
         when(syncLogService.failed(any(), any(), anyString())).thenReturn(failedLog);
@@ -377,14 +379,14 @@ class TduckWebhookSecurityTest {
         );
 
         assertThat(result.status()).isEqualTo(SyncStatus.FAILED);
-        assertThat(result.message()).contains("本次请求缺少 dataId");
+        assertThat(result.message()).contains("TDuck 报名缺少 dataId");
         verify(attendeeRepository, never()).save(any());
     }
 
     @Test
     void dataIdAndPhonePointingToDifferentAttendeesAreRejected() {
-        stubSuccessfulTransaction();
         Meeting meeting = meeting();
+        stubSuccessfulTransaction(meeting);
         TduckFormBinding binding = binding(meeting);
         Attendee byDataId = attendee(meeting, 21L, "13800000001", "data-conflict");
         Attendee byPhone = attendee(meeting, 22L, "13800000002", "other-data");
@@ -412,11 +414,16 @@ class TduckWebhookSecurityTest {
     }
 
     @SuppressWarnings("unchecked")
-    private void stubSuccessfulTransaction() {
+    private void stubSuccessfulTransaction(Meeting meeting) {
         when(settingsService.webhookToken()).thenReturn("expected-secret");
         lenient().when(bindingRepository.findMeetingIdByFormKey("form-1")).thenReturn(Optional.of(1L));
+        lenient().when(meetingRepository.findByIdForUpdate(1L)).thenReturn(Optional.of(meeting));
         when(syncLogRepository.findBySuccessEventId(anyString()))
                 .thenReturn(Optional.empty());
+        lenient().when(submissionRepository.findByMeetingIdAndTduckDataIdForUpdate(any(), anyString()))
+                .thenReturn(Optional.empty());
+        lenient().when(submissionRepository.save(any(TduckSubmission.class)))
+                .thenAnswer(invocation -> invocation.getArgument(0));
         when(transactionRunner.requiresNew(any())).thenAnswer(invocation -> {
             Supplier<?> action = invocation.getArgument(0, Supplier.class);
             return action.get();

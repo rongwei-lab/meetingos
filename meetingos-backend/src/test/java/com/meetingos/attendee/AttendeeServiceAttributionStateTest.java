@@ -12,6 +12,7 @@ import com.meetingos.room.RoomService;
 import com.meetingos.seating.SeatAssignmentRepository;
 import com.meetingos.settings.SystemSettingsService;
 import com.meetingos.tduck.TduckFieldMappingRepository;
+import com.meetingos.tduck.TduckSubmissionStatus;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
@@ -144,6 +145,18 @@ class AttendeeServiceAttributionStateTest {
         RegistrationAttributionRepository repository = org.mockito.Mockito.mock(RegistrationAttributionRepository.class);
         new RegistrationAttributionStateSynchronizer(repository).synchronize(1L, 17L, false);
         verify(repository).updateActiveByMeetingIdAndAttendeeId(1L, 17L, false);
+        verify(repository, org.mockito.Mockito.never()).activateCurrentTduckSubmissionAttributions(
+                org.mockito.Mockito.anyLong(),
+                org.mockito.Mockito.anyLong(),
+                org.mockito.Mockito.any()
+        );
+
+        new RegistrationAttributionStateSynchronizer(repository).synchronize(1L, 17L, true);
+        verify(repository).activateCurrentTduckSubmissionAttributions(
+                1L,
+                17L,
+                TduckSubmissionStatus.ACTIVE
+        );
     }
 
     private Attendee attendee(Long id, ReviewStatus reviewStatus) {

@@ -144,6 +144,28 @@ class TduckPullSyncTaskServiceTest {
     }
 
     @Test
+    void defaultTaskUsesUnlimitedScanMarker() {
+        TduckFormBinding binding = new TduckFormBinding();
+        binding.setMeeting(meeting);
+        binding.setFormKey("form-7");
+        when(bindingRepository.findByMeetingId(7L)).thenReturn(Optional.of(binding));
+        when(taskRepository.findFirstByMeetingIdAndStatusInOrderByCreatedAtDesc(anyLong(), any()))
+                .thenReturn(Optional.empty());
+        when(taskRepository.saveAndFlush(any())).thenAnswer(invocation -> {
+            TduckPullSyncTask task = invocation.getArgument(0);
+            task.setId(84L);
+            return task;
+        });
+        when(stateService.toResponse(any())).thenReturn(response(84L, TduckPullSyncTaskStatus.PENDING));
+        when(worker.tryReserve(84L)).thenReturn(true);
+
+        service.create(new TduckBatchPullSyncRequest(7L, null));
+
+        verify(taskRepository).saveAndFlush(org.mockito.ArgumentMatchers.argThat(task -> task.getRequestedLimit() == 0));
+        verify(worker).process(84L);
+    }
+
+    @Test
     void recovererDoesNotQueueSameTaskTwiceWhileItIsReserved() {
         when(taskRepository.findRecoverableTaskIds(any(), any(), any(), any()))
                 .thenReturn(List.of(91L));

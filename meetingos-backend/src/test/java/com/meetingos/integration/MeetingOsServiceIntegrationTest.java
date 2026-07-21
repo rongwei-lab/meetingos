@@ -24,6 +24,7 @@ import com.meetingos.exporttask.ExportTaskStatus;
 import com.meetingos.meeting.MeetingService;
 import com.meetingos.meeting.MeetingStatus;
 import com.meetingos.operationlog.OperationLogRepository;
+import com.meetingos.invitation.RegistrationAttributionRepository;
 import com.meetingos.permission.MeetingPermissionRole;
 import com.meetingos.permission.MeetingUserPermissionRequest;
 import com.meetingos.permission.MeetingUserPermissionService;
@@ -60,11 +61,16 @@ import com.meetingos.tduck.SyncStatus;
 import com.meetingos.tduck.TduckFieldMapping;
 import com.meetingos.tduck.TduckFieldMappingRepository;
 import com.meetingos.tduck.TduckService;
+import com.meetingos.tduck.TduckSubmissionRepository;
+import com.meetingos.tduck.TduckSubmissionResolution;
+import com.meetingos.tduck.TduckSubmissionResolveRequest;
+import com.meetingos.tduck.TduckSubmissionStatus;
 import com.meetingos.tduck.TduckTransactionRunner;
 import com.meetingos.tduck.TduckWebhookRequest;
 import com.meetingos.tduck.TduckWebhookResult;
 import com.meetingos.user.CreateUserRequest;
 import com.meetingos.user.UserService;
+import jakarta.persistence.EntityManager;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.autoconfigure.web.servlet.AutoConfigureMockMvc;
@@ -120,7 +126,8 @@ class MeetingOsServiceIntegrationTest {
             "13800009999",
             "13800007777",
             "13800007778",
-            "13800006666"
+            "13800006666",
+            "13800005555"
     );
 
     @Autowired
@@ -143,6 +150,15 @@ class MeetingOsServiceIntegrationTest {
 
     @Autowired
     private TduckFieldMappingRepository tduckFieldMappingRepository;
+
+    @Autowired
+    private TduckSubmissionRepository tduckSubmissionRepository;
+
+    @Autowired
+    private RegistrationAttributionRepository registrationAttributionRepository;
+
+    @Autowired
+    private EntityManager entityManager;
 
     @Autowired
     private AttendeeService attendeeService;
@@ -569,6 +585,63 @@ class MeetingOsServiceIntegrationTest {
         var attendee = attendeeRepository.findByMeetingIdAndPhone(1L, "13800009999");
         assertThat(attendee).isPresent();
         assertThat(attendee.get().getReviewStatus()).isEqualTo(ReviewStatus.APPROVED);
+    }
+
+    @Test
+    void tduckPendingConflictPreparesAttributionAndAdoptionActivatesIncomingSource() {
+        TduckWebhookResult current = tduckService.handleWebhook(new TduckWebhookRequest(
+                "event-conflict-current",
+                "form_data_add",
+                "ndef2026",
+                "td-conflict-current",
+                null,
+                Map.of(
+                        "name", "重复报名参会人",
+                        "phone", "13800005555",
+                        "organization", "原单位",
+                        "createTime", "2026-07-20 09:00:00"
+                ),
+                Map.of()
+        ), null, "test-webhook-secret", "{}");
+        assertThat(current.status()).isEqualTo(SyncStatus.SUCCESS);
+
+        TduckWebhookResult pending = tduckService.handleWebhook(new TduckWebhookRequest(
+                "event-conflict-incoming",
+                "form_data_add",
+                "ndef2026",
+                "td-conflict-incoming",
+                null,
+                Map.of(
+                        "name", "重复报名参会人",
+                        "phone", "13800005555",
+                        "organization", "新单位",
+                        "createTime", "2026-07-21 09:00:00"
+                ),
+                Map.of()
+        ), null, "test-webhook-secret", "{}");
+        assertThat(pending.status()).isEqualTo(SyncStatus.DUPLICATE_IGNORED);
+
+        var incoming = tduckSubmissionRepository.findByMeetingIdAndTduckDataIdForUpdate(1L, "td-conflict-incoming")
+                .orElseThrow();
+        assertThat(incoming.getStatus()).isEqualTo(TduckSubmissionStatus.PENDING_CONFLICT);
+        var incomingAttribution = registrationAttributionRepository.findForUpdate(1L, "td-conflict-incoming")
+                .orElseThrow();
+        assertThat(incomingAttribution.isActive()).isFalse();
+
+        tduckService.resolveSubmissionConflict(
+                incoming.getId(),
+                new TduckSubmissionResolveRequest(1L, TduckSubmissionResolution.ADOPT_INCOMING, "采用更新资料")
+        );
+
+        // 归因状态由 JPQL 批量更新维护；清理一级缓存后断言真实数据库状态。
+        entityManager.flush();
+        entityManager.clear();
+        assertThat(registrationAttributionRepository.findForUpdate(1L, "td-conflict-current").orElseThrow().isActive())
+                .isFalse();
+        assertThat(registrationAttributionRepository.findForUpdate(1L, "td-conflict-incoming").orElseThrow().isActive())
+                .isTrue();
+        assertThat(attendeeRepository.findByMeetingIdAndPhone(1L, "13800005555").orElseThrow().getTduckDataId())
+                .isEqualTo("td-conflict-incoming");
     }
 
     @Test

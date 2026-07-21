@@ -91,6 +91,7 @@ const operationActionLabels: Record<string, string> = {
   TDUCK_BATCH_PULL_SYNC: "批量拉取 TDuck 报名",
   TDUCK_REGISTRATION_TOGGLE: "启停报名入口",
   TDUCK_WEBHOOK_SYNC: "TDuck Webhook 同步",
+  TDUCK_DUPLICATE_CONFLICT_RESOLVE: "处理 TDuck 重复报名",
   INVITATION_CREATE: "创建邀请函",
   INVITATION_COPY: "复制邀请函",
   INVITATION_DRAFT_SAVE: "保存邀请函草稿",

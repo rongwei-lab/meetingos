@@ -136,7 +136,8 @@ public class TduckPullSyncTaskService {
     }
 
     private int normalizeLimit(Integer limit) {
-        return limit == null ? 1_000 : Math.min(Math.max(limit, 1), 1_000);
+        // 0 是持久化的“全量”标记；不把空请求默认为固定上限，确保一键同步能扫完整个 TDuck 表单。
+        return limit == null || limit <= 0 ? 0 : limit;
     }
 
     private String normalizeIdempotencyKey(String value) {

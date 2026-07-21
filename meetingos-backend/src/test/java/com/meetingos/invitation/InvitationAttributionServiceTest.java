@@ -1,6 +1,7 @@
 package com.meetingos.invitation;
 
 import com.meetingos.attendee.Attendee;
+import com.meetingos.attendee.AttendeeAttributionStateSynchronizer;
 import com.meetingos.attendee.AttendeeRepository;
 import com.meetingos.attendee.ReviewStatus;
 import com.meetingos.meeting.Meeting;
@@ -18,6 +19,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
+import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
@@ -27,6 +29,7 @@ class InvitationAttributionServiceTest {
     private MeetingRepository meetingRepository;
     private AttendeeRepository attendeeRepository;
     private InvitationTrackingTokenService tokenService;
+    private AttendeeAttributionStateSynchronizer attributionStateSynchronizer;
     private InvitationAttributionService service;
     private Meeting meeting;
     private Attendee attendee;
@@ -37,11 +40,17 @@ class InvitationAttributionServiceTest {
         eventRepository = mock(InvitationEventRepository.class);
         meetingRepository = mock(MeetingRepository.class);
         attendeeRepository = mock(AttendeeRepository.class);
+        attributionStateSynchronizer = mock(AttendeeAttributionStateSynchronizer.class);
         tokenService = new InvitationTrackingTokenService(new InvitationProperties(
                 "test-invitation-tracking-secret-that-is-long-enough", 180, "test-amap-key"
         ));
         service = new InvitationAttributionService(
-                attributionRepository, eventRepository, meetingRepository, attendeeRepository, tokenService
+                attributionRepository,
+                eventRepository,
+                meetingRepository,
+                attendeeRepository,
+                tokenService,
+                attributionStateSynchronizer
         );
 
         meeting = new Meeting();
@@ -86,8 +95,9 @@ class InvitationAttributionServiceTest {
         existing.setActive(false);
         when(attributionRepository.findForUpdate(1L, "data-1")).thenReturn(Optional.of(existing));
         service.attributeFirstSubmission(1L, 9L, "form-1", "data-1", "different-token");
-        assertThat(existing.isActive()).isTrue();
+        assertThat(existing.isActive()).isFalse();
         assertThat(existing.getAttributionStatus()).isEqualTo(RegistrationAttributionStatus.ATTRIBUTED);
+        verify(attributionStateSynchronizer, times(2)).synchronize(1L, 9L, true);
     }
 
     @Test
@@ -119,7 +129,7 @@ class InvitationAttributionServiceTest {
     }
 
     @Test
-    void pendingRegistrationRemainsActiveConsistentlyWithV6Backfill() {
+    void pendingRegistrationLeavesFinalActiveStateToSubmissionHistory() {
         RegistrationAttribution existing = new RegistrationAttribution();
         existing.setMeeting(meeting);
         existing.setAttendee(attendee);
@@ -130,8 +140,21 @@ class InvitationAttributionServiceTest {
 
         service.attributeFirstSubmission(1L, 9L, "form-1", "data-1", null);
 
-        assertThat(existing.isActive()).isTrue();
+        assertThat(existing.isActive()).isFalse();
         verify(attributionRepository).save(existing);
+        verify(attributionStateSynchronizer).synchronize(1L, 9L, true);
+    }
+
+    @Test
+    void synchronizesResolvedSubmissionUsingCurrentAttendeeReviewState() {
+        service.synchronizeSubmissionAttributionState(1L, 9L);
+
+        verify(attributionStateSynchronizer).synchronize(1L, 9L, true);
+
+        attendee.setReviewStatus(ReviewStatus.REJECTED);
+        service.synchronizeSubmissionAttributionState(1L, 9L);
+
+        verify(attributionStateSynchronizer).synchronize(1L, 9L, false);
     }
 
     private RegistrationAttribution captureSaved() {

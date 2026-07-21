@@ -40,6 +40,9 @@ class TduckServiceBindingGuardTest {
     private TduckSyncLogRepository syncLogRepository;
 
     @Mock
+    private TduckSubmissionRepository submissionRepository;
+
+    @Mock
     private AttendeeRepository attendeeRepository;
 
     @Mock
@@ -67,6 +70,7 @@ class TduckServiceBindingGuardTest {
                 bindingRepository,
                 mappingRepository,
                 syncLogRepository,
+                submissionRepository,
                 attendeeRepository,
                 new TduckFieldMapper(),
                 org.mockito.Mockito.mock(SystemSettingsService.class),

@@ -40,6 +40,10 @@
 | `PUT` | `/api/admin/tduck/mappings/{meetingId}` | 保存字段映射，兼容 `/api/tduck/mappings/{meetingId}` |
 | `GET` | `/api/admin/tduck/mappings/{meetingId}` | 查询字段映射，兼容 `/api/tduck/mappings/{meetingId}` |
 | `GET` | `/api/admin/tduck/sync-logs?meetingId={meetingId}` | 查询同步日志，兼容 `/api/tduck/sync-logs` |
+| `GET` | `/api/admin/tduck/sync-logs/{syncLogId}?meetingId={meetingId}` | 查询该次同步保存的脱敏表单快照，不返回 Webhook 原始载荷 |
+| `GET` | `/api/admin/tduck/sync-conflicts?meetingId={meetingId}` | 查询同手机号、不同 `dataId` 的待处理报名，兼容 `/api/tduck/sync-conflicts` |
+| `GET` | `/api/admin/tduck/sync-conflicts/{submissionId}?meetingId={meetingId}` | 查询一条待处理报名与当前参会人资料的脱敏对比 |
+| `POST` | `/api/admin/tduck/sync-conflicts/{submissionId}/resolve` | 裁决重复报名；请求为 `meetingId`、`resolution`（`KEEP_EXISTING` 或 `ADOPT_INCOMING`）和可选 `note` |
 | `POST` | `/api/admin/tduck/sync/manual` | 手工补偿同步单条 TDuck 报名数据 |
 | `POST` | `/api/admin/tduck/sync/pull` | 使用 TDuck 管理接口按 dataId 拉取单条报名详情并补偿同步 |
 | `POST` | `/api/admin/tduck/sync/pull/all` | 创建全量拉取同步任务，参数为 `meetingId`、可选 `limit` 和 `idempotencyKey` |
@@ -49,6 +53,8 @@
 Webhook 优先校验基于原始 body 的 `X-TDuck-Signature`，兼容 `X-MeetingOS-Webhook-Token` 和仅内网 fallback 的 query token。校验失败不应返回具体密钥错误细节。
 `form_data_delete` 以及删除/撤回类事件会按 `formKey + dataId` 定位原参会人并自动置为 `CANCELLED`，保留参会人记录和同步日志用于审计，不做物理删除。
 补偿同步复用字段映射、手机号唯一和同步日志幂等规则；`manual` 适合导入 TDuck 导出的单条 payload，`pull` 会通过 `TDUCK_ADMIN_EMAIL`/`TDUCK_ADMIN_PASSWORD` 登录 TDuck 后读取 `/user/form/data/details/{dataId}`。`pull/all` 返回持久化任务，任务按会议互斥，使用幂等键、租约和独立有界执行器保证重试与服务重启后的恢复。
+
+同一会议同一手机号出现不同 TDuck `dataId` 时，系统保留一个参会人和多条提交历史，不自动覆盖签到、座位、房间或晚宴分配。明显较早的提交标记为 `DUPLICATE_IGNORED`；新提交进入待处理队列。管理员选择 `ADOPT_INCOMING` 时只替换报名资料和当前 `dataId`，保留参会人 ID 及会务下游数据；选择 `KEEP_EXISTING` 时新提交保留为历史忽略记录。当前来源撤回时只会恢复曾被替代的 `SUPERSEDED` 提交。
 
 ## 公开报名中转
 

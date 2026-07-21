@@ -273,6 +273,21 @@ TDuck 同步日志。
 | `attendee_id` | bigint | 关联参会人 |
 | `created_at` | datetime | 创建时间 |
 
+### tduck_submissions
+
+TDuck 每个 `dataId` 的提交历史。用于同手机号多次提交时保存资料快照、裁决结果和当前来源，主参会人表仍只保留一个当前 `tduck_data_id`。
+
+| 字段 | 类型建议 | 说明 |
+| --- | --- | --- |
+| `meeting_id` / `attendee_id` | bigint | 所属会议和被复用的参会人；不创建第二个手机号参会人 |
+| `tduck_data_id` | varchar(120) | TDuck 提交主键；同会议唯一 |
+| `status` | varchar(32) | `ACTIVE`、`SUPERSEDED`、`IGNORED`、`PENDING_CONFLICT`、`CANCELLED` |
+| `active_attendee_id` | bigint，可空 | 仅 `ACTIVE` 时写入参会人 ID；与 `meeting_id` 联合唯一，保证每个参会人只有一个当前来源 |
+| `submitted_at` | datetime | TDuck 提交时间；用于识别明显较早的历史提交 |
+| `name` 至 `remark` | 对应参会人字段 | 当次提交的资料快照，用于管理员对比，不包含签到、座位、房间和晚宴数据 |
+| `raw_data_snapshot` | json | 业务字段快照；排除 `extValue`、IP、浏览器等 TDuck 元数据 |
+| `resolved_at` / `resolved_by` / `resolution_note` | datetime / varchar / varchar | 管理员裁决审计信息 |
+
 ### tduck_pull_sync_tasks
 
 TDuck 全量拉取同步任务。任务按会议互斥，通过可选幂等键返回同一任务；运行中的任务使用 `run_token` 和 `lease_until` 防止旧 worker 覆盖被恢复任务的进度。

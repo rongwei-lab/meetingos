@@ -20,5 +20,7 @@ public interface TduckSyncLogRepository extends JpaRepository<TduckSyncLog, Long
 
     Page<TduckSyncLog> findByMeetingId(Long meetingId, Pageable pageable);
 
+    Optional<TduckSyncLog> findByIdAndMeetingId(Long id, Long meetingId);
+
     boolean existsByMeetingIdAndTduckDataIdIsNotNull(Long meetingId);
 }

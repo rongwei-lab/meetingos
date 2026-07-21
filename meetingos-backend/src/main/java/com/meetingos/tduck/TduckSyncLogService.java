@@ -35,6 +35,25 @@ public class TduckSyncLogService {
         return syncLogRepository.save(log);
     }
 
+    /**
+     * 已确认的历史重复同样要占用幂等键。否则批量补偿每次都会重新进入冲突分支，
+     * 既污染日志，也会持续向管理员报告已经处理完的同一条 dataId。
+     */
+    @Transactional(propagation = Propagation.MANDATORY)
+    public TduckSyncLog ignored(TduckWebhookRequest request, Meeting meeting, String eventId, Attendee attendee, String message) {
+        return ignored(request, meeting, eventId, attendee == null ? null : attendee.getId(), message);
+    }
+
+    @Transactional(propagation = Propagation.MANDATORY)
+    public TduckSyncLog ignored(TduckWebhookRequest request, Meeting meeting, String eventId, Long attendeeId, String message) {
+        TduckSyncLog log = baseLog(request, meeting, eventId);
+        log.setStatus(SyncStatus.DUPLICATE_IGNORED);
+        log.setSuccessEventId(eventId);
+        log.setMessage(truncate(message, MESSAGE_MAX_LENGTH));
+        log.setAttendeeId(attendeeId);
+        return syncLogRepository.save(log);
+    }
+
     /*
      * Webhook 主事务内失败已被转换为 FAILED 结果，直接加入当前事务即可；鉴权/解析失败发生在
      * 事务外时 REQUIRED 仍会自行开启事务。这样避免失败洪峰下外层事务占一个连接、日志再等第二个连接。

@@ -369,6 +369,60 @@ interface SyncLogDto {
   createdAt?: string;
 }
 
+export interface TduckSyncLogDetailDto {
+  id: string;
+  meetingId: string;
+  formKey: string;
+  eventType: string;
+  status: SyncLog["status"];
+  message?: string;
+  dataId: string;
+  createdAt: string;
+  formValues: Record<string, unknown>;
+}
+
+export type TduckSubmissionStatus = "ACTIVE" | "SUPERSEDED" | "IGNORED" | "PENDING_CONFLICT" | "CANCELLED";
+export type TduckSubmissionResolution = "KEEP_EXISTING" | "ADOPT_INCOMING";
+
+export interface TduckSubmissionParticipantDto {
+  name?: string;
+  phone?: string;
+  organization?: string;
+  title?: string;
+  identityNo?: string;
+  email?: string;
+  attendeeType?: string;
+  accommodationRequired?: boolean;
+  remark?: string;
+  formValues?: Record<string, unknown>;
+}
+
+export interface TduckSubmissionConflictDto {
+  id: string;
+  meetingId: string;
+  attendeeId: string;
+  currentTduckDataId?: string;
+  incomingTduckDataId?: string;
+  status: TduckSubmissionStatus;
+  submittedAt?: string;
+  createdAt?: string;
+  existing: TduckSubmissionParticipantDto;
+  incoming: TduckSubmissionParticipantDto;
+}
+
+interface TduckSubmissionConflictWireDto {
+  id: number | string;
+  meetingId: number | string;
+  attendeeId: number | string;
+  currentTduckDataId?: string;
+  incomingTduckDataId?: string;
+  status: TduckSubmissionStatus;
+  submittedAt?: string;
+  createdAt?: string;
+  existing?: TduckSubmissionParticipantDto;
+  incoming?: TduckSubmissionParticipantDto;
+}
+
 interface CheckinRecordDto {
   id: number;
   attendeeId?: number;
@@ -958,6 +1012,7 @@ export const useMeetingStore = defineStore("meeting", {
     dinnerAssignments: [] as DinnerAssignment[],
     dinnerTables: [] as DinnerTable[],
     syncLogs: [] as SyncLog[],
+    tduckSubmissionConflictsByMeetingId: {} as Record<string, PagePayload<TduckSubmissionConflictDto>>,
     checkinRecords: [] as CheckinRecord[],
     loadedAttendeeMeetingIds: [] as string[],
     statisticsByRequestKey: {} as Record<string, StatisticsOverviewDto>,
@@ -1012,6 +1067,9 @@ export const useMeetingStore = defineStore("meeting", {
     },
     currentCheckinRecords(): CheckinRecord[] {
       return this.checkinRecordsByMeetingId.get(this.currentMeetingId) || [];
+    },
+    currentTduckSubmissionConflicts(state): PagePayload<TduckSubmissionConflictDto> {
+      return state.tduckSubmissionConflictsByMeetingId[this.currentMeetingId] || emptyPage<TduckSubmissionConflictDto>();
     },
     overview(state): StatisticsOverviewDto | null {
       const requestKey = state.activeStatisticsRequestKeyByMeetingId[state.currentMeetingId];
@@ -2002,21 +2060,133 @@ export const useMeetingStore = defineStore("meeting", {
         return room;
       }
     },
-    async loadSyncLogs(meetingId?: string) {
+    async loadSyncLogs(meetingId?: string, options: { page?: number; size?: number } = {}) {
       meetingId = requireMeetingId(meetingId || this.currentMeetingId);
+      const pageNumber = Math.max(0, options.page || 0);
+      const pageSize = Math.max(1, options.size || 20);
       const request = requestRuntime.requests.begin(`sync-logs:${meetingId}`);
       try {
         const page = unwrapApi(
           await http.get<PagePayload<SyncLogDto>>("/admin/tduck/sync-logs", {
-            params: { meetingId: backendId(meetingId), page: 0, size: 50 },
+            params: { meetingId: backendId(meetingId), page: pageNumber, size: pageSize },
             signal: request.signal
           })
         );
-        if (!requestRuntime.requests.isCurrent(request)) return;
-        this.syncLogs = [...this.syncLogs.filter((log) => log.meetingId !== meetingId), ...page.content.map((item) => mapSyncLog(item, meetingId))];
+        const mapped = {
+          ...page,
+          content: page.content.map((item) => mapSyncLog(item, meetingId))
+        } satisfies PagePayload<SyncLog>;
+        if (!requestRuntime.requests.isCurrent(request)) return mapped;
+        this.syncLogs = [...this.syncLogs.filter((log) => log.meetingId !== meetingId), ...mapped.content];
+        return mapped;
       } finally {
         requestRuntime.requests.finish(request);
       }
+    },
+    async loadTduckSyncLogDetail(syncLogId: string, meetingId?: string) {
+      const targetMeetingId = requireMeetingId(meetingId || this.currentMeetingId);
+      const detail = unwrapApi(
+        await http.get<{
+          id: number;
+          meetingId?: number;
+          formKey?: string;
+          eventType?: string;
+          status: SyncLog["status"];
+          message?: string;
+          tduckDataId?: string;
+          createdAt?: string;
+          formValues?: Record<string, unknown>;
+        }>(`/admin/tduck/sync-logs/${encodeURIComponent(backendId(syncLogId))}`, {
+          params: { meetingId: backendId(targetMeetingId) }
+        })
+      );
+      return {
+        id: idOf(detail.id),
+        meetingId: idOf(detail.meetingId ?? targetMeetingId),
+        formKey: detail.formKey || "",
+        eventType: detail.eventType || "",
+        status: detail.status,
+        message: detail.message,
+        dataId: detail.tduckDataId || "",
+        createdAt: detail.createdAt || "",
+        formValues: detail.formValues && typeof detail.formValues === "object" && !Array.isArray(detail.formValues)
+          ? { ...detail.formValues }
+          : {}
+      } satisfies TduckSyncLogDetailDto;
+    },
+    async loadTduckSubmissionConflicts(meetingId?: string, options: { page?: number; size?: number } = {}) {
+      const targetMeetingId = requireMeetingId(meetingId || this.currentMeetingId);
+      const pageNumber = Math.max(0, options.page || 0);
+      const pageSize = Math.max(1, options.size || 50);
+      const request = requestRuntime.requests.begin(`tduck-submission-conflicts:${targetMeetingId}`);
+      try {
+        const page = unwrapApi(
+          await http.get<PagePayload<TduckSubmissionConflictWireDto>>("/admin/tduck/sync-conflicts", {
+            params: { meetingId: backendId(targetMeetingId), page: pageNumber, size: pageSize },
+            signal: request.signal
+          })
+        );
+        const mapped = {
+          ...page,
+          content: page.content.map(mapTduckSubmissionConflict)
+        } satisfies PagePayload<TduckSubmissionConflictDto>;
+        if (requestRuntime.requests.isCurrent(request)) {
+          this.tduckSubmissionConflictsByMeetingId[targetMeetingId] = mapped;
+        }
+        return mapped;
+      } finally {
+        requestRuntime.requests.finish(request);
+      }
+    },
+    async loadTduckSubmissionConflict(submissionId: string | number, meetingId?: string) {
+      const targetMeetingId = requireMeetingId(meetingId || this.currentMeetingId);
+      const normalizedSubmissionId = idOf(submissionId);
+      if (!normalizedSubmissionId) throw new Error("TDuck 重复报名记录不存在");
+      const response = unwrapApi(
+        await http.get<TduckSubmissionConflictWireDto>(`/admin/tduck/sync-conflicts/${backendId(normalizedSubmissionId)}`, {
+          params: { meetingId: backendId(targetMeetingId) }
+        })
+      );
+      const conflict = mapTduckSubmissionConflict(response);
+      const cachedPage = this.tduckSubmissionConflictsByMeetingId[targetMeetingId];
+      if (cachedPage?.content.some((item) => item.id === conflict.id)) {
+        this.tduckSubmissionConflictsByMeetingId[targetMeetingId] = {
+          ...cachedPage,
+          content: cachedPage.content.map((item) => item.id === conflict.id ? conflict : item)
+        };
+      }
+      return conflict;
+    },
+    async resolveTduckSubmissionConflict(
+      submissionId: string | number,
+      meetingId: string,
+      resolution: TduckSubmissionResolution,
+      note?: string
+    ) {
+      const targetMeetingId = requireMeetingId(meetingId || this.currentMeetingId);
+      const normalizedSubmissionId = idOf(submissionId);
+      if (!normalizedSubmissionId) throw new Error("TDuck 重复报名记录不存在");
+      const normalizedNote = note?.trim() || undefined;
+      const response = unwrapApi(
+        await http.post<TduckSubmissionConflictWireDto>(`/admin/tduck/sync-conflicts/${backendId(normalizedSubmissionId)}/resolve`, {
+          meetingId: backendId(targetMeetingId),
+          resolution,
+          note: normalizedNote
+        })
+      );
+      const resolved = mapTduckSubmissionConflict(response);
+      const cachedPage = this.tduckSubmissionConflictsByMeetingId[targetMeetingId];
+      if (cachedPage) {
+        const removed = cachedPage.content.some((item) => item.id === resolved.id);
+        const totalElements = Math.max(0, cachedPage.totalElements - (removed ? 1 : 0));
+        this.tduckSubmissionConflictsByMeetingId[targetMeetingId] = {
+          ...cachedPage,
+          content: cachedPage.content.filter((item) => item.id !== resolved.id),
+          totalElements,
+          totalPages: totalElements ? Math.ceil(totalElements / cachedPage.size) : 0
+        };
+      }
+      return resolved;
     },
     async loadCheckinRecords(meetingId?: string) {
       meetingId = requireMeetingId(meetingId || this.currentMeetingId);
@@ -4207,8 +4377,40 @@ function mapSyncLog(item: SyncLogDto, meetingId: string): SyncLog {
     dataId: item.tduckDataId || item.eventId || "",
     eventType: item.eventType || "",
     status: item.status,
-    errorMessage: item.status === "FAILED" ? item.message : undefined,
+    errorMessage: item.status === "FAILED" || item.status === "DUPLICATE_IGNORED" ? item.message : undefined,
     createdAt: item.createdAt || ""
+  };
+}
+
+function mapTduckSubmissionConflict(item: TduckSubmissionConflictWireDto): TduckSubmissionConflictDto {
+  return {
+    id: idOf(item.id),
+    meetingId: idOf(item.meetingId),
+    attendeeId: idOf(item.attendeeId),
+    currentTduckDataId: item.currentTduckDataId || undefined,
+    incomingTduckDataId: item.incomingTduckDataId || undefined,
+    status: item.status,
+    submittedAt: item.submittedAt || undefined,
+    createdAt: item.createdAt || undefined,
+    existing: mapTduckSubmissionParticipant(item.existing),
+    incoming: mapTduckSubmissionParticipant(item.incoming)
+  };
+}
+
+function mapTduckSubmissionParticipant(item?: TduckSubmissionParticipantDto): TduckSubmissionParticipantDto {
+  return {
+    name: item?.name || "",
+    phone: item?.phone || "",
+    organization: item?.organization || "",
+    title: item?.title || "",
+    identityNo: item?.identityNo || "",
+    email: item?.email || "",
+    attendeeType: item?.attendeeType || "",
+    accommodationRequired: Boolean(item?.accommodationRequired),
+    remark: item?.remark || "",
+    formValues: item?.formValues && typeof item.formValues === "object" && !Array.isArray(item.formValues)
+      ? { ...item.formValues }
+      : {}
   };
 }
 

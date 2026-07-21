@@ -151,6 +151,7 @@ final class OperationLogCatalog {
         labels.put("TDUCK_PULL_SYNC", "拉取同步 TDuck 报名");
         labels.put("TDUCK_BATCH_PULL_SYNC", "批量拉取 TDuck 报名");
         labels.put("TDUCK_WEBHOOK_SYNC", "TDuck Webhook 同步");
+        labels.put("TDUCK_DUPLICATE_CONFLICT_RESOLVE", "处理 TDuck 重复报名");
 
         labels.put("INVITATION_CREATE", "创建邀请函");
         labels.put("INVITATION_COPY", "复制邀请函");
@@ -186,7 +187,13 @@ final class OperationLogCatalog {
                 Map.entry("DINNER_EXPORT", Set.of("导出用餐分配")),
                 Map.entry("TDUCK_MANUAL_SYNC", Set.of("手动同步 TDuck 数据")),
                 Map.entry("TDUCK_PULL_SYNC", Set.of("拉取同步 TDuck 数据")),
-                Map.entry("TDUCK_BATCH_PULL_SYNC", Set.of("批量拉取 TDuck 数据"))
+                Map.entry("TDUCK_BATCH_PULL_SYNC", Set.of("批量拉取 TDuck 数据")),
+                Map.entry("TDUCK_DUPLICATE_CONFLICT_RESOLVE", Set.of(
+                        "处理重复报名",
+                        "重复报名处理",
+                        "Resolve TDuck duplicate registration",
+                        "TDuck duplicate conflict"
+                ))
         );
     }
 

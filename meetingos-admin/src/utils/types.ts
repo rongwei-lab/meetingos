@@ -365,7 +365,7 @@ export interface SyncLog {
   formKey: string;
   dataId: string;
   eventType: string;
-  status: "SUCCESS" | "FAILED" | "PENDING";
+  status: "SUCCESS" | "FAILED" | "PENDING" | "DUPLICATE_IGNORED";
   errorMessage?: string;
   createdAt: string;
 }

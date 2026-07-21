@@ -14,6 +14,8 @@ class OperationLogCatalogTest {
         assertThat(OperationLogCatalog.matchingActions("更新房间")).contains("ROOM_UPDATE");
         assertThat(OperationLogCatalog.matchingActions("更换 TDuck")).contains("TDUCK_REBIND_FORM");
         assertThat(OperationLogCatalog.matchingActions("同步 TDuck 字段")).contains("TDUCK_SYNC_FIELDS");
+        assertThat(OperationLogCatalog.matchingActions("重复报名处理"))
+                .contains("TDUCK_DUPLICATE_CONFLICT_RESOLVE");
         assertThat(OperationLogCatalog.matchingTargetTypes("渠道链接")).contains("INVITATION_SHARE_LINK");
         assertThat(OperationLogCatalog.matchingCategories("报名"))
                 .contains(OperationLogCategory.REGISTRATION_TDUCK);

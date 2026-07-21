@@ -1,6 +1,7 @@
 package com.meetingos.invitation;
 
 import com.meetingos.attendee.Attendee;
+import com.meetingos.attendee.AttendeeAttributionStateSynchronizer;
 import com.meetingos.attendee.AttendeeRepository;
 import com.meetingos.attendee.ReviewStatus;
 import com.meetingos.meeting.Meeting;
@@ -20,17 +21,20 @@ public class InvitationAttributionService {
     private final MeetingRepository meetingRepository;
     private final AttendeeRepository attendeeRepository;
     private final InvitationTrackingTokenService tokenService;
+    private final AttendeeAttributionStateSynchronizer attributionStateSynchronizer;
 
     public InvitationAttributionService(RegistrationAttributionRepository attributionRepository,
                                         InvitationEventRepository eventRepository,
                                         MeetingRepository meetingRepository,
                                         AttendeeRepository attendeeRepository,
-                                        InvitationTrackingTokenService tokenService) {
+                                        InvitationTrackingTokenService tokenService,
+                                        AttendeeAttributionStateSynchronizer attributionStateSynchronizer) {
         this.attributionRepository = attributionRepository;
         this.eventRepository = eventRepository;
         this.meetingRepository = meetingRepository;
         this.attendeeRepository = attendeeRepository;
         this.tokenService = tokenService;
+        this.attributionStateSynchronizer = attributionStateSynchronizer;
     }
 
     /**
@@ -43,6 +47,27 @@ public class InvitationAttributionService {
                                          String formKey,
                                          String tduckDataId,
                                          String extValue) {
+        attributeFirstSubmissionInCurrentTransaction(meetingId, attendeeId, formKey, tduckDataId, extValue);
+    }
+
+    /**
+     * 重复报名待处理记录必须和 tduck_submissions 一起提交。否则管理员在提交后、归因异步补写前
+     * 采用新报名，会出现当前来源已经切换但该 dataId 永远没有归因记录的短暂竞态。
+     */
+    @Transactional(propagation = Propagation.MANDATORY)
+    public void preparePendingSubmissionAttribution(Long meetingId,
+                                                    Long attendeeId,
+                                                    String formKey,
+                                                    String tduckDataId,
+                                                    String extValue) {
+        attributeFirstSubmissionInCurrentTransaction(meetingId, attendeeId, formKey, tduckDataId, extValue);
+    }
+
+    private void attributeFirstSubmissionInCurrentTransaction(Long meetingId,
+                                                               Long attendeeId,
+                                                               String formKey,
+                                                               String tduckDataId,
+                                                               String extValue) {
         String normalizedFormKey = normalize(formKey, 120);
         String normalizedDataId = normalize(tduckDataId, 120);
         if (meetingId == null || meetingId <= 0 || attendeeId == null || attendeeId <= 0
@@ -64,6 +89,7 @@ public class InvitationAttributionService {
         Optional<RegistrationAttribution> existing = attributionRepository.findForUpdate(meetingId, normalizedDataId);
         if (existing.isPresent()) {
             restoreExisting(existing.get(), attendee);
+            synchronizeSubmissionAttributionState(meetingId, attendee);
             return;
         }
 
@@ -78,7 +104,8 @@ public class InvitationAttributionService {
         attribution.setAttendee(attendee);
         attribution.setFormKey(normalizedFormKey);
         attribution.setTduckDataId(normalizedDataId);
-        attribution.setActive(isEffectiveRegistration(attendee));
+        // active 只能由 submission 状态同步决定，不能因为这条 dataId 刚收到回调就先行生效。
+        attribution.setActive(false);
         attribution.setAttributedAt(LocalDateTime.now());
         attribution.setAttributionStatus(resolution.status());
         if (resolution.event() != null) {
@@ -89,6 +116,21 @@ public class InvitationAttributionService {
             attribution.setShareLink(event.getShareLink());
         }
         attributionRepository.save(attribution);
+        synchronizeSubmissionAttributionState(meetingId, attendee);
+    }
+
+    /**
+     * 供 TDuck 冲突采用、撤回恢复等状态切换在其当前事务内调用。
+     * REQUIRED 使其既能加入 resolve/cancel 的原子提交，也能在补偿场景自行开启事务。
+     */
+    @Transactional(propagation = Propagation.REQUIRED)
+    public void synchronizeSubmissionAttributionState(Long meetingId, Long attendeeId) {
+        if (meetingId == null || meetingId <= 0 || attendeeId == null || attendeeId <= 0) {
+            return;
+        }
+        attendeeRepository.findByIdForUpdate(attendeeId)
+                .filter(attendee -> attendee.getMeeting().getId().equals(meetingId))
+                .ifPresent(attendee -> synchronizeSubmissionAttributionState(meetingId, attendee));
     }
 
     @Transactional(propagation = Propagation.REQUIRES_NEW)
@@ -104,11 +146,23 @@ public class InvitationAttributionService {
     }
 
     private void restoreExisting(RegistrationAttribution attribution, Attendee attendee) {
-        attribution.setActive(isEffectiveRegistration(attendee));
+        // 同一 dataId 的再次拉取不能绕开重复报名状态检查而直接重新激活归因。
+        attribution.setActive(false);
         if (attribution.getAttendee() == null || !attendee.getId().equals(attribution.getAttendee().getId())) {
             attribution.setAttendee(attendee);
         }
         attributionRepository.save(attribution);
+    }
+
+    private void synchronizeSubmissionAttributionState(Long meetingId, Attendee attendee) {
+        if (attendee.getId() == null) {
+            return;
+        }
+        attributionStateSynchronizer.synchronize(
+                meetingId,
+                attendee.getId(),
+                isEffectiveRegistration(attendee)
+        );
     }
 
     private boolean isEffectiveRegistration(Attendee attendee) {

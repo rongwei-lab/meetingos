@@ -7,6 +7,7 @@ describe("operation log display labels", () => {
     expect(operationActionLabel("AUTH_LOGOUT")).toBe("退出登录");
     expect(operationActionLabel("PUBLIC_SELF_CHECKIN")).toBe("自助签到");
     expect(operationActionLabel("TDUCK_WEBHOOK_SYNC")).toBe("TDuck Webhook 同步");
+    expect(operationActionLabel("TDUCK_DUPLICATE_CONFLICT_RESOLVE")).toBe("处理 TDuck 重复报名");
     expect(operationTargetLabel("AUTH_SESSION")).toBe("登录会话");
     expect(operationTargetLabel("TDUCK_SYNC", "71")).toBe("TDuck 同步：71");
   });

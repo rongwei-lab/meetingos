@@ -306,6 +306,91 @@ describe("meeting store 会议隔离", () => {
     }
   });
 
+  it("TDuck 同步日志按服务端分页读取，并可加载指定日志的表单快照", async () => {
+    const envelope = (data: unknown) => ({
+      data: { success: true, code: "OK", message: "success", timestamp: "2026-07-21T19:04:25Z", data }
+    });
+    const get = vi.spyOn(http, "get").mockImplementation(async (url) => {
+      if (url === "/admin/tduck/sync-logs") {
+        return envelope({
+          content: [{ id: 91, formKey: "form-3", tduckDataId: "211809", eventType: "PULL_SYNC", status: "SUCCESS", createdAt: "2026-07-21T19:04:25" }],
+          page: 1,
+          size: 100,
+          totalElements: 151,
+          totalPages: 2
+        }) as never;
+      }
+      if (url === "/admin/tduck/sync-logs/91") {
+        return envelope({
+          id: 91,
+          meetingId: 1,
+          formKey: "form-3",
+          tduckDataId: "211809",
+          eventType: "PULL_SYNC",
+          status: "SUCCESS",
+          createdAt: "2026-07-21T19:04:25",
+          formValues: { phone: "13800138000", company: "研发中心" }
+        }) as never;
+      }
+      throw new Error(`unexpected URL: ${url}`);
+    });
+    const store = useMeetingStore();
+
+    const page = await store.loadSyncLogs("1", { page: 1, size: 100 });
+    const detail = await store.loadTduckSyncLogDetail("91", "1");
+
+    expect(get.mock.calls[0]?.[1]?.params).toEqual({ meetingId: 1, page: 1, size: 100 });
+    expect(get).toHaveBeenCalledWith("/admin/tduck/sync-logs/91", { params: { meetingId: 1 } });
+    expect(page).toMatchObject({ page: 1, size: 100, totalElements: 151, totalPages: 2 });
+    expect(store.syncLogs).toMatchObject([{ id: "91", dataId: "211809", meetingId: "1" }]);
+    expect(detail.formValues).toMatchObject({ phone: "13800138000", company: "研发中心" });
+  });
+
+  it("TDuck 重复报名队列按会议读取详情，并在裁决后从待处理缓存移除", async () => {
+    const conflict = {
+      id: 44,
+      meetingId: 1,
+      attendeeId: 12,
+      currentTduckDataId: "10001",
+      incomingTduckDataId: "10002",
+      status: "PENDING_CONFLICT",
+      submittedAt: "2026-07-21T09:00:00",
+      createdAt: "2026-07-21T09:00:01",
+      existing: { name: "张三", phone: "13800138000", organization: "原单位", accommodationRequired: false, formValues: { name: "张三", phone: "13800138000", company: "原单位" } },
+      incoming: { name: "张三", phone: "13800138000", organization: "新单位", accommodationRequired: true, formValues: { name: "张三", phone: "13800138000", company: "新单位" } }
+    };
+    const envelope = (data: unknown) => ({
+      data: { success: true, code: "OK", message: "success", timestamp: "2026-07-21T09:00:00Z", data }
+    });
+    const get = vi.spyOn(http, "get").mockImplementation(async (url) => {
+      if (url === "/admin/tduck/sync-conflicts") {
+        return envelope({ content: [conflict], page: 0, size: 50, totalElements: 1, totalPages: 1 }) as never;
+      }
+      if (url === "/admin/tduck/sync-conflicts/44") return envelope(conflict) as never;
+      throw new Error(`unexpected URL: ${url}`);
+    });
+    const post = vi.spyOn(http, "post").mockResolvedValue(envelope({ ...conflict, status: "IGNORED" }) as never);
+    const store = useMeetingStore();
+
+    const page = await store.loadTduckSubmissionConflicts("1");
+    const detail = await store.loadTduckSubmissionConflict("44", "1");
+    const resolved = await store.resolveTduckSubmissionConflict("44", "1", "KEEP_EXISTING", " 已核实 ");
+
+    expect(get.mock.calls[0]?.[0]).toBe("/admin/tduck/sync-conflicts");
+    expect(get.mock.calls[0]?.[1]?.params).toEqual({ meetingId: 1, page: 0, size: 50 });
+    expect(get).toHaveBeenCalledWith("/admin/tduck/sync-conflicts/44", { params: { meetingId: 1 } });
+    expect(post).toHaveBeenCalledWith("/admin/tduck/sync-conflicts/44/resolve", {
+      meetingId: 1,
+      resolution: "KEEP_EXISTING",
+      note: "已核实"
+    });
+    expect(page.content[0]).toMatchObject({ id: "44", attendeeId: "12", incomingTduckDataId: "10002" });
+    expect(detail.existing.phone).toBe("13800138000");
+    expect(detail.incoming.formValues).toMatchObject({ company: "新单位" });
+    expect(resolved.status).toBe("IGNORED");
+    expect(store.currentTduckSubmissionConflicts).toMatchObject({ content: [], totalElements: 0, totalPages: 0 });
+  });
+
   it("旧后端缺少综合查询接口时只回退当前启用的独立查询", async () => {
     const notFound = Object.assign(new Error("Request failed with status code 404"), {
       isAxiosError: true,

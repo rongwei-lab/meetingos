@@ -121,6 +121,36 @@ public class TduckController {
         ));
     }
 
+    @GetMapping({"/api/tduck/sync-logs/{syncLogId}", "/api/admin/tduck/sync-logs/{syncLogId}"})
+    @PreAuthorize("@meetingAccess.canView(#meetingId)")
+    public ApiResponse<TduckSyncLogDetailResponse> syncLogDetail(@PathVariable Long syncLogId,
+                                                                  @RequestParam Long meetingId) {
+        return ApiResponse.ok(tduckService.syncLogDetail(meetingId, syncLogId));
+    }
+
+    @GetMapping({"/api/tduck/sync-conflicts", "/api/admin/tduck/sync-conflicts"})
+    @PreAuthorize("@meetingAccess.canView(#meetingId)")
+    public ApiResponse<PageResponse<TduckSubmissionConflictResponse>> submissionConflicts(@RequestParam Long meetingId,
+                                                                                            @RequestParam(defaultValue = "0") int page,
+                                                                                            @RequestParam(defaultValue = "20") int size) {
+        return ApiResponse.ok(tduckService.submissionConflicts(meetingId, page, size));
+    }
+
+    @GetMapping({"/api/tduck/sync-conflicts/{submissionId}", "/api/admin/tduck/sync-conflicts/{submissionId}"})
+    @PreAuthorize("@meetingAccess.canView(#meetingId)")
+    public ApiResponse<TduckSubmissionConflictResponse> submissionConflict(@PathVariable Long submissionId,
+                                                                             @RequestParam Long meetingId) {
+        return ApiResponse.ok(tduckService.submissionConflict(meetingId, submissionId));
+    }
+
+    @PostMapping({"/api/tduck/sync-conflicts/{submissionId}/resolve", "/api/admin/tduck/sync-conflicts/{submissionId}/resolve"})
+    @PreAuthorize("@meetingAccess.canManage(#request.meetingId())")
+    @AuditLog(action = "TDUCK_DUPLICATE_CONFLICT_RESOLVE", targetType = "TDUCK_DATA")
+    public ApiResponse<TduckSubmissionConflictResponse> resolveSubmissionConflict(@PathVariable Long submissionId,
+                                                                                    @Valid @RequestBody TduckSubmissionResolveRequest request) {
+        return ApiResponse.ok(tduckService.resolveSubmissionConflict(submissionId, request));
+    }
+
     @PostMapping({"/api/tduck/sync/manual", "/api/admin/tduck/sync/manual"})
     @PreAuthorize("@meetingAccess.canManage(#request.meetingId())")
     @AuditLog(action = "TDUCK_MANUAL_SYNC", targetType = "TDUCK_DATA")

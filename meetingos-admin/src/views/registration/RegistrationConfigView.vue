@@ -139,11 +139,25 @@
             <h2>字段与补偿同步</h2>
             <span>检查 TDuck 字段，并在 Webhook 漏投时按数据 ID 拉取单条报名</span>
           </div>
-          <n-button size="small" :loading="syncingFields" :disabled="!currentMeeting" @click="syncFields">同步字段</n-button>
+          <n-space align="center" :size="8">
+            <n-button
+              size="small"
+              secondary
+              :aria-expanded="syncWorkbenchExpanded"
+              aria-controls="sync-workbench"
+              @click="syncWorkbenchExpanded = !syncWorkbenchExpanded"
+            >
+              <template #icon>
+                <n-icon :component="syncWorkbenchExpanded ? ChevronUpOutline : ChevronDownOutline" />
+              </template>
+              {{ syncWorkbenchExpanded ? "收起" : "展开" }}
+            </n-button>
+            <n-button size="small" :loading="syncingFields" :disabled="!currentMeeting" @click="() => syncFields()">同步字段</n-button>
+          </n-space>
         </div>
       </template>
 
-      <div class="sync-workbench">
+      <div v-if="syncWorkbenchExpanded" id="sync-workbench" class="sync-workbench">
         <div class="field-panel">
           <div class="mini-section-head">
             <div>
@@ -191,20 +205,204 @@
       <template #header>
         <div class="card-title-row">
           <div>
+            <h2>重复报名待处理</h2>
+            <span>同一手机号出现新的 TDuck 报名时，请核对资料后决定保留当前报名或采用新提交</span>
+          </div>
+          <n-space align="center">
+            <n-tag round size="small" :type="pendingConflictCount ? 'warning' : 'success'">
+              {{ pendingConflictCount ? `${pendingConflictCount} 条待处理` : "暂无待处理" }}
+            </n-tag>
+            <n-button size="small" secondary :loading="loadingSubmissionConflicts" :disabled="!currentMeeting" @click="() => refreshTduckSubmissionConflicts()">
+              刷新
+            </n-button>
+          </n-space>
+        </div>
+      </template>
+
+      <n-alert v-if="pendingConflictCount" type="warning" :bordered="false" class="conflict-alert">
+        采用新提交只会更新报名资料和当前 TDuck 数据 ID；审核、签到、座位、住宿和晚宴安排会保留在原参会人记录上。
+      </n-alert>
+      <div v-if="currentTduckSubmissionConflicts.content.length" class="mobile-scroll-table conflict-table">
+        <n-data-table
+          :columns="conflictColumns"
+          :data="currentTduckSubmissionConflicts.content"
+          :loading="loadingSubmissionConflicts"
+          :pagination="false"
+        />
+      </div>
+      <div v-if="pendingConflictCount" class="conflict-pagination">
+        <n-pagination
+          :page="submissionConflictPage"
+          :page-size="submissionConflictPageSize"
+          show-size-picker
+          :page-sizes="PAGINATION_PAGE_SIZES"
+          :item-count="pendingConflictCount"
+          :prefix="paginationSummary"
+          @update:page="handleSubmissionConflictPageChange"
+          @update:page-size="handleSubmissionConflictPageSizeChange"
+        />
+      </div>
+      <n-empty v-else size="small" description="暂无待处理的重复 TDuck 报名" />
+    </n-card>
+
+    <n-card class="surface section-card" :bordered="false">
+      <template #header>
+        <div class="card-title-row">
+          <div>
             <h2>Webhook 同步日志</h2>
             <span>{{ lastSyncLabel }}</span>
           </div>
           <n-tag round size="small" :type="webhookStatusType">{{ webhookStatusLabel }}</n-tag>
         </div>
       </template>
-      <div class="mobile-scroll-table">
-        <n-data-table
-          :columns="logColumns"
-          :data="currentSyncLogs"
-          :pagination="{ defaultPageSize: 10, showSizePicker: true, pageSizes: PAGINATION_PAGE_SIZES, prefix: paginationSummary }"
+      <div v-if="currentSyncLogs.length" class="mobile-scroll-table">
+        <n-data-table :columns="logColumns" :data="currentSyncLogs" :loading="loadingSyncLogs" :pagination="false" />
+      </div>
+      <n-empty v-else-if="!loadingSyncLogs" size="small" description="暂无同步日志" />
+      <div v-if="syncLogTotal" class="sync-log-pagination">
+        <n-pagination
+          :page="syncLogPage"
+          :page-size="syncLogPageSize"
+          show-size-picker
+          :page-sizes="PAGINATION_PAGE_SIZES"
+          :item-count="syncLogTotal"
+          :prefix="paginationSummary"
+          @update:page="handleSyncLogPageChange"
+          @update:page-size="handleSyncLogPageSizeChange"
         />
       </div>
     </n-card>
+
+    <n-modal
+      v-model:show="syncLogDetailModalVisible"
+      preset="card"
+      title="同步内容"
+      class="sync-log-detail-modal"
+      style="width: min(760px, calc(100vw - 32px))"
+    >
+      <n-spin :show="loadingSyncLogDetail">
+        <template v-if="selectedSyncLogDetail">
+          <div class="sync-log-detail-meta">
+            <div>
+              <span>数据 ID</span>
+              <strong>{{ selectedSyncLogDetail.dataId || "-" }}</strong>
+            </div>
+            <div>
+              <span>同步时间</span>
+              <strong>{{ formatDateTimeLabel(selectedSyncLogDetail.createdAt) }}</strong>
+            </div>
+          </div>
+          <div v-if="syncLogDetailFields.length" class="sync-log-data-grid">
+            <template v-for="field in syncLogDetailFields" :key="field.key">
+              <span>{{ field.label }}</span>
+              <strong>{{ syncLogDetailValue(field) }}</strong>
+            </template>
+          </div>
+          <n-empty v-else size="small" description="该同步日志未保存可展示的报名内容" />
+        </template>
+        <n-empty v-else-if="!loadingSyncLogDetail" size="small" description="未找到同步日志" />
+      </n-spin>
+    </n-modal>
+
+    <n-modal
+      v-model:show="submissionConflictModalVisible"
+      preset="card"
+      title="核对重复 TDuck 报名"
+      class="submission-conflict-modal"
+      style="width: min(980px, calc(100vw - 32px))"
+      :mask-closable="!resolvingSubmissionConflict"
+    >
+      <n-spin :show="loadingSubmissionConflictDetail">
+        <template v-if="selectedSubmissionConflict">
+          <n-alert type="warning" :bordered="false" class="conflict-modal-alert">
+            两条报名使用同一手机号。请核对左右资料后再处理，避免覆盖现场业务数据。
+          </n-alert>
+
+          <div class="conflict-meta-grid">
+            <div>
+              <span>关联参会人 ID</span>
+              <strong>{{ selectedSubmissionConflict.attendeeId || "-" }}</strong>
+            </div>
+            <div>
+              <span>新提交时间</span>
+              <strong>{{ formatDateTimeLabel(selectedSubmissionConflict.submittedAt || selectedSubmissionConflict.createdAt) }}</strong>
+            </div>
+          </div>
+
+          <div class="submission-comparison">
+            <section class="submission-side existing-submission">
+              <div class="submission-side-heading">
+                <div>
+                  <h3>当前生效报名</h3>
+                  <span>当前 TDuck 数据 ID：{{ selectedSubmissionConflict.currentTduckDataId || "-" }}</span>
+                </div>
+                <n-tag size="small" type="success">当前保留</n-tag>
+              </div>
+              <div class="submission-field-grid">
+                <template v-for="field in submissionFormFields" :key="field.key">
+                  <span>{{ field.label }}</span>
+                  <strong>{{ submissionFormValue(selectedSubmissionConflict.existing, field) }}</strong>
+                </template>
+              </div>
+            </section>
+
+            <section class="submission-side incoming-submission">
+              <div class="submission-side-heading">
+                <div>
+                  <h3>新的 TDuck 提交</h3>
+                  <span>新 TDuck 数据 ID：{{ selectedSubmissionConflict.incomingTduckDataId || "-" }}</span>
+                </div>
+                <n-tag size="small" type="warning">待处理</n-tag>
+              </div>
+              <div class="submission-field-grid">
+                <template v-for="field in submissionFormFields" :key="field.key">
+                  <span>{{ field.label }}</span>
+                  <strong>{{ submissionFormValue(selectedSubmissionConflict.incoming, field) }}</strong>
+                </template>
+              </div>
+            </section>
+          </div>
+
+          <n-form-item v-if="canResolveSubmissionConflict" label="处理说明（可选）" class="conflict-note-field">
+            <n-input
+              v-model:value="submissionConflictNote"
+              type="textarea"
+              :maxlength="500"
+              show-count
+              :autosize="{ minRows: 2, maxRows: 4 }"
+              placeholder="例如：已与参会人确认采用最新资料"
+              :disabled="resolvingSubmissionConflict"
+            />
+          </n-form-item>
+        </template>
+        <n-empty v-else-if="!loadingSubmissionConflictDetail" size="small" description="未找到重复报名记录" />
+      </n-spin>
+
+      <template #footer>
+        <n-space justify="end">
+          <n-button :disabled="resolvingSubmissionConflict" @click="submissionConflictModalVisible = false">
+            {{ canResolveSubmissionConflict ? "取消" : "关闭" }}
+          </n-button>
+          <template v-if="canResolveSubmissionConflict">
+            <n-button
+              :disabled="!selectedSubmissionConflict"
+              :loading="resolvingSubmissionConflict"
+              @click="confirmSubmissionConflictResolution('KEEP_EXISTING')"
+            >
+              保留现有
+            </n-button>
+            <n-button
+              type="primary"
+              :disabled="!selectedSubmissionConflict"
+              :loading="resolvingSubmissionConflict"
+              @click="confirmSubmissionConflictResolution('ADOPT_INCOMING')"
+            >
+              采用新提交
+            </n-button>
+          </template>
+        </n-space>
+      </template>
+    </n-modal>
 
   </div>
 </template>
@@ -212,15 +410,26 @@
 <script setup lang="ts">
 import { computed, h, onBeforeUnmount, onMounted, ref, watch } from "vue";
 import { extractErrorMessage, isRequestCanceled } from "@/api/http";
-import { NDataTable, NIcon, NSelect, NSwitch, useMessage, type DropdownOption } from "naive-ui";
-import { AddOutline, CreateOutline, SparklesOutline } from "@vicons/ionicons5";
+import { NButton, NDataTable, NIcon, NModal, NPagination, NSelect, NSwitch, useDialog, useMessage, type DropdownOption } from "naive-ui";
+import { AddOutline, ChevronDownOutline, ChevronUpOutline, CreateOutline, SparklesOutline } from "@vicons/ionicons5";
 import { useRouter } from "vue-router";
 import PageHeader from "@/components/PageHeader.vue";
 import StatusTag from "@/components/StatusTag.vue";
 import { useRouteMeeting } from "@/composables/useRouteMeeting";
-import { useMeetingStore, type TduckBindingDto, type TduckFieldMappingDto, type TduckFieldSyncItemDto, type TduckFormOptionDto } from "@/stores/meeting";
+import { useAuthStore } from "@/stores/auth";
+import {
+  useMeetingStore,
+  type TduckBindingDto,
+  type TduckFieldMappingDto,
+  type TduckFieldSyncItemDto,
+  type TduckFormOptionDto,
+  type TduckSyncLogDetailDto,
+  type TduckSubmissionConflictDto,
+  type TduckSubmissionParticipantDto,
+  type TduckSubmissionResolution
+} from "@/stores/meeting";
 import { attendeeFieldOptions, inferAttendeeField } from "@/utils/attendeeFields";
-import { formatDateTimeLabel } from "@/utils/meetingDisplay";
+import { attendeeTypeLabel, formatDateTimeLabel } from "@/utils/meetingDisplay";
 import { PAGINATION_PAGE_SIZES, paginationSummary } from "@/utils/pagination";
 import { closeTduckLaunchTab, navigateTduckLaunchTab, openTduckLaunchTab, persistTduckBrowserSession } from "@/utils/tduckNavigation";
 import type { SyncLog } from "@/utils/types";
@@ -229,7 +438,9 @@ type BindingValidationStatus = "VALID" | "INVALID" | "UNKNOWN" | "";
 type CreateTduckFormAction = "blank" | "ai";
 
 const store = useMeetingStore();
+const auth = useAuthStore();
 const message = useMessage();
+const dialog = useDialog();
 const router = useRouter();
 const { routeMeetingId, syncMeetingFromRoute } = useRouteMeeting({ autoSync: false, loadWorkspace: false });
 const qrCanvas = ref<HTMLCanvasElement>();
@@ -242,6 +453,7 @@ const syncingFields = ref(false);
 const savingMappings = ref(false);
 const pullingSync = ref(false);
 const pullingAllSync = ref(false);
+const syncWorkbenchExpanded = ref(false);
 const openingTduck = ref(false);
 const openingTduckEditor = ref(false);
 const togglingRegistration = ref(false);
@@ -249,7 +461,24 @@ const pullSyncDataId = ref("");
 const bindingValidationStatus = ref<BindingValidationStatus>("");
 const bindingValidationMessage = ref("");
 const currentBinding = ref<TduckBindingDto | null>(null);
+const loadingSubmissionConflicts = ref(false);
+const loadingSubmissionConflictDetail = ref(false);
+const resolvingSubmissionConflict = ref(false);
+const loadingSyncLogs = ref(false);
+const loadingSyncLogDetail = ref(false);
+const syncLogDetailModalVisible = ref(false);
+const selectedSyncLogDetail = ref<TduckSyncLogDetailDto | null>(null);
+const syncLogPage = ref(1);
+const syncLogPageSize = ref(20);
+const syncLogTotal = ref(0);
+const submissionConflictModalVisible = ref(false);
+const selectedSubmissionConflict = ref<TduckSubmissionConflictDto | null>(null);
+const submissionConflictNote = ref("");
+const submissionConflictPage = ref(1);
+const submissionConflictPageSize = ref(20);
 let pullAllSyncController: AbortController | null = null;
+let submissionConflictLoadGeneration = 0;
+let submissionConflictDetailGeneration = 0;
 
 const redirectUrl = computed(() => (currentMeeting.value ? `${window.location.origin}/r/${currentMeeting.value.code}` : ""));
 const tduckFrontBaseUrl = computed(() => `${window.location.origin}/tduck`);
@@ -363,11 +592,13 @@ const canSaveMappings = computed(() =>
   Boolean(currentMeeting.value && fieldMappings.value.some((item) => item.tduckFieldKey && item.tduckFieldKey !== "-" && item.attendeeField))
 );
 
-const currentSyncLogs = computed(() => {
-  const meetingId = store.currentMeetingId;
-  if (!meetingId) return [];
-  return store.syncLogs.filter((log) => log.meetingId === meetingId);
-});
+const currentSyncLogs = computed(() => store.syncLogs.filter((log) => log.meetingId === store.currentMeetingId));
+
+const currentTduckSubmissionConflicts = computed(() => store.currentTduckSubmissionConflicts);
+const pendingConflictCount = computed(() => currentTduckSubmissionConflicts.value.totalElements);
+const canResolveSubmissionConflict = computed(() =>
+  auth.user.roles.includes("SUPER_ADMIN") || auth.user.roles.includes("MEETING_ADMIN")
+);
 
 const latestSyncLog = computed(() => currentSyncLogs.value[0] || null);
 
@@ -375,7 +606,7 @@ const webhookStatusLabel = computed(() => {
   if (currentBinding.value?.webhookStatus === "CONFIGURED") return "已配置";
   if (latestSyncLog.value?.status === "FAILED") return "有失败";
   if (latestSyncLog.value?.status === "PENDING") return "同步中";
-  if (latestSyncLog.value?.status === "SUCCESS") return "正常";
+  if (latestSyncLog.value?.status === "SUCCESS" || latestSyncLog.value?.status === "DUPLICATE_IGNORED") return "正常";
   return currentBinding.value?.webhookStatus === "NOT_CONFIGURED" ? "未配置" : "无日志";
 });
 
@@ -443,15 +674,113 @@ const logColumns = [
   { title: "时间", key: "createdAt", render: (row: SyncLog) => formatDateTimeLabel(row.createdAt) },
   { title: "formKey", key: "formKey" },
   { title: "事件", key: "eventType" },
-  { title: "数据 ID", key: "dataId" },
+  {
+    title: "数据 ID",
+    key: "dataId",
+    render: (row: SyncLog) => row.dataId
+      ? h(NButton, { text: true, type: "primary", size: "small", onClick: () => openSyncLogDetail(row) }, { default: () => row.dataId })
+      : "-"
+  },
   { title: "状态", key: "status", render: (row: SyncLog) => h(StatusTag, { value: row.status }) },
-  { title: "错误原因", key: "errorMessage" }
+  { title: "同步说明", key: "errorMessage" }
 ];
+
+const conflictColumns = [
+  { title: "新提交时间", key: "submittedAt", minWidth: 156, render: (row: TduckSubmissionConflictDto) => formatDateTimeLabel(row.submittedAt || row.createdAt) },
+  {
+    title: "当前生效报名",
+    key: "existing",
+    minWidth: 180,
+    render: (row: TduckSubmissionConflictDto) => h("div", { class: "conflict-table-person" }, [
+      h("strong", row.existing.name || "-"),
+      h("span", row.existing.phone || "-")
+    ])
+  },
+  { title: "当前数据 ID", key: "currentTduckDataId", minWidth: 142, render: (row: TduckSubmissionConflictDto) => row.currentTduckDataId || "-" },
+  {
+    title: "新的 TDuck 提交",
+    key: "incoming",
+    minWidth: 180,
+    render: (row: TduckSubmissionConflictDto) => h("div", { class: "conflict-table-person" }, [
+      h("strong", row.incoming.name || "-"),
+      h("span", row.incoming.phone || "-")
+    ])
+  },
+  { title: "新数据 ID", key: "incomingTduckDataId", minWidth: 132, render: (row: TduckSubmissionConflictDto) => row.incomingTduckDataId || "-" },
+  { title: "状态", key: "status", width: 92, render: (row: TduckSubmissionConflictDto) => h(StatusTag, { value: row.status }) },
+  {
+    title: "操作",
+    key: "actions",
+    width: 108,
+    render: (row: TduckSubmissionConflictDto) => h(
+      NButton,
+      { size: "small", type: "primary", secondary: true, onClick: () => openSubmissionConflict(row) },
+      { default: () => canResolveSubmissionConflict.value ? "核对处理" : "查看资料" }
+    )
+  }
+];
+
+interface SubmissionFormField {
+  key: string;
+  label: string;
+  attendeeField?: string | null;
+}
+
+const submissionFormFields = computed<SubmissionFormField[]>(() => {
+  const fields: SubmissionFormField[] = [];
+  const seen = new Set<string>();
+  for (const mapping of fieldMappings.value) {
+    const key = mapping.tduckFieldKey?.trim();
+    if (!key || key === "-" || seen.has(key)) continue;
+    seen.add(key);
+    fields.push({ key, label: mapping.tduckField?.trim() || key, attendeeField: mapping.attendeeField });
+  }
+  if (fields.length) return fields;
+
+  // 表单服务临时不可用时，仍用报名快照保留所有原始字段，避免核对页退化为固定字段集。
+  const conflict = selectedSubmissionConflict.value;
+  for (const participant of [conflict?.existing, conflict?.incoming]) {
+    for (const key of Object.keys(participant?.formValues || {})) {
+      const baseKey = key.endsWith("label") ? key.slice(0, -"label".length) : "";
+      if (baseKey && Object.prototype.hasOwnProperty.call(participant?.formValues || {}, baseKey)) continue;
+      if (seen.has(key)) continue;
+      seen.add(key);
+      fields.push({ key, label: key });
+    }
+  }
+  return fields;
+});
+
+const syncLogDetailFields = computed<SubmissionFormField[]>(() => {
+  const formValues = selectedSyncLogDetail.value?.formValues || {};
+  const fields = submissionFormFields.value.filter((field) =>
+    hasTduckFormValue(formValues[`${field.key}label`]) || hasTduckFormValue(formValues[field.key])
+  );
+  const seen = new Set(fields.map((field) => field.key));
+  for (const key of Object.keys(formValues)) {
+    const baseKey = key.endsWith("label") ? key.slice(0, -"label".length) : "";
+    if (baseKey && Object.prototype.hasOwnProperty.call(formValues, baseKey)) continue;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    fields.push({ key, label: key });
+  }
+  return fields;
+});
 
 watch(routeMeetingId, () => {
   pullAllSyncController?.abort();
   pullAllSyncController = null;
   pullingAllSync.value = false;
+  submissionConflictModalVisible.value = false;
+  selectedSubmissionConflict.value = null;
+  submissionConflictNote.value = "";
+  submissionConflictPage.value = 1;
+  syncLogDetailModalVisible.value = false;
+  selectedSyncLogDetail.value = null;
+  syncLogPage.value = 1;
+  syncLogTotal.value = 0;
+  submissionConflictLoadGeneration += 1;
+  submissionConflictDetailGeneration += 1;
   void syncRegistrationContext();
 }, { immediate: true });
 
@@ -603,6 +932,54 @@ async function saveMappings() {
   }
 }
 
+async function refreshSyncLogs(options: { page?: number; pageSize?: number } = {}) {
+  if (!store.currentMeetingId) return;
+  const targetMeetingId = store.currentMeetingId;
+  const page = Math.max(0, options.page ?? syncLogPage.value - 1);
+  const pageSize = Math.max(1, options.pageSize ?? syncLogPageSize.value);
+  loadingSyncLogs.value = true;
+  try {
+    const result = await store.loadSyncLogs(targetMeetingId, { page, size: pageSize });
+    if (!result || store.currentMeetingId !== targetMeetingId) return;
+    syncLogPage.value = result.page + 1;
+    syncLogPageSize.value = result.size;
+    syncLogTotal.value = result.totalElements;
+  } catch (error) {
+    message.error(extractErrorMessage(error, "加载同步日志失败"));
+  } finally {
+    if (store.currentMeetingId === targetMeetingId) loadingSyncLogs.value = false;
+  }
+}
+
+function handleSyncLogPageChange(page: number) {
+  syncLogPage.value = page;
+  void refreshSyncLogs({ page: page - 1 });
+}
+
+function handleSyncLogPageSizeChange(pageSize: number) {
+  syncLogPage.value = 1;
+  syncLogPageSize.value = pageSize;
+  void refreshSyncLogs({ page: 0, pageSize });
+}
+
+async function openSyncLogDetail(syncLog: SyncLog) {
+  if (!store.currentMeetingId) return;
+  const targetMeetingId = store.currentMeetingId;
+  selectedSyncLogDetail.value = null;
+  syncLogDetailModalVisible.value = true;
+  loadingSyncLogDetail.value = true;
+  try {
+    const detail = await store.loadTduckSyncLogDetail(syncLog.id, targetMeetingId);
+    if (store.currentMeetingId === targetMeetingId && syncLogDetailModalVisible.value) {
+      selectedSyncLogDetail.value = detail;
+    }
+  } catch (error) {
+    message.error(extractErrorMessage(error, "加载同步内容失败"));
+  } finally {
+    if (store.currentMeetingId === targetMeetingId) loadingSyncLogDetail.value = false;
+  }
+}
+
 function findDuplicateAttendeeFields(fields: string[]) {
   const seen = new Set<string>();
   const duplicates = new Set<string>();
@@ -630,6 +1007,10 @@ async function pullSyncSubmission() {
   pullingSync.value = true;
   try {
     const result = await store.pullTduckSync(store.currentMeetingId, dataId);
+    await Promise.allSettled([
+      refreshTduckSubmissionConflicts({ silent: true, page: 0 }),
+      refreshSyncLogs({ page: 0 })
+    ]);
     if (result.status === "SUCCESS") {
       message.success(result.message || "补偿同步成功，参会人已刷新");
       pullSyncDataId.value = "";
@@ -657,6 +1038,11 @@ async function pullAllSyncSubmissions() {
   try {
     const result = await store.pullAllTduckSync(store.currentMeetingId, { signal: controller.signal });
     if (controller.signal.aborted) return;
+    await Promise.allSettled([
+      refreshTduckSubmissionConflicts({ silent: true, page: 0 }),
+      refreshSyncLogs({ page: 0 })
+    ]);
+    if (controller.signal.aborted) return;
     const summary = result.message || `已扫描 ${result.scanned} 条，成功 ${result.success} 条，已同步跳过 ${result.duplicateIgnored} 条，失败 ${result.failed} 条`;
     if (result.failed > 0) {
       const failurePreview = result.failures
@@ -675,6 +1061,167 @@ async function pullAllSyncSubmissions() {
       pullAllSyncController = null;
       pullingAllSync.value = false;
     }
+  }
+}
+
+async function refreshTduckSubmissionConflicts(options: { silent?: boolean; page?: number; pageSize?: number } = {}) {
+  if (!store.currentMeetingId) return;
+  const targetMeetingId = store.currentMeetingId;
+  const generation = ++submissionConflictLoadGeneration;
+  const page = Math.max(0, options.page ?? submissionConflictPage.value - 1);
+  const pageSize = Math.max(1, options.pageSize ?? submissionConflictPageSize.value);
+  loadingSubmissionConflicts.value = true;
+  try {
+    const result = await store.loadTduckSubmissionConflicts(targetMeetingId, { page, size: pageSize });
+    if (store.currentMeetingId !== targetMeetingId || generation !== submissionConflictLoadGeneration) return;
+    submissionConflictPage.value = result.page + 1;
+    submissionConflictPageSize.value = result.size;
+  } catch (error) {
+    if (generation === submissionConflictLoadGeneration && !options.silent && !isRequestCanceled(error)) {
+      message.error(extractErrorMessage(error, "加载重复 TDuck 报名失败"));
+    }
+  } finally {
+    if (generation === submissionConflictLoadGeneration) loadingSubmissionConflicts.value = false;
+  }
+}
+
+function handleSubmissionConflictPageChange(page: number) {
+  submissionConflictPage.value = page;
+  void refreshTduckSubmissionConflicts({ page: page - 1 });
+}
+
+function handleSubmissionConflictPageSizeChange(pageSize: number) {
+  submissionConflictPage.value = 1;
+  submissionConflictPageSize.value = pageSize;
+  void refreshTduckSubmissionConflicts({ page: 0, pageSize });
+}
+
+async function openSubmissionConflict(conflict: TduckSubmissionConflictDto) {
+  if (!store.currentMeetingId) return;
+  const targetMeetingId = store.currentMeetingId;
+  const generation = ++submissionConflictDetailGeneration;
+  selectedSubmissionConflict.value = conflict;
+  submissionConflictNote.value = "";
+  submissionConflictModalVisible.value = true;
+  loadingSubmissionConflictDetail.value = true;
+  try {
+    const detail = await store.loadTduckSubmissionConflict(conflict.id, targetMeetingId);
+    if (store.currentMeetingId === targetMeetingId && submissionConflictModalVisible.value && generation === submissionConflictDetailGeneration) {
+      selectedSubmissionConflict.value = detail;
+    }
+  } catch (error) {
+    if (generation === submissionConflictDetailGeneration) {
+      message.error(extractErrorMessage(error, "加载重复报名详情失败"));
+    }
+  } finally {
+    if (generation === submissionConflictDetailGeneration) loadingSubmissionConflictDetail.value = false;
+  }
+}
+
+function confirmSubmissionConflictResolution(resolution: TduckSubmissionResolution) {
+  if (!canResolveSubmissionConflict.value) {
+    message.warning("当前账号仅可查看重复报名资料");
+    return;
+  }
+  const conflict = selectedSubmissionConflict.value;
+  if (!conflict || resolvingSubmissionConflict.value) return;
+
+  const adopting = resolution === "ADOPT_INCOMING";
+  dialog.warning({
+    title: adopting ? "确认采用新提交" : "确认保留现有报名",
+    content: adopting
+      ? "将更新参会人的报名资料和当前 TDuck 数据 ID；审核、签到、座位、住宿和晚宴安排会保留不变。"
+      : "将忽略这条新的 TDuck 提交，当前参会人的资料和现场安排保持不变。",
+    positiveText: adopting ? "采用新提交" : "保留现有",
+    negativeText: "取消",
+    onPositiveClick: () => {
+      void resolveSubmissionConflict(resolution);
+    }
+  });
+}
+
+async function resolveSubmissionConflict(resolution: TduckSubmissionResolution) {
+  const conflict = selectedSubmissionConflict.value;
+  const meetingId = store.currentMeetingId;
+  if (!conflict || !meetingId) return;
+
+  resolvingSubmissionConflict.value = true;
+  try {
+    await store.resolveTduckSubmissionConflict(conflict.id, meetingId, resolution, submissionConflictNote.value);
+    submissionConflictModalVisible.value = false;
+    selectedSubmissionConflict.value = null;
+    submissionConflictNote.value = "";
+    submissionConflictPage.value = 1;
+    message.success(resolution === "ADOPT_INCOMING" ? "已采用新的 TDuck 提交，现场业务安排已保留" : "已保留现有报名，新提交已忽略");
+    await Promise.allSettled([
+      refreshTduckSubmissionConflicts({ silent: true, page: 0 }),
+      store.loadAttendees(meetingId),
+      store.loadSyncLogs(meetingId),
+      store.loadStatistics(meetingId)
+    ]);
+  } catch (error) {
+    message.error(extractErrorMessage(error, "处理重复 TDuck 报名失败"));
+  } finally {
+    resolvingSubmissionConflict.value = false;
+  }
+}
+
+function submissionFormValue(participant: TduckSubmissionParticipantDto, field: SubmissionFormField) {
+  const snapshotValue = formSnapshotValue(participant.formValues, field.key);
+  if (snapshotValue !== null) return snapshotValue;
+
+  return mappedSubmissionValue(participant, field.attendeeField);
+}
+
+function syncLogDetailValue(field: SubmissionFormField) {
+  return formSnapshotValue(selectedSyncLogDetail.value?.formValues, field.key) || "-";
+}
+
+function formSnapshotValue(formValues: Record<string, unknown> | undefined, fieldKey: string): string | null {
+  // TDuck 选项组件会同时返回 value 和 valueLabel，详情优先展示填写页可见的 label。
+  const displayValue = formValues?.[`${fieldKey}label`];
+  if (hasTduckFormValue(displayValue)) return formatTduckFormValue(displayValue);
+
+  const rawValue = formValues?.[fieldKey];
+  if (hasTduckFormValue(rawValue)) return formatTduckFormValue(rawValue);
+
+  return null;
+}
+
+function hasTduckFormValue(value: unknown) {
+  if (value === null || value === undefined) return false;
+  if (typeof value === "string") return Boolean(value.trim());
+  return !Array.isArray(value) || value.length > 0;
+}
+
+function mappedSubmissionValue(participant: TduckSubmissionParticipantDto, attendeeField?: string | null) {
+  switch (attendeeField) {
+    case "NAME": return participant.name?.trim() || "-";
+    case "PHONE": return participant.phone?.trim() || "-";
+    case "ORGANIZATION": return participant.organization?.trim() || "-";
+    case "TITLE": return participant.title?.trim() || "-";
+    case "IDENTITY_NO": return participant.identityNo?.trim() || "-";
+    case "EMAIL": return participant.email?.trim() || "-";
+    case "ATTENDEE_TYPE": return participant.attendeeType ? attendeeTypeLabel(participant.attendeeType) : "-";
+    case "ACCOMMODATION_REQUIRED": return participant.accommodationRequired ? "需要" : "不需要";
+    case "REMARK": return participant.remark?.trim() || "-";
+    default: return "-";
+  }
+}
+
+function formatTduckFormValue(value: unknown): string {
+  if (value === null || value === undefined) return "-";
+  if (typeof value === "string") return value.trim() || "-";
+  if (typeof value === "number" || typeof value === "boolean") return String(value);
+  if (Array.isArray(value)) {
+    const values = value.map(formatTduckFormValue).filter((item) => item !== "-");
+    return values.length ? values.join("、") : "-";
+  }
+  try {
+    const serialized = JSON.stringify(value);
+    return serialized && serialized !== "{}" ? serialized : "-";
+  } catch {
+    return String(value);
   }
 }
 
@@ -807,7 +1354,8 @@ async function syncRegistrationContext() {
   upsertCurrentBindingOption();
   await Promise.allSettled([
     loadSavedMappings(),
-    store.loadSyncLogs(store.currentMeetingId)
+    refreshSyncLogs({ page: 0 }),
+    refreshTduckSubmissionConflicts({ silent: true })
   ]);
   await drawQr();
 }
@@ -1183,6 +1731,218 @@ function emptyMappingRow(label: string): FieldMappingRow {
   line-height: 20px;
 }
 
+.conflict-alert {
+  margin-bottom: 14px;
+}
+
+.conflict-pagination {
+  display: flex;
+  justify-content: flex-end;
+  margin-top: 14px;
+}
+
+.sync-log-pagination {
+  display: flex;
+  justify-content: flex-end;
+  margin-top: 14px;
+}
+
+.sync-log-detail-meta {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+  margin-bottom: 14px;
+}
+
+.sync-log-detail-meta > div {
+  display: grid;
+  gap: 4px;
+  min-width: 0;
+  padding: 10px 12px;
+  border: 1px solid var(--border-color);
+  border-radius: 8px;
+  background: var(--surface-muted);
+}
+
+.sync-log-detail-meta span {
+  color: var(--text-secondary);
+  font-size: 12px;
+  line-height: 18px;
+}
+
+.sync-log-detail-meta strong {
+  color: var(--text-primary);
+  font-size: 13px;
+  line-height: 20px;
+  overflow-wrap: anywhere;
+}
+
+.sync-log-data-grid {
+  display: grid;
+  grid-template-columns: minmax(140px, 0.42fr) minmax(0, 1fr);
+}
+
+.sync-log-data-grid > span,
+.sync-log-data-grid > strong {
+  min-width: 0;
+  padding: 9px 12px;
+  border-bottom: 1px solid var(--border-color);
+  font-size: 13px;
+  line-height: 20px;
+  overflow-wrap: anywhere;
+}
+
+.sync-log-data-grid > span {
+  color: var(--text-secondary);
+  background: var(--surface-muted);
+}
+
+.sync-log-data-grid > strong {
+  color: var(--text-primary);
+  font-weight: 600;
+}
+
+.sync-log-data-grid > :nth-last-child(-n + 2) {
+  border-bottom: 0;
+}
+
+.conflict-table-person {
+  display: grid;
+  gap: 2px;
+  min-width: 0;
+}
+
+.conflict-table-person strong {
+  color: var(--text-primary);
+  font-size: 13px;
+  line-height: 20px;
+}
+
+.conflict-table-person span {
+  color: var(--text-secondary);
+  font-size: 12px;
+  line-height: 18px;
+}
+
+.conflict-modal-alert {
+  margin-bottom: 14px;
+}
+
+.conflict-meta-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+  margin-bottom: 14px;
+}
+
+.conflict-meta-grid > div {
+  display: grid;
+  gap: 4px;
+  min-width: 0;
+  padding: 10px 12px;
+  border: 1px solid var(--border-color);
+  border-radius: 8px;
+  background: var(--surface-muted);
+}
+
+.conflict-meta-grid span,
+.submission-side-heading span {
+  color: var(--text-secondary);
+  font-size: 12px;
+  line-height: 18px;
+}
+
+.conflict-meta-grid strong {
+  color: var(--text-primary);
+  font-size: 13px;
+  line-height: 20px;
+  overflow-wrap: anywhere;
+}
+
+.submission-comparison {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 14px;
+}
+
+.submission-side {
+  min-width: 0;
+  overflow: hidden;
+  border: 1px solid var(--border-color);
+  border-radius: 8px;
+  background: var(--surface-muted);
+}
+
+.existing-submission {
+  border-top: 3px solid var(--success-color, #18a058);
+}
+
+.incoming-submission {
+  border-top: 3px solid var(--warning-color, #f0a020);
+}
+
+.submission-side-heading {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 12px;
+  border-bottom: 1px solid var(--border-color);
+  background: var(--surface-bg);
+}
+
+.submission-side-heading > div {
+  min-width: 0;
+}
+
+.submission-side-heading h3 {
+  margin: 0;
+  color: var(--text-primary);
+  font-size: 15px;
+  line-height: 22px;
+}
+
+.submission-side-heading span {
+  display: block;
+  margin-top: 2px;
+  overflow-wrap: anywhere;
+}
+
+.submission-field-grid {
+  display: grid;
+  grid-template-columns: minmax(78px, 0.42fr) minmax(0, 1fr);
+  gap: 0;
+}
+
+.submission-field-grid > span,
+.submission-field-grid > strong {
+  min-width: 0;
+  padding: 9px 12px;
+  border-bottom: 1px solid var(--border-color);
+  font-size: 13px;
+  line-height: 20px;
+  overflow-wrap: anywhere;
+}
+
+.submission-field-grid > span {
+  color: var(--text-secondary);
+  background: var(--surface-bg);
+}
+
+.submission-field-grid > strong {
+  color: var(--text-primary);
+  font-weight: 600;
+}
+
+.submission-field-grid > :nth-last-child(-n + 2) {
+  border-bottom: 0;
+}
+
+.conflict-note-field {
+  margin-top: 16px;
+  margin-bottom: 0;
+}
+
 @media (max-width: 1180px) {
   .registration-grid,
   .sync-workbench,
@@ -1215,6 +1975,18 @@ function emptyMappingRow(label: string): FieldMappingRow {
     grid-template-columns: 1fr;
   }
 
+  .conflict-meta-grid,
+  .submission-comparison,
+  .sync-log-detail-meta {
+    grid-template-columns: 1fr;
+  }
+
+  .conflict-pagination,
+  .sync-log-pagination {
+    justify-content: flex-start;
+    overflow-x: auto;
+  }
+
   .entry-toggle-panel {
     align-items: flex-start;
     flex-direction: column;
@@ -1243,6 +2015,10 @@ function emptyMappingRow(label: string): FieldMappingRow {
 
   .mobile-scroll-table :deep(.n-data-table) {
     min-width: 680px;
+  }
+
+  .conflict-table :deep(.n-data-table) {
+    min-width: 940px;
   }
 }
 </style>

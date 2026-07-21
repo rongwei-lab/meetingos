@@ -22,7 +22,12 @@ const dictionary: Record<string, { text: string; type: "default" | "success" | "
   CHECKED_IN: { text: "已签到", type: "success" },
   NOT_CHECKED_IN: { text: "未签到", type: "warning" },
   SUCCESS: { text: "成功", type: "success" },
-  FAILED: { text: "失败", type: "error" }
+  FAILED: { text: "失败", type: "error" },
+  DUPLICATE_IGNORED: { text: "重复已忽略", type: "info" },
+  PENDING_CONFLICT: { text: "待处理", type: "warning" },
+  ACTIVE: { text: "当前来源", type: "success" },
+  SUPERSEDED: { text: "已被替代", type: "default" },
+  IGNORED: { text: "已忽略", type: "default" }
 };
 
 const meta = computed(() => dictionary[props.value] || { text: props.value, type: "default" as const });
