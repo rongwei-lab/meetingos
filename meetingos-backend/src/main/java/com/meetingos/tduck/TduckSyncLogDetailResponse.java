@@ -1,6 +1,5 @@
 package com.meetingos.tduck;
 
-import com.meetingos.common.SensitiveDataMasker;
 import java.time.LocalDateTime;
 import java.util.LinkedHashMap;
 import java.util.Map;
@@ -47,6 +46,6 @@ public record TduckSyncLogDetailResponse(
                 values.put(String.valueOf(key), entry);
             }
         });
-        return SensitiveDataMasker.maskMap(values);
+        return values;
     }
 }

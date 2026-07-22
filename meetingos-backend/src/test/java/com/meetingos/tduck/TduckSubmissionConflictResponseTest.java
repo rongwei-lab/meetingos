@@ -12,7 +12,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 class TduckSubmissionConflictResponseTest {
 
     @Test
-    void masksSensitiveFieldsWhileKeepingBusinessFormValuesForComparison() {
+    void returnsOriginalFieldsWhileKeepingBusinessFormValuesForComparison() {
         Meeting meeting = new Meeting();
         meeting.setId(1L);
 
@@ -39,22 +39,22 @@ class TduckSubmissionConflictResponseTest {
 
         TduckSubmissionConflictResponse response = TduckSubmissionConflictResponse.from(submission);
 
-        assertThat(response.existing().phone()).isEqualTo("****8000");
-        assertThat(response.incoming().phone()).isEqualTo("****8000");
-        assertThat(response.existing().identityNo()).isEqualTo("110******1234");
-        assertThat(response.incoming().identityNo()).isEqualTo("110******5678");
-        assertThat(response.existing().email()).isEqualTo("z***@example.com");
-        assertThat(response.incoming().email()).isEqualTo("z***@example.com");
+        assertThat(response.existing().phone()).isEqualTo("13800138000");
+        assertThat(response.incoming().phone()).isEqualTo("13800138000");
+        assertThat(response.existing().identityNo()).isEqualTo("110101199001011234");
+        assertThat(response.incoming().identityNo()).isEqualTo("110101199001015678");
+        assertThat(response.existing().email()).isEqualTo("zhangsan@example.com");
+        assertThat(response.incoming().email()).isEqualTo("zhangsan@example.com");
         assertThat(response.existing().formValues()).containsEntry("company", "原单位")
-                .containsEntry("phone", "****8000")
-                .containsEntry("idCard", "110******1234")
-                .containsEntry("email", "z***@example.com")
-                .doesNotContainKey("createTime");
+                .containsEntry("phone", "13800138000")
+                .containsEntry("idCard", "110101199001011234")
+                .containsEntry("email", "zhangsan@example.com")
+                .doesNotContainKeys("createTime", "raw");
         assertThat(response.incoming().formValues()).containsEntry("company", "新单位")
-                .containsEntry("phone", "****8000")
-                .containsEntry("idCard", "110******1234")
-                .containsEntry("email", "z***@example.com")
-                .doesNotContainKey("createTime");
+                .containsEntry("phone", "13800138000")
+                .containsEntry("idCard", "110101199001011234")
+                .containsEntry("email", "zhangsan@example.com")
+                .doesNotContainKeys("createTime", "raw");
     }
 
     private Map<String, Object> snapshot(String name, String company) {
@@ -65,6 +65,7 @@ class TduckSubmissionConflictResponseTest {
         values.put("email", "zhangsan@example.com");
         values.put("company", company);
         values.put("createTime", "2026-07-21 17:37:09");
+        values.put("raw", Map.of("signature", "must-not-leak"));
         return values;
     }
 }

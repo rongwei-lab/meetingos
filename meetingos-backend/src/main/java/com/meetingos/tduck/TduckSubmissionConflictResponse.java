@@ -1,7 +1,6 @@
 package com.meetingos.tduck;
 
 import com.meetingos.attendee.Attendee;
-import com.meetingos.common.SensitiveDataMasker;
 
 import java.time.LocalDateTime;
 import java.util.LinkedHashMap;
@@ -24,27 +23,27 @@ public record TduckSubmissionConflictResponse(
         Attendee attendee = submission.getAttendee();
         TduckSubmissionParticipantResponse existing = new TduckSubmissionParticipantResponse(
                 attendee.getName(),
-                SensitiveDataMasker.maskPhone(attendee.getPhone()),
+                attendee.getPhone(),
                 attendee.getOrganization(),
                 attendee.getTitle(),
-                SensitiveDataMasker.maskIdentityNo(attendee.getIdentityNo()),
-                SensitiveDataMasker.maskEmail(attendee.getEmail()),
+                attendee.getIdentityNo(),
+                attendee.getEmail(),
                 attendee.getAttendeeType(),
                 attendee.isAccommodationRequired(),
                 attendee.getRemark(),
-                maskedBusinessFormValues(attendee.getRawDataSnapshot())
+                businessFormValues(attendee.getRawDataSnapshot())
         );
         TduckSubmissionParticipantResponse incoming = new TduckSubmissionParticipantResponse(
                 submission.getName(),
-                SensitiveDataMasker.maskPhone(submission.getPhone()),
+                submission.getPhone(),
                 submission.getOrganization(),
                 submission.getTitle(),
-                SensitiveDataMasker.maskIdentityNo(submission.getIdentityNo()),
-                SensitiveDataMasker.maskEmail(submission.getEmail()),
+                submission.getIdentityNo(),
+                submission.getEmail(),
                 submission.getAttendeeType(),
                 submission.isAccommodationRequired(),
                 submission.getRemark(),
-                maskedBusinessFormValues(submission.getRawDataSnapshot())
+                businessFormValues(submission.getRawDataSnapshot())
         );
         return new TduckSubmissionConflictResponse(
                 submission.getId(),
@@ -60,7 +59,7 @@ public record TduckSubmissionConflictResponse(
         );
     }
 
-    private static Map<String, Object> maskedBusinessFormValues(Map<String, Object> rawValues) {
+    private static Map<String, Object> businessFormValues(Map<String, Object> rawValues) {
         Map<String, Object> values = new LinkedHashMap<>();
         if (rawValues == null || rawValues.isEmpty()) {
             return values;
@@ -70,6 +69,6 @@ public record TduckSubmissionConflictResponse(
                 values.put(key, value);
             }
         });
-        return SensitiveDataMasker.maskMap(values);
+        return values;
     }
 }

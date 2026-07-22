@@ -11,7 +11,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 class TduckSyncLogDetailResponseTest {
 
     @Test
-    void masksSavedFormValuesWithoutReturningRawPayloadMetadata() {
+    void returnsSavedFormValuesWithoutReturningRawPayloadMetadata() {
         Meeting meeting = new Meeting();
         meeting.setId(7L);
         TduckSyncLog log = new TduckSyncLog();
@@ -31,9 +31,9 @@ class TduckSyncLogDetailResponseTest {
         TduckSyncLogDetailResponse response = TduckSyncLogDetailResponse.from(log);
 
         assertThat(response.formValues()).containsExactlyInAnyOrderEntriesOf(Map.of(
-                "phone", "****8000",
-                "identityNo", "110******1234",
-                "email", "z***@example.com",
+                "phone", "13800138000",
+                "identityNo", "110101199001011234",
+                "email", "zhangsan@example.com",
                 "company", "研发中心"
         ));
         assertThat(response.formValues()).doesNotContainKey("signature");

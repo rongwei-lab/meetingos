@@ -40,9 +40,9 @@
 | `PUT` | `/api/admin/tduck/mappings/{meetingId}` | 保存字段映射，兼容 `/api/tduck/mappings/{meetingId}` |
 | `GET` | `/api/admin/tduck/mappings/{meetingId}` | 查询字段映射，兼容 `/api/tduck/mappings/{meetingId}` |
 | `GET` | `/api/admin/tduck/sync-logs?meetingId={meetingId}` | 查询同步日志，兼容 `/api/tduck/sync-logs` |
-| `GET` | `/api/admin/tduck/sync-logs/{syncLogId}?meetingId={meetingId}` | 查询该次同步保存的脱敏表单快照，不返回 Webhook 原始载荷 |
+| `GET` | `/api/admin/tduck/sync-logs/{syncLogId}?meetingId={meetingId}` | 查询该次同步保存的完整表单快照，不返回 Webhook 原始载荷 |
 | `GET` | `/api/admin/tduck/sync-conflicts?meetingId={meetingId}` | 查询同手机号、不同 `dataId` 的待处理报名，兼容 `/api/tduck/sync-conflicts` |
-| `GET` | `/api/admin/tduck/sync-conflicts/{submissionId}?meetingId={meetingId}` | 查询一条待处理报名与当前参会人资料的脱敏对比 |
+| `GET` | `/api/admin/tduck/sync-conflicts/{submissionId}?meetingId={meetingId}` | 查询一条待处理报名与当前参会人资料的完整对比 |
 | `POST` | `/api/admin/tduck/sync-conflicts/{submissionId}/resolve` | 裁决重复报名；请求为 `meetingId`、`resolution`（`KEEP_EXISTING` 或 `ADOPT_INCOMING`）和可选 `note` |
 | `POST` | `/api/admin/tduck/sync/manual` | 手工补偿同步单条 TDuck 报名数据 |
 | `POST` | `/api/admin/tduck/sync/pull` | 使用 TDuck 管理接口按 dataId 拉取单条报名详情并补偿同步 |
