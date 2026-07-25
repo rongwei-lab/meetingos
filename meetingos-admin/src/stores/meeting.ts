@@ -2060,7 +2060,10 @@ export const useMeetingStore = defineStore("meeting", {
         return room;
       }
     },
-    async loadSyncLogs(meetingId?: string, options: { page?: number; size?: number } = {}) {
+    async loadSyncLogs(
+      meetingId?: string,
+      options: { page?: number; size?: number; status?: Exclude<SyncLog["status"], "PENDING"> } = {}
+    ) {
       meetingId = requireMeetingId(meetingId || this.currentMeetingId);
       const pageNumber = Math.max(0, options.page || 0);
       const pageSize = Math.max(1, options.size || 20);
@@ -2068,7 +2071,12 @@ export const useMeetingStore = defineStore("meeting", {
       try {
         const page = unwrapApi(
           await http.get<PagePayload<SyncLogDto>>("/admin/tduck/sync-logs", {
-            params: { meetingId: backendId(meetingId), page: pageNumber, size: pageSize },
+            params: {
+              meetingId: backendId(meetingId),
+              page: pageNumber,
+              size: pageSize,
+              ...(options.status ? { status: options.status } : {})
+            },
             signal: request.signal
           })
         );

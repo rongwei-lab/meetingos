@@ -30,13 +30,13 @@
         <section class="surface chart-panel compact-panel">
           <div class="panel-head">
             <div>
-              <h3>参会人类型分布</h3>
-              <span>报名人员结构</span>
+              <h3>座位安排情况</h3>
+              <span>可用座位安排与空余情况</span>
             </div>
           </div>
-          <div class="compact-chart-shell">
-            <div ref="attendeeTypeChartRef" class="dashboard-chart-canvas" :class="{ 'is-chart-empty': !attendeeTypeTotal }"></div>
-            <div v-if="!attendeeTypeTotal" class="chart-empty-overlay mini-empty">暂无参会人类型数据</div>
+          <div class="compact-chart-shell" aria-label="座位安排情况">
+            <div ref="seatChartRef" class="dashboard-chart-canvas" :class="{ 'is-chart-empty': !seatArrangementTotal }"></div>
+            <div v-if="!seatArrangementTotal" class="chart-empty-overlay mini-empty">暂无可用座位数据</div>
           </div>
         </section>
 
@@ -113,7 +113,6 @@ import { useRouter } from "vue-router";
 import PageHeader from "@/components/PageHeader.vue";
 import { useRouteMeeting } from "@/composables/useRouteMeeting";
 import { useMeetingStore, type StatisticsOverviewDto } from "@/stores/meeting";
-import { attendeeTypeLabel } from "@/utils/meetingDisplay";
 
 type ChartInstance = import("@/utils/echarts").ChartInstance;
 type EChartsModule = typeof import("@/utils/echarts");
@@ -123,11 +122,11 @@ const store = useMeetingStore();
 const router = useRouter();
 const { routeMeetingId } = useRouteMeeting({ loadWorkspace: false });
 
-const attendeeTypeColors = ["#3b82f6", "#60a5fa", "#14b8a6", "#f6bd60", "#f28482", "#94a3b8"];
+const seatColors = ["#14b8a6", "#f59e0b"];
 const roomColors = ["#14b8a6", "#f59e0b"];
 const echartsModule = shallowRef<EChartsModule | null>(null);
 const trendChartRef = ref<HTMLDivElement | null>(null);
-const attendeeTypeChartRef = ref<HTMLDivElement | null>(null);
+const seatChartRef = ref<HTMLDivElement | null>(null);
 const roomChartRef = ref<HTMLDivElement | null>(null);
 const organizationChartRef = ref<HTMLDivElement | null>(null);
 const chartInstances: ChartInstance[] = [];
@@ -154,6 +153,9 @@ const checkinRate = computed(() => formatPercent(overview.value?.checkinRate));
 const accommodationRequiredCount = computed(() => overview.value?.accommodationRequiredCount ?? 0);
 const roomAssignedRequiredCount = computed(() => overview.value?.roomAssignedRequiredCount ?? 0);
 const roomUnassignedRequiredCount = computed(() => overview.value?.roomUnassignedRequiredCount ?? 0);
+const seatedCount = computed(() => overview.value?.seatedCount ?? 0);
+const emptySeatCount = computed(() => overview.value?.emptySeatCount ?? 0);
+const seatArrangementTotal = computed(() => seatedCount.value + emptySeatCount.value);
 const stats = computed(() => [
   { label: "报名总人数", value: registrationCount.value },
   { label: "今日新增", value: todayRegistrationCount.value },
@@ -211,15 +213,6 @@ function distributionRows(distribution?: Record<string, number>, labeler: (value
     .sort((a, b) => b.value - a.value);
 }
 
-const attendeeTypeSegments = computed(() =>
-  distributionRows(overview.value?.attendeeTypeDistribution, attendeeTypeLabel).map((item, index) => ({
-    label: item.label,
-    value: item.value,
-    color: attendeeTypeColors[index % attendeeTypeColors.length]
-  }))
-);
-const attendeeTypeTotal = computed(() => attendeeTypeSegments.value.reduce((total, item) => total + item.value, 0));
-
 const organizationRows = computed(() => {
   const rows = distributionRows(overview.value?.organizationDistribution).slice(0, 5);
   return rows.map((item) => ({ ...item }));
@@ -249,7 +242,7 @@ async function renderDashboardCharts() {
   const echarts = await ensureEcharts();
   if (generation !== chartRenderGeneration || data !== overview.value) return;
   renderTrendChart(echarts, data);
-  renderAttendeeTypeChart(echarts, data);
+  renderSeatChart(echarts, data);
   renderRoomChart(echarts, data);
   renderOrganizationChart(echarts, data);
   lastRenderedOverview = data;
@@ -319,35 +312,39 @@ function renderTrendChart(echarts: EChartsModule, data: StatisticsOverviewDto) {
   );
 }
 
-function renderAttendeeTypeChart(echarts: EChartsModule, data: StatisticsOverviewDto) {
-  const chart = chartFor(echarts, attendeeTypeChartRef.value);
+function renderSeatChart(echarts: EChartsModule, data: StatisticsOverviewDto) {
+  const chart = chartFor(echarts, seatChartRef.value);
   if (!chart) return;
 
-  const rows = distributionRows(data.attendeeTypeDistribution, attendeeTypeLabel);
+  const assigned = data.seatedCount ?? 0;
+  const empty = data.emptySeatCount ?? 0;
+  const seatCountByName: Record<string, number> = { "已安排": assigned, "空余": empty };
   chart.setOption(
     {
       ...animatedChartBase(950),
-      color: attendeeTypeColors,
+      color: seatColors,
       tooltip: { trigger: "item", confine: true },
       legend: {
-        type: "scroll",
-        orient: "vertical",
-        right: 0,
-        top: "middle",
-        itemWidth: 10,
-        itemHeight: 10,
-        textStyle: { color: "#64748b", fontSize: 12 }
+        bottom: 0,
+        icon: "roundRect",
+        itemWidth: 12,
+        itemHeight: 8,
+        textStyle: { color: "#64748b", fontSize: 12 },
+        formatter: (name: string) => `${name} ${seatCountByName[name] ?? 0} 座`
       },
       series: [
         {
-          name: "参会人类型",
+          name: "座位安排",
           type: "pie",
-          radius: ["46%", "72%"],
-          center: ["32%", "50%"],
-          avoidLabelOverlap: true,
+          radius: ["50%", "74%"],
+          center: ["50%", "42%"],
           label: { show: false },
-          emphasis: { label: { show: true, fontWeight: 700 } },
-          data: rows.map((item) => ({ name: item.label, value: item.value }))
+          labelLine: { show: false },
+          emphasis: { label: { show: false } },
+          data: [
+            { name: "已安排", value: assigned },
+            { name: "空余", value: empty }
+          ]
         }
       ]
     },
@@ -361,20 +358,30 @@ function renderRoomChart(echarts: EChartsModule, data: StatisticsOverviewDto) {
 
   const assigned = data.roomAssignedRequiredCount ?? 0;
   const unassigned = data.roomUnassignedRequiredCount ?? 0;
+  const roomCountByName: Record<string, number> = { "已安排": assigned, "待安排": unassigned };
   chart.setOption(
     {
       ...animatedChartBase(900),
       color: roomColors,
       tooltip: { trigger: "item", confine: true },
-      legend: { bottom: 0, icon: "roundRect", itemWidth: 12, itemHeight: 8, textStyle: { color: "#64748b", fontSize: 12 } },
+      legend: {
+        bottom: 0,
+        icon: "roundRect",
+        itemWidth: 12,
+        itemHeight: 8,
+        textStyle: { color: "#64748b", fontSize: 12 },
+        formatter: (name: string) => `${name} ${roomCountByName[name] ?? 0} 人`
+      },
       series: [
         {
           name: "住宿安排",
           type: "pie",
           radius: ["50%", "74%"],
           center: ["50%", "42%"],
-          label: { formatter: "{b}\\n{c} 人", color: "#334155", fontSize: 12 },
-          labelLine: { length: 8, length2: 6 },
+          // 紧凑图表下方已有统计卡片，外置标签在零值时会收拢到圆环顶部并重叠。
+          // 将人数放入图例，既能展示 0，也不会挤压圆环和底部统计信息。
+          label: { show: false },
+          labelLine: { show: false },
           data: [
             { name: "已安排", value: assigned },
             { name: "待安排", value: unassigned }

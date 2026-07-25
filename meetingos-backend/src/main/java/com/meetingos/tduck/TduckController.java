@@ -110,8 +110,9 @@ public class TduckController {
     @PreAuthorize("@meetingAccess.canView(#meetingId)")
     public ApiResponse<PageResponse<TduckSyncLogResponse>> syncLogs(@RequestParam Long meetingId,
                                                                     @RequestParam(defaultValue = "0") int page,
-                                                                    @RequestParam(defaultValue = "20") int size) {
-        PageResponse<TduckSyncLog> result = tduckService.syncLogs(meetingId, page, size);
+                                                                    @RequestParam(defaultValue = "20") int size,
+                                                                    @RequestParam(required = false) SyncStatus status) {
+        PageResponse<TduckSyncLog> result = tduckService.syncLogs(meetingId, page, size, status);
         return ApiResponse.ok(new PageResponse<>(
                 result.content().stream().map(TduckSyncLogResponse::masked).toList(),
                 result.page(),

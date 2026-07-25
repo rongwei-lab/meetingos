@@ -39,7 +39,7 @@
 | `GET` | `/api/admin/tduck/bindings/{meetingId}` | 查询绑定状态，兼容 `/api/tduck/bindings/{meetingId}` |
 | `PUT` | `/api/admin/tduck/mappings/{meetingId}` | 保存字段映射，兼容 `/api/tduck/mappings/{meetingId}` |
 | `GET` | `/api/admin/tduck/mappings/{meetingId}` | 查询字段映射，兼容 `/api/tduck/mappings/{meetingId}` |
-| `GET` | `/api/admin/tduck/sync-logs?meetingId={meetingId}` | 查询同步日志，兼容 `/api/tduck/sync-logs` |
+| `GET` | `/api/admin/tduck/sync-logs?meetingId={meetingId}&status={status}` | 查询同步日志，可按 `SUCCESS`、`FAILED` 或 `DUPLICATE_IGNORED` 筛选；兼容 `/api/tduck/sync-logs` |
 | `GET` | `/api/admin/tduck/sync-logs/{syncLogId}?meetingId={meetingId}` | 查询该次同步保存的完整表单快照，不返回 Webhook 原始载荷 |
 | `GET` | `/api/admin/tduck/sync-conflicts?meetingId={meetingId}` | 查询同手机号、不同 `dataId` 的待处理报名，兼容 `/api/tduck/sync-conflicts` |
 | `GET` | `/api/admin/tduck/sync-conflicts/{submissionId}?meetingId={meetingId}` | 查询一条待处理报名与当前参会人资料的完整对比 |

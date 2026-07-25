@@ -13,7 +13,7 @@
 
     <groupId>com.meetingos</groupId>
     <artifactId>meetingos-backend</artifactId>
-    <version>0.19.1</version>
+    <version>0.20.0</version>
     <name>MeetingOS Backend</name>
     <description>MeetingOS MVP backend implemented as a modular Spring Boot monolith.</description>
 

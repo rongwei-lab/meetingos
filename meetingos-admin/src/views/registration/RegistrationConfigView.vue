@@ -255,6 +255,17 @@
           <n-tag round size="small" :type="webhookStatusType">{{ webhookStatusLabel }}</n-tag>
         </div>
       </template>
+      <div class="sync-log-toolbar">
+        <n-select
+          :value="syncLogStatusFilter"
+          :options="syncLogStatusOptions"
+          clearable
+          size="small"
+          placeholder="全部状态"
+          aria-label="同步状态筛选"
+          @update:value="handleSyncLogStatusChange"
+        />
+      </div>
       <div v-if="currentSyncLogs.length" class="mobile-scroll-table">
         <n-data-table :columns="logColumns" :data="currentSyncLogs" :loading="loadingSyncLogs" :pagination="false" />
       </div>
@@ -436,6 +447,7 @@ import type { SyncLog } from "@/utils/types";
 
 type BindingValidationStatus = "VALID" | "INVALID" | "UNKNOWN" | "";
 type CreateTduckFormAction = "blank" | "ai";
+type SyncLogStatusFilter = Exclude<SyncLog["status"], "PENDING">;
 
 const store = useMeetingStore();
 const auth = useAuthStore();
@@ -471,6 +483,8 @@ const selectedSyncLogDetail = ref<TduckSyncLogDetailDto | null>(null);
 const syncLogPage = ref(1);
 const syncLogPageSize = ref(20);
 const syncLogTotal = ref(0);
+const syncLogStatusFilter = ref<SyncLogStatusFilter | null>(null);
+const latestSyncLog = ref<SyncLog | null>(null);
 const submissionConflictModalVisible = ref(false);
 const selectedSubmissionConflict = ref<TduckSubmissionConflictDto | null>(null);
 const submissionConflictNote = ref("");
@@ -479,6 +493,7 @@ const submissionConflictPageSize = ref(20);
 let pullAllSyncController: AbortController | null = null;
 let submissionConflictLoadGeneration = 0;
 let submissionConflictDetailGeneration = 0;
+let syncLogLoadGeneration = 0;
 
 const redirectUrl = computed(() => (currentMeeting.value ? `${window.location.origin}/r/${currentMeeting.value.code}` : ""));
 const tduckFrontBaseUrl = computed(() => `${window.location.origin}/tduck`);
@@ -600,8 +615,6 @@ const canResolveSubmissionConflict = computed(() =>
   auth.user.roles.includes("SUPER_ADMIN") || auth.user.roles.includes("MEETING_ADMIN")
 );
 
-const latestSyncLog = computed(() => currentSyncLogs.value[0] || null);
-
 const webhookStatusLabel = computed(() => {
   if (currentBinding.value?.webhookStatus === "CONFIGURED") return "已配置";
   if (latestSyncLog.value?.status === "FAILED") return "有失败";
@@ -624,6 +637,12 @@ const webhookStatusDescription = computed(() => {
 });
 
 const lastSyncLabel = computed(() => (latestSyncLog.value ? `最近同步：${webhookStatusDescription.value}` : "暂无 Webhook 同步记录"));
+
+const syncLogStatusOptions = [
+  { label: "成功", value: "SUCCESS" },
+  { label: "失败", value: "FAILED" },
+  { label: "重复忽略", value: "DUPLICATE_IGNORED" }
+] satisfies Array<{ label: string; value: SyncLogStatusFilter }>;
 
 const mappingColumns = [
   { title: "TDuck 字段", key: "tduckField" },
@@ -753,8 +772,11 @@ const submissionFormFields = computed<SubmissionFormField[]>(() => {
 
 const syncLogDetailFields = computed<SubmissionFormField[]>(() => {
   const formValues = selectedSyncLogDetail.value?.formValues || {};
+  // 同步快照会保留用户未填写字段的 null 值；这些字段仍应使用 TDuck 表单标题展示，
+  // 不能因空值落入下面的原始 key 兜底逻辑而显示成 radio123 之类的内部字段名。
   const fields = submissionFormFields.value.filter((field) =>
-    hasTduckFormValue(formValues[`${field.key}label`]) || hasTduckFormValue(formValues[field.key])
+    Object.prototype.hasOwnProperty.call(formValues, `${field.key}label`)
+      || Object.prototype.hasOwnProperty.call(formValues, field.key)
   );
   const seen = new Set(fields.map((field) => field.key));
   for (const key of Object.keys(formValues)) {
@@ -779,8 +801,11 @@ watch(routeMeetingId, () => {
   selectedSyncLogDetail.value = null;
   syncLogPage.value = 1;
   syncLogTotal.value = 0;
+  syncLogStatusFilter.value = null;
+  latestSyncLog.value = null;
   submissionConflictLoadGeneration += 1;
   submissionConflictDetailGeneration += 1;
+  syncLogLoadGeneration += 1;
   void syncRegistrationContext();
 }, { immediate: true });
 
@@ -935,19 +960,27 @@ async function saveMappings() {
 async function refreshSyncLogs(options: { page?: number; pageSize?: number } = {}) {
   if (!store.currentMeetingId) return;
   const targetMeetingId = store.currentMeetingId;
+  const generation = ++syncLogLoadGeneration;
   const page = Math.max(0, options.page ?? syncLogPage.value - 1);
   const pageSize = Math.max(1, options.pageSize ?? syncLogPageSize.value);
+  const status = syncLogStatusFilter.value;
   loadingSyncLogs.value = true;
   try {
-    const result = await store.loadSyncLogs(targetMeetingId, { page, size: pageSize });
-    if (!result || store.currentMeetingId !== targetMeetingId) return;
+    const request = {
+      page,
+      size: pageSize,
+      ...(status ? { status } : {})
+    };
+    const result = await store.loadSyncLogs(targetMeetingId, request);
+    if (!result || store.currentMeetingId !== targetMeetingId || generation !== syncLogLoadGeneration) return;
     syncLogPage.value = result.page + 1;
     syncLogPageSize.value = result.size;
     syncLogTotal.value = result.totalElements;
+    if (!status) latestSyncLog.value = result.content[0] || null;
   } catch (error) {
-    message.error(extractErrorMessage(error, "加载同步日志失败"));
+    if (generation === syncLogLoadGeneration) message.error(extractErrorMessage(error, "加载同步日志失败"));
   } finally {
-    if (store.currentMeetingId === targetMeetingId) loadingSyncLogs.value = false;
+    if (store.currentMeetingId === targetMeetingId && generation === syncLogLoadGeneration) loadingSyncLogs.value = false;
   }
 }
 
@@ -960,6 +993,14 @@ function handleSyncLogPageSizeChange(pageSize: number) {
   syncLogPage.value = 1;
   syncLogPageSize.value = pageSize;
   void refreshSyncLogs({ page: 0, pageSize });
+}
+
+function handleSyncLogStatusChange(value: string | null) {
+  const status = syncLogStatusOptions.some((item) => item.value === value) ? value as SyncLogStatusFilter : null;
+  if (status === syncLogStatusFilter.value) return;
+  syncLogStatusFilter.value = status;
+  syncLogPage.value = 1;
+  void refreshSyncLogs({ page: 0 });
 }
 
 async function openSyncLogDetail(syncLog: SyncLog) {
@@ -1747,6 +1788,16 @@ function emptyMappingRow(label: string): FieldMappingRow {
   margin-top: 14px;
 }
 
+.sync-log-toolbar {
+  display: flex;
+  justify-content: flex-end;
+  margin-bottom: 12px;
+}
+
+.sync-log-toolbar :deep(.n-select) {
+  width: 156px;
+}
+
 .sync-log-detail-meta {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
@@ -1982,7 +2033,8 @@ function emptyMappingRow(label: string): FieldMappingRow {
   }
 
   .conflict-pagination,
-  .sync-log-pagination {
+  .sync-log-pagination,
+  .sync-log-toolbar {
     justify-content: flex-start;
     overflow-x: auto;
   }

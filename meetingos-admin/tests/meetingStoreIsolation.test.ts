@@ -346,6 +346,26 @@ describe("meeting store 会议隔离", () => {
     expect(detail.formValues).toMatchObject({ phone: "13800138000", company: "研发中心" });
   });
 
+  it("TDuck 同步日志可按状态向服务端筛选", async () => {
+    const envelope = (data: unknown) => ({
+      data: { success: true, code: "OK", message: "success", timestamp: "2026-07-21T19:04:25Z", data }
+    });
+    const get = vi.spyOn(http, "get").mockResolvedValue(envelope({
+      content: [],
+      page: 0,
+      size: 20,
+      totalElements: 0,
+      totalPages: 0
+    }) as never);
+    const store = useMeetingStore();
+
+    await store.loadSyncLogs("1", { page: 0, size: 20, status: "FAILED" });
+
+    expect(get).toHaveBeenCalledWith("/admin/tduck/sync-logs", expect.objectContaining({
+      params: { meetingId: 1, page: 0, size: 20, status: "FAILED" }
+    }));
+  });
+
   it("TDuck 重复报名队列按会议读取详情，并在裁决后从待处理缓存移除", async () => {
     const conflict = {
       id: 44,

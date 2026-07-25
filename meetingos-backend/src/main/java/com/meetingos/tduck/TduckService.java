@@ -435,11 +435,14 @@ public class TduckService {
     }
 
     @Transactional(readOnly = true)
-    public PageResponse<TduckSyncLog> syncLogs(Long meetingId, int page, int size) {
+    public PageResponse<TduckSyncLog> syncLogs(Long meetingId, int page, int size, SyncStatus status) {
         // 同步日志主要用于排障和联调回看，默认展示最新事件，避免真实联调后还停留在旧日志页首。
         var pageRequest = PageRequests.of(page, size, Sort.by(Sort.Direction.DESC, "createdAt", "id"));
         if (meetingId == null) {
             return PageResponse.from(syncLogRepository.findAll(pageRequest));
+        }
+        if (status != null) {
+            return PageResponse.from(syncLogRepository.findByMeetingIdAndStatus(meetingId, status, pageRequest));
         }
         return PageResponse.from(syncLogRepository.findByMeetingId(meetingId, pageRequest));
     }

@@ -132,13 +132,33 @@ vi.mock("naive-ui", () => {
     inheritAttrs: false,
     setup: (_props, { slots }) => () => h("div", slots.default?.())
   });
+  const select = defineComponent({
+    inheritAttrs: false,
+    props: {
+      value: { type: [String, Number], default: null },
+      options: { type: Array, default: () => [] }
+    },
+    emits: ["update:value"],
+    setup: (props, { attrs, emit }) => () => h(
+      "select",
+      {
+        ...attrs,
+        value: props.value || "",
+        onChange: (event: Event) => emit("update:value", (event.target as HTMLSelectElement).value || null)
+      },
+      [
+        h("option", { value: "" }),
+        ...(props.options as Array<{ label: string; value: string }>).map((option) => h("option", { value: option.value }, option.label))
+      ]
+    )
+  });
   return {
     NButton: button,
     NDataTable: dataTable,
     NIcon: passthrough,
     NModal: modal,
     NPagination: pagination,
-    NSelect: passthrough,
+    NSelect: select,
     NSwitch: passthrough,
     useMessage: () => ({
       error: vi.fn(),
@@ -264,6 +284,59 @@ describe("TDuck 同步日志详情", () => {
     await vi.waitFor(() => expect(state.loadTduckSyncLogDetail).toHaveBeenCalledWith("91", "3"));
     await vi.waitFor(() => expect(root?.textContent).toContain("13800138000"));
     expect(root?.textContent).toContain("研发中心");
+  });
+
+  it("空字段保留 TDuck 字段标题并显示横杠", async () => {
+    state.syncLogs = [{
+      id: "92",
+      meetingId: "3",
+      formKey: "form-3",
+      dataId: "211810",
+      eventType: "PULL_SYNC",
+      status: "SUCCESS",
+      createdAt: "2026-07-21T19:05:25"
+    }];
+    state.loadSyncLogs.mockResolvedValue({ content: state.syncLogs, page: 0, size: 20, totalElements: 1, totalPages: 1 });
+    state.loadTduckMappings.mockResolvedValue([
+      { tduckFieldKey: "phone", tduckFieldLabel: "手机号", tduckRequired: true, requiredMapping: true },
+      { tduckFieldKey: "radio1783663523296", tduckFieldLabel: "31日抵达方式", tduckRequired: false, requiredMapping: false }
+    ]);
+    state.loadTduckSyncLogDetail.mockResolvedValue({
+      id: "92",
+      meetingId: "3",
+      formKey: "form-3",
+      dataId: "211810",
+      eventType: "PULL_SYNC",
+      status: "SUCCESS",
+      createdAt: "2026-07-21T19:05:25",
+      formValues: { phone: "13800138000", radio1783663523296: null, radio1783663523296label: null }
+    });
+
+    mountView();
+    await vi.waitFor(() => expect(root?.textContent).toContain("211810"));
+
+    findButton("211810").click();
+    await vi.waitFor(() => expect(root?.textContent).toContain("31日抵达方式"));
+    expect(root?.textContent).toContain("-");
+    expect(root?.textContent).not.toContain("radio1783663523296");
+  });
+});
+
+describe("TDuck 同步日志筛选", () => {
+  it("切换状态后从第一页按服务端筛选条件读取日志", async () => {
+    mountView();
+    await vi.waitFor(() => expect(state.loadSyncLogs).toHaveBeenCalledWith("3", { page: 0, size: 20 }));
+
+    const statusSelect = root?.querySelector<HTMLSelectElement>('select[aria-label="同步状态筛选"]');
+    expect(statusSelect).not.toBeNull();
+    statusSelect!.value = "FAILED";
+    statusSelect!.dispatchEvent(new Event("change"));
+
+    await vi.waitFor(() => expect(state.loadSyncLogs).toHaveBeenLastCalledWith("3", {
+      page: 0,
+      size: 20,
+      status: "FAILED"
+    }));
   });
 });
 
