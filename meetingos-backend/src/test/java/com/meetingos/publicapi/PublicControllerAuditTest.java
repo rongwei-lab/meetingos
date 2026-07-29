@@ -92,6 +92,7 @@ class PublicControllerAuditTest {
         Attendee attendee = new Attendee();
         attendee.setId(29L);
         attendee.setAttendeeCode("NDEF2026-0029");
+        attendee.setOrganization("会议示例单位");
         when(publicQueryService.resolvePublicAttendee(request)).thenReturn(new PublicAttendeeMatch(meeting, attendee));
         when(checkinService.checkin(any())).thenReturn(new CheckinResponse(
                 CheckinResultStatus.SUCCESS,
@@ -108,7 +109,9 @@ class PublicControllerAuditTest {
                 UsernamePasswordAuthenticationToken.authenticated("admin-in-browser", null, java.util.List.of())
         );
 
-        controller.selfCheckin(request, httpRequest);
+        var response = controller.selfCheckin(request, httpRequest);
+
+        assertThat(response.data().organization()).isEqualTo("会议示例单位");
 
         @SuppressWarnings("unchecked")
         ArgumentCaptor<Map<String, Object>> detailsCaptor = ArgumentCaptor.forClass(Map.class);
@@ -169,6 +172,7 @@ class PublicControllerAuditTest {
                 true,
                 29L,
                 "参会人",
+                "会议示例单位",
                 "****0001",
                 null,
                 "身份核验通过，请确认签到。"
@@ -178,6 +182,7 @@ class PublicControllerAuditTest {
         var response = controller.previewSelfCheckin(request, httpRequest);
 
         assertThat(response.data()).isSameAs(preview);
+        assertThat(response.data().organization()).isEqualTo("会议示例单位");
         verify(publicRateLimitService).check(httpRequest);
         verify(publicCaptchaService).verify("captcha-id", "captcha-answer");
         verify(publicQueryService).previewSelfCheckin(request);

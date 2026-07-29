@@ -20,6 +20,13 @@ public interface SeatAssignmentRepository extends JpaRepository<SeatAssignment, 
     List<SeatAssignment> findByMeetingId(Long meetingId);
 
     @Query("""
+            select assignment.attendee.id
+            from SeatAssignment assignment
+            where assignment.meeting.id = :meetingId
+            """)
+    List<Long> findAssignedAttendeeIdsByMeetingId(@Param("meetingId") Long meetingId);
+
+    @Query("""
             select assignment
             from SeatAssignment assignment
             join fetch assignment.attendee

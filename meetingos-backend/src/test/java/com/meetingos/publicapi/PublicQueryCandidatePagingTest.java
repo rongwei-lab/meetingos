@@ -156,6 +156,39 @@ class PublicQueryCandidatePagingTest {
     }
 
     @Test
+    void selfCheckinPreviewIncludesAttendeeOrganization() {
+        MeetingRepository meetingRepository = mock(MeetingRepository.class);
+        AttendeeRepository attendeeRepository = mock(AttendeeRepository.class);
+        PublicQueryService service = new PublicQueryService(
+                meetingRepository,
+                attendeeRepository,
+                mock(SeatAssignmentRepository.class),
+                mock(SeatRepository.class),
+                mock(RoomRepository.class),
+                mock(DinnerService.class),
+                mock(PublicQueryHistoryService.class),
+                mock(PublicCaptchaService.class),
+                mock(PublicQueryTransactionRunner.class)
+        );
+        Meeting meeting = publicMeeting("PHONE", "PHONE");
+        Attendee attendee = attendee(meeting, 1L, "张晓平");
+        attendee.setPhone("13800005888");
+        attendee.setOrganization("会议示例单位");
+        when(meetingRepository.findByPublicQueryToken("public-token")).thenReturn(Optional.of(meeting));
+        when(attendeeRepository.findPublicQueryCandidates(any()))
+                .thenReturn(List.of(new AttendeeMatchCandidate(1L, ReviewStatus.APPROVED)));
+        when(attendeeRepository.findAllById(List.of(1L))).thenReturn(List.of(attendee));
+
+        PublicCheckinPreviewResponse preview = service.previewSelfCheckin(new PublicQueryRequest(
+                "public-token",
+                Map.of(PublicQueryField.PHONE, "13800005888")
+        ));
+
+        assertThat(preview.ready()).isTrue();
+        assertThat(preview.organization()).isEqualTo("会议示例单位");
+    }
+
+    @Test
     void missingRequiredFieldIsRejectedBeforeQueryingAttendees() {
         MeetingRepository meetingRepository = mock(MeetingRepository.class);
         AttendeeRepository attendeeRepository = mock(AttendeeRepository.class);

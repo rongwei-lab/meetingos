@@ -9,6 +9,7 @@ public record PublicCheckinPreviewResponse(
         boolean ready,
         Long attendeeId,
         String attendeeName,
+        String organization,
         String phone,
         LocalDateTime checkedInAt,
         String message

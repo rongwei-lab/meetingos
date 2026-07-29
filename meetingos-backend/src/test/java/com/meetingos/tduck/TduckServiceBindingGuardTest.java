@@ -386,6 +386,60 @@ class TduckServiceBindingGuardTest {
     }
 
     @Test
+    void syncFieldsRetainsUnmappedCustomFieldWithKeyAndLabel() {
+        TduckFormBinding binding = existingBinding("forum-registration");
+        when(bindingRepository.findByMeetingId(1L)).thenReturn(Optional.of(binding));
+        when(mappingRepository.findByMeetingId(1L)).thenReturn(List.of());
+        when(tduckClient.formFields("forum-registration")).thenReturn(List.of(
+                new TduckFormFieldOption("name", "姓名", "input", true),
+                new TduckFormFieldOption("mobile", "手机号", "input", true),
+                new TduckFormFieldOption("radio1783663523296", "您对会务服务的满意度", "radio", false)
+        ));
+
+        TduckFieldSyncResponse response = tduckService.syncFields(1L);
+
+        assertThat(response.mappedCount()).isEqualTo(2);
+        assertThat(response.fields())
+                .filteredOn(item -> "radio1783663523296".equals(item.tduckFieldKey()))
+                .singleElement()
+                .satisfies(item -> {
+                    assertThat(item.tduckFieldLabel()).isEqualTo("您对会务服务的满意度");
+                    assertThat(item.attendeeField()).isNull();
+                    assertThat(item.requiredMapping()).isFalse();
+                    assertThat(item.status()).isEqualTo(MappingStatus.NOT_CONFIGURED);
+                });
+        verify(mappingRepository).save(org.mockito.ArgumentMatchers.argThat(mapping ->
+                mapping != null
+                        && mapping.getAttendeeField() == null
+                        && "radio1783663523296".equals(mapping.getTduckFieldKey())
+                        && "您对会务服务的满意度".equals(mapping.getTduckFieldLabel())
+                        && !mapping.isRequiredMapping()
+        ));
+    }
+
+    @Test
+    void syncFieldsRejectsOverlongCustomFieldLabelBeforeReplacingMappings() {
+        TduckFormBinding binding = existingBinding("forum-registration");
+        when(bindingRepository.findByMeetingId(1L)).thenReturn(Optional.of(binding));
+        when(mappingRepository.findByMeetingId(1L)).thenReturn(List.of(
+                savedMapping(AttendeeField.NAME, "name", "姓名", true),
+                savedMapping(AttendeeField.PHONE, "mobile", "手机号", true)
+        ));
+        when(tduckClient.formFields("forum-registration")).thenReturn(List.of(
+                new TduckFormFieldOption("name", "姓名", "input", true),
+                new TduckFormFieldOption("mobile", "手机号", "input", true),
+                new TduckFormFieldOption("custom", "超长题目".repeat(54), "radio", false)
+        ));
+
+        assertThatThrownBy(() -> tduckService.syncFields(1L))
+                .isInstanceOf(BusinessException.class)
+                .hasMessageContaining("字段标题长度不能超过 160");
+
+        verify(mappingRepository, never()).deleteByMeetingId(1L);
+        verify(mappingRepository, never()).flush();
+    }
+
+    @Test
     void syncFieldsKeepsSavedMappingsWhenRefreshingTduckFields() {
         TduckFormBinding binding = existingBinding("forum-registration");
         when(bindingRepository.findByMeetingId(1L)).thenReturn(Optional.of(binding));

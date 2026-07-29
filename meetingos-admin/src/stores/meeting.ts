@@ -562,6 +562,99 @@ export interface StatisticsOverviewDto {
   checkinTypeDistribution?: Record<string, number>;
 }
 
+export type StatisticsDashboardAggregation =
+  | "COUNT"
+  | "FILLED_COUNT"
+  | "DISTINCT_COUNT"
+  | "DISTRIBUTION"
+  | "SUM"
+  | "AVERAGE"
+  | "MIN"
+  | "MAX";
+
+export type StatisticsDashboardVisualization = "NUMBER" | "BAR" | "PIE" | "TABLE";
+
+export type StatisticsDashboardFilterOperator =
+  | "EQUALS"
+  | "NOT_EQUALS"
+  | "IN"
+  | "NOT_IN"
+  | "GREATER_THAN"
+  | "GREATER_THAN_OR_EQUAL"
+  | "LESS_THAN"
+  | "LESS_THAN_OR_EQUAL"
+  | "BETWEEN"
+  | "IS_EMPTY"
+  | "IS_NOT_EMPTY";
+
+export interface StatisticsDashboardFieldOptionDto {
+  value: string;
+  label: string;
+}
+
+export interface StatisticsDashboardFieldDto {
+  key: string;
+  label: string;
+  category?: string;
+  source?: string;
+  dataType?: "RECORD" | "TEXT" | "NUMBER" | "DATE" | "BOOLEAN" | "MULTI_SELECT" | string;
+  sensitive?: boolean;
+  coverageCount?: number;
+  allowedAggregations: StatisticsDashboardAggregation[];
+  allowedVisualizations: StatisticsDashboardVisualization[];
+  allowedOperators?: StatisticsDashboardFilterOperator[];
+  options?: StatisticsDashboardFieldOptionDto[];
+}
+
+export interface StatisticsDashboardFilterDto {
+  fieldKey: string;
+  operator: StatisticsDashboardFilterOperator;
+  values?: string[];
+}
+
+export type StatisticsDashboardComponentWidth = "HALF" | "FULL";
+
+export interface StatisticsDashboardComponentDto {
+  id: string;
+  title: string;
+  fieldKey: string;
+  aggregation: StatisticsDashboardAggregation;
+  visualization: StatisticsDashboardVisualization;
+  limit?: number;
+  filters?: StatisticsDashboardFilterDto[];
+  width?: StatisticsDashboardComponentWidth;
+}
+
+export interface StatisticsDashboardConfigDto {
+  meetingId: string;
+  components: StatisticsDashboardComponentDto[];
+  updatedAt?: string;
+  canManage?: boolean;
+}
+
+export interface StatisticsDashboardQueryItemDto {
+  key?: string;
+  label: string;
+  value: number;
+}
+
+export interface StatisticsDashboardQueryComponentDto extends StatisticsDashboardComponentDto {
+  value?: number | null;
+  total?: number;
+  items?: StatisticsDashboardQueryItemDto[];
+  status?: "SUCCESS" | "EMPTY" | "INVALID_FIELD" | "INVALID_CONFIGURATION" | string;
+  message?: string;
+}
+
+export interface StatisticsDashboardQueryResultDto {
+  components: StatisticsDashboardQueryComponentDto[];
+  generatedAt?: string;
+}
+
+interface StatisticsDashboardFieldsResponseDto {
+  fields: StatisticsDashboardFieldDto[];
+}
+
 export type ImportTaskType = "attendees" | "rooms" | "room-assignments" | "dinner";
 export type ImportTaskStatus =
   | "PENDING"
@@ -934,6 +1027,8 @@ const roomsLoadPromises = requestRuntime.createPromiseCache<string, Promise<void
 const dinnerLoadPromises = requestRuntime.createPromiseCache<string, Promise<void>>();
 const dinnerTablesLoadPromises = requestRuntime.createPromiseCache<string, Promise<void>>();
 const latestStatisticsRequests = new Map<string, LatestRequestToken>();
+const latestStatisticsDashboardQueryRequests = new Map<string, LatestRequestToken>();
+const statisticsDashboardConfigVersions = new Map<string, number>();
 const ADMIN_PAGE_SIZE = 200;
 const PAGE_LOAD_CONCURRENCY = 4;
 const MAX_CACHED_ATTENDEE_MEETINGS = 2;
@@ -975,6 +1070,51 @@ function statisticsRequestKey(meetingId: string, filters: { startDate?: string; 
   return [meetingId, filters.startDate || "", filters.endDate || ""].join(":");
 }
 
+function statisticsDashboardQueryRequestKey(
+  meetingId: string,
+  filters: { startDate?: string; endDate?: string },
+  components: StatisticsDashboardComponentDto[]
+) {
+  // 配置内容进入 key，避免同一会议切换组件或筛选条件时复用上一版的统计结果。
+  return [meetingId, filters.startDate || "", filters.endDate || "", JSON.stringify(components)].join(":");
+}
+
+function dashboardComponentPayload(component: StatisticsDashboardComponentDto): StatisticsDashboardComponentDto {
+  return {
+    id: component.id,
+    title: component.title,
+    fieldKey: component.fieldKey,
+    aggregation: component.aggregation,
+    visualization: component.visualization,
+    limit: component.limit,
+    width: component.width === "FULL" ? "FULL" : "HALF",
+    filters: (component.filters || []).map((filter) => ({
+      fieldKey: filter.fieldKey,
+      operator: filter.operator,
+      values: [...(filter.values || [])]
+    }))
+  };
+}
+
+function dashboardConfigPayload(meetingId: string, components: StatisticsDashboardComponentDto[]) {
+  return {
+    meetingId: backendId(meetingId),
+    components: components.map(dashboardComponentPayload)
+  };
+}
+
+function normalizeStatisticsDashboardConfig(
+  payload: { meetingId?: string | number; components?: StatisticsDashboardComponentDto[]; updatedAt?: string; canManage?: boolean },
+  fallbackMeetingId: string
+): StatisticsDashboardConfigDto {
+  return {
+    meetingId: idOf(payload.meetingId) || fallbackMeetingId,
+    components: (payload.components || []).map(dashboardComponentPayload),
+    updatedAt: payload.updatedAt,
+    canManage: payload.canManage
+  };
+}
+
 function publicQueryHistoryRequestKey(meetingId: string, filters: PublicQueryHistoryFilters) {
   return [
     meetingId,
@@ -989,6 +1129,8 @@ function publicQueryHistoryRequestKey(meetingId: string, filters: PublicQueryHis
 export function clearMeetingRuntimeCaches() {
   bootstrapPromise = null;
   latestStatisticsRequests.clear();
+  latestStatisticsDashboardQueryRequests.clear();
+  statisticsDashboardConfigVersions.clear();
   attendeeMeetingAccessOrder.splice(0);
   requestRuntime.reset();
 }
@@ -1017,6 +1159,10 @@ export const useMeetingStore = defineStore("meeting", {
     loadedAttendeeMeetingIds: [] as string[],
     statisticsByRequestKey: {} as Record<string, StatisticsOverviewDto>,
     activeStatisticsRequestKeyByMeetingId: {} as Record<string, string>,
+    statisticsDashboardFieldsByMeetingId: {} as Record<string, StatisticsDashboardFieldDto[]>,
+    statisticsDashboardConfigByMeetingId: {} as Record<string, StatisticsDashboardConfigDto>,
+    statisticsDashboardQueryByRequestKey: {} as Record<string, StatisticsDashboardQueryResultDto>,
+    activeStatisticsDashboardQueryRequestKeyByMeetingId: {} as Record<string, string>,
     publicQueryHistoryByRequestKey: {} as Record<string, PagePayload<PublicQueryHistory>>,
     activePublicQueryHistoryKeyByMeetingId: {} as Record<string, string>,
     publicQuerySummaryByMeetingId: {} as Record<string, PublicQuerySummary[]>,
@@ -1074,6 +1220,16 @@ export const useMeetingStore = defineStore("meeting", {
     overview(state): StatisticsOverviewDto | null {
       const requestKey = state.activeStatisticsRequestKeyByMeetingId[state.currentMeetingId];
       return requestKey ? state.statisticsByRequestKey[requestKey] || null : null;
+    },
+    currentStatisticsDashboardFields(state): StatisticsDashboardFieldDto[] {
+      return state.statisticsDashboardFieldsByMeetingId[state.currentMeetingId] || [];
+    },
+    currentStatisticsDashboardConfig(state): StatisticsDashboardConfigDto | null {
+      return state.statisticsDashboardConfigByMeetingId[state.currentMeetingId] || null;
+    },
+    currentStatisticsDashboardQuery(state): StatisticsDashboardQueryResultDto | null {
+      const requestKey = state.activeStatisticsDashboardQueryRequestKeyByMeetingId[state.currentMeetingId];
+      return requestKey ? state.statisticsDashboardQueryByRequestKey[requestKey] || null : null;
     },
     currentPublicQueryHistory(state): PagePayload<PublicQueryHistory> | null {
       const requestKey = state.activePublicQueryHistoryKeyByMeetingId[state.currentMeetingId];
@@ -2253,6 +2409,138 @@ export const useMeetingStore = defineStore("meeting", {
         throw error;
       } finally {
         if (latestStatisticsRequests.get(meetingId) === request) latestStatisticsRequests.delete(meetingId);
+        requestRuntime.requests.finish(request);
+      }
+    },
+    async loadStatisticsDashboardFields(meetingId?: string) {
+      const targetMeetingId = requireMeetingId(meetingId || this.currentMeetingId);
+      const request = requestRuntime.requests.begin(`statistics-dashboard-fields:${targetMeetingId}`);
+      try {
+        const payload = unwrapApi(
+          await http.get<StatisticsDashboardFieldsResponseDto>("/admin/statistics/dashboard/fields", {
+            params: { meetingId: backendId(targetMeetingId) },
+            signal: request.signal
+          })
+        );
+        const fields = payload.fields || [];
+        if (requestRuntime.requests.isCurrent(request)) {
+          this.statisticsDashboardFieldsByMeetingId[targetMeetingId] = fields;
+        }
+        return fields;
+      } catch (error) {
+        if (isRequestCanceled(error) || !requestRuntime.requests.isCurrent(request)) {
+          return this.statisticsDashboardFieldsByMeetingId[targetMeetingId] || [];
+        }
+        throw error;
+      } finally {
+        requestRuntime.requests.finish(request);
+      }
+    },
+    async loadStatisticsDashboardConfig(meetingId?: string) {
+      const targetMeetingId = requireMeetingId(meetingId || this.currentMeetingId);
+      const request = requestRuntime.requests.begin(`statistics-dashboard-config:${targetMeetingId}`);
+      try {
+        const payload = unwrapApi(
+          await http.get<StatisticsDashboardConfigDto>("/admin/statistics/dashboard/config", {
+            params: { meetingId: backendId(targetMeetingId) },
+            signal: request.signal
+          })
+        );
+        const config = normalizeStatisticsDashboardConfig(payload, targetMeetingId);
+        if (requestRuntime.requests.isCurrent(request)) {
+          this.statisticsDashboardConfigByMeetingId[targetMeetingId] = config;
+        }
+        return config;
+      } catch (error) {
+        if (isRequestCanceled(error) || !requestRuntime.requests.isCurrent(request)) {
+          return this.statisticsDashboardConfigByMeetingId[targetMeetingId] || null;
+        }
+        throw error;
+      } finally {
+        requestRuntime.requests.finish(request);
+      }
+    },
+    async saveStatisticsDashboardConfig(meetingId: string | undefined, components: StatisticsDashboardComponentDto[]) {
+      const targetMeetingId = requireMeetingId(meetingId || this.currentMeetingId);
+      /*
+       * 保存布局与批量查询可能并发发生。先推进配置代际并中止最近查询，
+       * 避免保存前的组件结果在保存后迟到并重新成为当前看板数据。
+       */
+      const configVersion = (statisticsDashboardConfigVersions.get(targetMeetingId) || 0) + 1;
+      statisticsDashboardConfigVersions.set(targetMeetingId, configVersion);
+      const activeQuery = latestStatisticsDashboardQueryRequests.get(targetMeetingId);
+      if (activeQuery) {
+        requestRuntime.requests.cancel(activeQuery.key);
+        if (latestStatisticsDashboardQueryRequests.get(targetMeetingId) === activeQuery) {
+          latestStatisticsDashboardQueryRequests.delete(targetMeetingId);
+        }
+      }
+      const payload = unwrapApi(
+        await http.put<StatisticsDashboardConfigDto>(
+          "/admin/statistics/dashboard/config",
+          dashboardConfigPayload(targetMeetingId, components)
+        )
+      );
+      const config = normalizeStatisticsDashboardConfig(payload, targetMeetingId);
+      if (statisticsDashboardConfigVersions.get(targetMeetingId) !== configVersion) {
+        return this.statisticsDashboardConfigByMeetingId[targetMeetingId] || config;
+      }
+      this.statisticsDashboardConfigByMeetingId[targetMeetingId] = config;
+
+      // 保存配置后旧查询结果的组件集合已失效，不能继续作为当前看板的数据来源。
+      for (const requestKey of Object.keys(this.statisticsDashboardQueryByRequestKey)) {
+        if (requestKey.startsWith(`${targetMeetingId}:`)) delete this.statisticsDashboardQueryByRequestKey[requestKey];
+      }
+      delete this.activeStatisticsDashboardQueryRequestKeyByMeetingId[targetMeetingId];
+      return config;
+    },
+    async queryStatisticsDashboard(
+      meetingId: string | undefined,
+      components: StatisticsDashboardComponentDto[],
+      filters: { startDate?: string; endDate?: string }
+    ) {
+      const targetMeetingId = requireMeetingId(meetingId || this.currentMeetingId);
+      const componentPayloads = components.map(dashboardComponentPayload);
+      const requestKey = statisticsDashboardQueryRequestKey(targetMeetingId, filters, componentPayloads);
+      const request = requestRuntime.requests.begin(`statistics-dashboard-query:${requestKey}`);
+      const configVersion = statisticsDashboardConfigVersions.get(targetMeetingId) || 0;
+      latestStatisticsDashboardQueryRequests.set(targetMeetingId, request);
+      this.activeStatisticsDashboardQueryRequestKeyByMeetingId[targetMeetingId] = requestKey;
+      try {
+        const result = unwrapApi(
+          await http.post<StatisticsDashboardQueryResultDto>(
+            "/admin/statistics/dashboard/query",
+            {
+              ...dashboardConfigPayload(targetMeetingId, componentPayloads),
+              startDate: filters.startDate || undefined,
+              endDate: filters.endDate || undefined
+            },
+            { signal: request.signal }
+          )
+        );
+        if (
+          requestRuntime.requests.isCurrent(request)
+          && latestStatisticsDashboardQueryRequests.get(targetMeetingId) === request
+          && (statisticsDashboardConfigVersions.get(targetMeetingId) || 0) === configVersion
+        ) {
+          this.statisticsDashboardQueryByRequestKey[requestKey] = result;
+          this.activeStatisticsDashboardQueryRequestKeyByMeetingId[targetMeetingId] = requestKey;
+          return result;
+        }
+        return null;
+      } catch (error) {
+        if (
+          isRequestCanceled(error)
+          || !requestRuntime.requests.isCurrent(request)
+          || (statisticsDashboardConfigVersions.get(targetMeetingId) || 0) !== configVersion
+        ) {
+          return this.statisticsDashboardQueryByRequestKey[requestKey] || null;
+        }
+        throw error;
+      } finally {
+        if (latestStatisticsDashboardQueryRequests.get(targetMeetingId) === request) {
+          latestStatisticsDashboardQueryRequests.delete(targetMeetingId);
+        }
         requestRuntime.requests.finish(request);
       }
     },
@@ -4213,6 +4501,7 @@ function localPublicSelfCheckin(
       status: "NOT_APPROVED",
       attendeeId: Number(attendee.id),
       attendeeName: attendee.name,
+      organization: attendee.company,
       phone: maskPhone(attendee.phone),
       message: "报名尚未审核通过"
     };
@@ -4222,6 +4511,7 @@ function localPublicSelfCheckin(
       status: "DUPLICATE",
       attendeeId: Number(attendee.id),
       attendeeName: attendee.name,
+      organization: attendee.company,
       phone: maskPhone(attendee.phone),
       checkedInAt: attendee.checkinTime,
       entrance: "H5自助签到",
@@ -4248,6 +4538,7 @@ function localPublicSelfCheckin(
     status: "SUCCESS",
     attendeeId: Number(attendee.id),
     attendeeName: attendee.name,
+    organization: attendee.company,
     phone: maskPhone(attendee.phone),
     checkedInAt: now,
     entrance: "H5自助签到",
@@ -4273,6 +4564,7 @@ function localPublicSelfCheckinPreview(
       ready: false,
       attendeeId: Number(attendee.id),
       attendeeName: attendee.name,
+      organization: attendee.company,
       phone: maskPhone(attendee.phone),
       checkedInAt: attendee.checkinTime,
       message: "您已完成签到，请勿重复提交。"
@@ -4282,6 +4574,7 @@ function localPublicSelfCheckinPreview(
     ready: true,
     attendeeId: Number(attendee.id),
     attendeeName: attendee.name,
+    organization: attendee.company,
     phone: maskPhone(attendee.phone),
     message: "身份核验通过，请确认签到。"
   };

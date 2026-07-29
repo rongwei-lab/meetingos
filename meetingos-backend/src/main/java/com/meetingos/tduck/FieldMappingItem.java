@@ -1,6 +1,7 @@
 package com.meetingos.tduck;
 
 import jakarta.validation.constraints.NotBlank;
+import jakarta.validation.constraints.Size;
 
 public record FieldMappingItem(
         /*
@@ -8,8 +9,8 @@ public record FieldMappingItem(
          * 这类记录不会参与 Webhook 入库字段映射，但能阻止后续同步字段时再次被自动识别回填。
          */
         AttendeeField attendeeField,
-        @NotBlank String tduckFieldKey,
-        String tduckFieldLabel,
+        @NotBlank @Size(max = 120) String tduckFieldKey,
+        @Size(max = 160) String tduckFieldLabel,
         boolean requiredMapping
 ) {
 }

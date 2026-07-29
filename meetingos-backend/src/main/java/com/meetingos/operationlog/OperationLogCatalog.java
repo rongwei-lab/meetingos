@@ -95,6 +95,7 @@ final class OperationLogCatalog {
         labels.put("MEETING_END", "结束会议");
         labels.put("MEETING_ARCHIVE", "归档会议");
         labels.put("MEETING_DELETE_ARCHIVE", "删除归档会议");
+        labels.put("DASHBOARD_CONFIG_UPDATE", "更新统计看板配置");
         labels.put("NOTIFICATION_CREATE", "创建通知");
 
         labels.put("ATTENDEE_CREATE", "新增参会人");
@@ -203,6 +204,7 @@ final class OperationLogCatalog {
         labels.put("AUTH_SESSION", "登录会话");
         labels.put("MEETING_USER_PERMISSION", "会议用户权限");
         labels.put("MEETING", "会议");
+        labels.put("MEETING_DASHBOARD", "会议统计看板");
         labels.put("NOTIFICATION", "通知");
         labels.put("ATTENDEE", "参会人");
         labels.put("ROOM", "房间");

@@ -86,7 +86,7 @@ docker compose --env-file ../.env --profile tduck up -d
   `MEETINGOS_MYSQL_MIGRATION_TEST_URL`、`MEETINGOS_MYSQL_MIGRATION_TEST_USERNAME` 和
   `MEETINGOS_MYSQL_MIGRATION_TEST_PASSWORD`，执行
   `cd meetingos-backend && ./mvnw -Dtest=MigrationChecksumTest,FlywayMySqlMigrationTest test`。
-  必须同时看到 V1→V7 全部成功、`flyway validate` 成功、V1 Flyway checksum 与生产基线一致，且
+  必须同时看到 V1→V10 全部成功、`flyway validate` 成功、V1 Flyway checksum 与生产基线一致，且
   SHA-256 清单无漂移；未设置 URL 时 `FlywayMySqlMigrationTest` 会跳过，不算通过。checksum 不一致时
   必须阻断发布并核对生产迁移历史，禁止修改 V1 或使用 `flyway repair` 掩盖问题。
 - 创建两份邀请方案，分别保存 H5/海报草稿并同时发布，确认渠道链接互不混淆。
@@ -167,6 +167,14 @@ docker compose --env-file ../.env --profile tduck up -d
 - 重复签到返回首次签到信息。
 - 补签必须填写原因。
 - 签到统计更新。
+- 自助签到核验和重复签到结果均展示参会人单位及脱敏手机号，不返回后台签到接口的额外字段。
+
+### 自定义统计看板
+
+- 会议管理员可读取系统字段和 TDuck 表单字段目录，创建、编辑、复制、删除、排序和保存最多 12 个组件。
+- 验证指标、分布、柱状图、饼图和表格展示，以及日期范围和多个筛选条件组合；非指标展示数量应限制为 1 至 100，清空时回退为 10。
+- 过期字段或不兼容的统计方式应在查询结果中提示，不得生成动态 SQL；只读会议用户不得读取字段目录或执行查询。
+- 保存布局后，先前布局发起的异步查询不得覆盖新布局结果。
 
 ## 权限测试
 

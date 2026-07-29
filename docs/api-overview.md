@@ -215,6 +215,10 @@ MEETINGOS-CHECKIN:{meetingId}:{attendeeCode}
 | 方法 | 路径 | 说明 |
 | --- | --- | --- |
 | `GET` | `/api/admin/statistics/overview?meetingId={meetingId}` | 报名、座位、住宿、晚宴、签到概览 |
+| `GET` | `/api/admin/statistics/dashboard/fields?meetingId={meetingId}` | 会议管理员获取可配置统计看板的系统字段、TDuck 表单字段及可用聚合、展示、筛选能力 |
+| `GET` | `/api/admin/statistics/dashboard/config?meetingId={meetingId}` | 获取会议默认统计看板配置和当前账号的编辑权限 |
+| `PUT` | `/api/admin/statistics/dashboard/config` | 保存会议默认统计看板布局；请求体包含 `meetingId` 和最多 12 个组件 |
+| `POST` | `/api/admin/statistics/dashboard/query` | 会议管理员批量查询看板组件；请求体可传 `startDate`、`endDate`，时间范围最长 366 天 |
 | `POST` | `/api/admin/exports?meetingId={meetingId}&type={type}` | 创建异步 XLSX 导出任务 |
 | `GET` | `/api/admin/exports?meetingId={meetingId}` | 分页查询导出任务和进度 |
 | `GET` | `/api/admin/exports/{taskId}/download?meetingId={meetingId}` | 下载任务生成的固定 XLSX 文件 |
@@ -226,6 +230,8 @@ MEETINGOS-CHECKIN:{meetingId}:{attendeeCode}
 | `PUT` | `/api/admin/meetings/{meetingId}/query-settings` | 保存会议公开座位/住宿/晚宴/签到配置 |
 | `POST` | `/api/admin/meetings/{meetingId}/queries/seat` | 后台座位查询候选，最多返回 20 条 |
 | `POST` | `/api/admin/meetings/{meetingId}/queries/room` | 后台住宿查询候选，最多返回 20 条 |
+
+统计看板中非“指标数值”组件的 `limit` 必须为 `1` 到 `100` 的整数；省略该字段或在编辑中清空后保存时，默认使用 `10`。`NUMBER`（指标数值）展示不使用 `limit`。
 
 导出类型：`attendees`、`approved`、`seats`、`rooms`、`checkin-records`、`no-checkin`、`room-inventory`、`statistics`。晚宴管理页使用专用 `/api/admin/dinner/export` 下载 `.xlsx`。
 操作日志暂仅 `SUPER_ADMIN` 可查看；列表响应不包含客户端 IP 和 details。分类由 action 实时推导，默认不展示邀请函草稿保存；调用方应在后续分页请求中回传首次响应的 `X-MeetingOS-Log-Snapshot`。日志 details 会递归脱敏手机号、证件号、邮箱、Token、密码和密钥类字段。

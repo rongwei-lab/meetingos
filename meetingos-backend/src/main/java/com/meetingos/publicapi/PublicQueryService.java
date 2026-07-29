@@ -168,6 +168,7 @@ public class PublicQueryService {
                     false,
                     attendee.getId(),
                     attendee.getName(),
+                    attendee.getOrganization(),
                     SensitiveDataMasker.maskPhone(attendee.getPhone()),
                     attendee.getCheckedInAt(),
                     "您已完成签到，请勿重复提交。"
@@ -177,6 +178,7 @@ public class PublicQueryService {
                 true,
                 attendee.getId(),
                 attendee.getName(),
+                attendee.getOrganization(),
                 SensitiveDataMasker.maskPhone(attendee.getPhone()),
                 null,
                 "身份核验通过，请确认签到。"

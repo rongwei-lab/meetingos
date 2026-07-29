@@ -222,6 +222,20 @@ TDuck 字段到 MeetingOS 标准字段的映射。
 
 唯一约束：`meeting_id + table_no`。桌号容量不能小于当前已安排到该桌的人数；删除桌号前必须先清空或调整该桌的晚宴安排。为兼容历史导入数据，`dinner_assignments.table_no` 仍保存桌号字符串，不强制外键关联；导入或手动安排到新桌号时会自动补建默认 10 人桌。
 
+### meeting_dashboard_configs
+
+会议级默认统计看板配置表。组件布局、字段、聚合、筛选和展示参数保存在 JSON 中，实际查询只使用服务端字段目录和白名单聚合，避免将配置直接拼接为 SQL。
+
+| 字段 | 类型建议 | 说明 |
+| --- | --- | --- |
+| `id` | bigint | 主键 |
+| `meeting_id` | bigint | 会议 ID，唯一约束，保证一场会议只有一份默认看板 |
+| `configuration` | json | 最多 12 个统计组件的配置快照 |
+| `created_at` | datetime(6) | 创建时间 |
+| `updated_at` | datetime(6) | 最后保存时间 |
+
+组件引用失效的 TDuck 字段时，历史配置仍保留，查询接口返回受控的无效字段提示；只有具备会议管理权限的用户可以读取字段目录、查询数据或保存配置。
+
 ### checkin_record
 
 签到记录表。

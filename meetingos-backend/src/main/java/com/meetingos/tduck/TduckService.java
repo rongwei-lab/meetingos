@@ -57,6 +57,8 @@ public class TduckService {
     private static final String TDUCK_CANCEL_REASON = "TDuck 报名删除或撤回";
     private static final int MAX_EVENT_ID_LENGTH = 120;
     private static final int MAX_TDUCK_DATA_ID_LENGTH = 80;
+    private static final int MAX_TDUCK_FIELD_KEY_LENGTH = 120;
+    private static final int MAX_TDUCK_FIELD_LABEL_LENGTH = 160;
     private static final List<DateTimeFormatter> TDUCK_SUBMISSION_TIME_FORMATS = List.of(
             DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss"),
             DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss.SSS"),
@@ -258,6 +260,7 @@ public class TduckService {
         Meeting meeting = meetingRepository.findById(meetingId)
                 .orElseThrow(() -> BusinessException.notFound("会议不存在"));
         List<FieldMappingItem> mappings = normalizeFieldMappings(request.mappings());
+        validateFieldMappingStorageLengths(mappings);
         ensureRequiredMapping(mappings, AttendeeField.NAME);
         ensureRequiredMapping(mappings, AttendeeField.PHONE);
 
@@ -396,6 +399,12 @@ public class TduckService {
                     );
                     desiredMappings.add(inferred);
                     desiredMappingByAttendeeField.put(attendeeField, inferred);
+                } else {
+                    /*
+                     * 未映射字段同样需要保存 TDuck 的 key 和题目标题。报名同步仍会忽略它，
+                     * 但导出、统计和历史详情可据此显示填写页名称，而不是内部 radio/checkbox key。
+                     */
+                    desiredMappings.add(new FieldMappingItem(null, field.fieldKey(), field.label(), false));
                 }
             }
             preview.add(new TduckFieldSyncItem(
@@ -413,6 +422,8 @@ public class TduckService {
         boolean hasPhone = desiredMappingByAttendeeField.containsKey(AttendeeField.PHONE);
         MappingStatus mappingStatus = hasName && hasPhone ? MappingStatus.VALID : MappingStatus.NOT_CONFIGURED;
 
+        // 先校验再删除旧映射，外部表单异常字段不能破坏已有可用配置。
+        validateFieldMappingStorageLengths(desiredMappings);
         mappingRepository.deleteByMeetingId(meetingId);
         // 同步字段会按“保留后的目标状态”重建映射；先 flush 删除，避免唯一索引 uk_mapping_meeting_target 冲突。
         mappingRepository.flush();
@@ -1458,6 +1469,19 @@ public class TduckService {
             normalized.add(item);
         }
         return normalized;
+    }
+
+    private void validateFieldMappingStorageLengths(List<FieldMappingItem> mappings) {
+        for (FieldMappingItem item : mappings) {
+            String key = item.tduckFieldKey();
+            if (!StringUtils.hasText(key) || key.length() > MAX_TDUCK_FIELD_KEY_LENGTH) {
+                throw BusinessException.badRequest("TDuck 字段 key 长度不能超过 " + MAX_TDUCK_FIELD_KEY_LENGTH + " 个字符");
+            }
+            String label = item.tduckFieldLabel();
+            if (label != null && label.length() > MAX_TDUCK_FIELD_LABEL_LENGTH) {
+                throw BusinessException.badRequest("TDuck 字段标题长度不能超过 " + MAX_TDUCK_FIELD_LABEL_LENGTH + " 个字符");
+            }
+        }
     }
 
     private TduckFieldMapping toMappingEntity(Meeting meeting, FieldMappingItem item) {

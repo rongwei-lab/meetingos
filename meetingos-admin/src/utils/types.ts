@@ -302,6 +302,7 @@ export interface PublicCheckinResult {
   status: PublicCheckinResultStatus;
   attendeeId?: number;
   attendeeName?: string;
+  organization?: string;
   phone?: string;
   checkedInAt?: string;
   entrance?: string;
@@ -313,6 +314,7 @@ export interface PublicCheckinPreview {
   ready: boolean;
   attendeeId?: number;
   attendeeName?: string;
+  organization?: string;
   phone?: string;
   checkedInAt?: string;
   message?: string;

@@ -20,6 +20,13 @@ public interface DinnerAssignmentRepository extends JpaRepository<DinnerAssignme
     List<DinnerAssignment> findByMeetingIdAndTableNo(Long meetingId, String tableNo);
 
     @Query("""
+            select assignment.attendee.id
+            from DinnerAssignment assignment
+            where assignment.meeting.id = :meetingId
+            """)
+    List<Long> findAssignedAttendeeIdsByMeetingId(@Param("meetingId") Long meetingId);
+
+    @Query("""
             select assignment
             from DinnerAssignment assignment
             join fetch assignment.attendee

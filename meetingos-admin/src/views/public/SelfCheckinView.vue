@@ -45,6 +45,10 @@
             <span>参会人</span>
             <strong>{{ preview.attendeeName }}</strong>
           </div>
+          <div v-if="preview.organization">
+            <span>单位</span>
+            <strong>{{ preview.organization }}</strong>
+          </div>
           <div v-if="preview.phone">
             <span>手机号</span>
             <strong>{{ preview.phone }}</strong>
@@ -70,6 +74,10 @@
           <div v-if="result.attendeeName">
             <span>参会人</span>
             <strong>{{ result.attendeeName }}</strong>
+          </div>
+          <div v-if="result.organization">
+            <span>单位</span>
+            <strong>{{ result.organization }}</strong>
           </div>
           <div v-if="result.phone">
             <span>手机号</span>

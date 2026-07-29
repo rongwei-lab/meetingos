@@ -123,8 +123,8 @@ public class PublicController {
     }
 
     @PostMapping("/checkin")
-    public ApiResponse<CheckinResponse> selfCheckin(@Valid @RequestBody PublicQueryRequest queryRequest,
-                                                    HttpServletRequest request) {
+    public ApiResponse<PublicCheckinResponse> selfCheckin(@Valid @RequestBody PublicQueryRequest queryRequest,
+                                                          HttpServletRequest request) {
         publicRateLimitService.check(request);
         verifyCaptcha(queryRequest);
         PublicAttendeeMatch match = null;
@@ -153,7 +153,7 @@ public class PublicController {
                     request.getHeader(HttpHeaders.USER_AGENT)
             );
             recordPublicSelfCheckin(match, response);
-            return ApiResponse.ok(response);
+            return ApiResponse.ok(toPublicCheckinResponse(response, match.attendee()));
         } catch (RuntimeException ex) {
             recordPublicCheckinFailure(queryRequest, match, ex, request);
             throw ex;
@@ -181,6 +181,20 @@ public class PublicController {
 
     private String clientIp(HttpServletRequest request) {
         return publicRateLimitService.resolveClientIp(request);
+    }
+
+    private PublicCheckinResponse toPublicCheckinResponse(CheckinResponse response, Attendee attendee) {
+        return new PublicCheckinResponse(
+                response.status(),
+                response.attendeeId(),
+                response.attendeeName(),
+                attendee.getOrganization(),
+                response.phone(),
+                response.checkedInAt(),
+                response.entrance(),
+                response.operator(),
+                response.message()
+        );
     }
 
     private void verifyCaptcha(PublicQueryRequest queryRequest) {

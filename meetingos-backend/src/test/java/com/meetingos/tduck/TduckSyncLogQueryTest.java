@@ -17,6 +17,7 @@ import java.util.List;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
@@ -75,8 +76,8 @@ class TduckSyncLogQueryTest {
         TduckSyncLog failedLog = new TduckSyncLog();
         failedLog.setStatus(SyncStatus.FAILED);
         when(syncLogRepository.findByMeetingIdAndStatus(
-                7L,
-                SyncStatus.FAILED,
+                eq(7L),
+                eq(SyncStatus.FAILED),
                 any(Pageable.class)
         )).thenReturn(new PageImpl<>(List.of(failedLog)));
 
@@ -84,7 +85,11 @@ class TduckSyncLogQueryTest {
 
         assertThat(page.content()).containsExactly(failedLog);
         assertThat(page.totalElements()).isEqualTo(1);
-        verify(syncLogRepository).findByMeetingIdAndStatus(7L, SyncStatus.FAILED, any(Pageable.class));
-        verify(syncLogRepository, never()).findByMeetingId(7L, any(Pageable.class));
+        verify(syncLogRepository).findByMeetingIdAndStatus(
+                eq(7L),
+                eq(SyncStatus.FAILED),
+                any(Pageable.class)
+        );
+        verify(syncLogRepository, never()).findByMeetingId(eq(7L), any(Pageable.class));
     }
 }
