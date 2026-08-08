@@ -86,7 +86,7 @@ docker compose --env-file ../.env --profile tduck up -d
   `MEETINGOS_MYSQL_MIGRATION_TEST_URL`、`MEETINGOS_MYSQL_MIGRATION_TEST_USERNAME` 和
   `MEETINGOS_MYSQL_MIGRATION_TEST_PASSWORD`，执行
   `cd meetingos-backend && ./mvnw -Dtest=MigrationChecksumTest,FlywayMySqlMigrationTest test`。
-  必须同时看到 V1→V10 全部成功、`flyway validate` 成功、V1 Flyway checksum 与生产基线一致，且
+  必须同时看到 V1→V15 全部成功、`flyway validate` 成功、V1 Flyway checksum 与生产基线一致，且
   SHA-256 清单无漂移；未设置 URL 时 `FlywayMySqlMigrationTest` 会跳过，不算通过。checksum 不一致时
   必须阻断发布并核对生产迁移历史，禁止修改 V1 或使用 `flyway repair` 掩盖问题。
 - 创建两份邀请方案，分别保存 H5/海报草稿并同时发布，确认渠道链接互不混淆。
@@ -137,6 +137,8 @@ docker compose --env-file ../.env --profile tduck up -d
 - 标签维护。
 - Excel 导入成功和失败行提示。
 - 导出权限校验和操作日志。
+- 按报名来源筛选正式参会人和未报名入座人员；未报名人员可不填手机号，但填写手机号时不得与现有参会人重复。
+- 未报名人员资料仅允许提交 TDuck 字段映射白名单，伪造 TDuck 元数据、报名来源或系统字段应失败。
 
 ### 座位
 
@@ -146,6 +148,10 @@ docker compose --env-file ../.env --profile tduck up -d
 - 交换两个参会人座位。
 - 锁定座位后重新自动排座，确认不被覆盖。
 - 清空座位。
+- 上传 `.xlsx` 座位图，确认空白单元格保留网格位置、过道标记不创建可分配座位，同名或重复姓名产生明确问题明细且不误分配。
+- 已有布局或分配时导入应拒绝；导入中的异常必须整体回滚，不留下半成品布局或分配。
+- 结构留白和过道不得锁定、禁用、分配、交换或公开查询；区域级过道在不同屏幕下保持对应的座位后间距。
+- 为空座创建未报名入座人员，补录映射资料后再清空，确认不影响正式报名、TDuck 数据或其他座位分配。
 - 公开座位查询的成功和失败提示。
 
 ### 住宿

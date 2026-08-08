@@ -37,7 +37,8 @@ public class SeatLayout extends BaseEntity {
     @Column(length = 160)
     private String numberingRule;
 
-    @Column(length = 160)
+    // 80 座一排时可配置多个过道位置，规范化后的配置可能超过旧的 160 字符限制。
+    @Column(length = 512)
     private String aisleSettings;
 
     @Column(length = 80)

@@ -166,8 +166,10 @@ public final class ExportDisplayFormatter {
         return switch (value) {
             case EMPTY -> "空座";
             case ASSIGNED -> "已分配";
+            case UNREGISTERED -> "未报名入座";
             case CHECKED_IN -> "已签到";
             case DISABLED -> "禁用";
+            case AISLE -> "过道";
         };
     }
 

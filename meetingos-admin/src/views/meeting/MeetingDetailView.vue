@@ -1118,7 +1118,12 @@ const activePublicQueryLink = computed(() => {
 });
 const queryResultColumns: DataTableColumns<AdminQueryCandidate> = [
   { title: "姓名", key: "attendeeName" },
-  { title: "手机号", key: "phone" },
+  { title: "手机号", key: "phone", render: (row) => row.phone || "-" },
+  {
+    title: "记录来源",
+    key: "unregistered",
+    render: (row) => h(NTag, { size: "small", type: row.unregistered ? "warning" : "default" }, { default: () => (row.unregistered ? "未报名入座" : "已报名") })
+  },
   { title: "单位", key: "organization" },
   {
     title: "审核",

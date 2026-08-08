@@ -58,8 +58,9 @@ class FlywayMySqlMigrationTest {
                 }
             }
 
-            assertEquals(List.of("1", "2", "3", "4", "5", "6", "7", "8", "9", "10"), versions,
+            assertEquals(List.of("1", "2", "3", "4", "5", "6", "7", "8", "9", "10", "11", "12", "13", "14", "15"), versions,
                 "CI 必须从 V1 完整迁移到仓库当前最新版本");
+            assertDemoSeedsRemoved(connection);
             assertEquals(PRODUCTION_V1_CHECKSUM, v1Checksum,
                 "V1 必须与生产库已经记录的 Flyway checksum 完全一致");
         }
@@ -99,6 +100,23 @@ class FlywayMySqlMigrationTest {
             assertTrue(row.next());
             assertEquals(0, row.getInt(1),
                 "迁移测试只允许使用一次性空库，拒绝修改已有数据库");
+        }
+    }
+
+    private void assertDemoSeedsRemoved(Connection connection) throws SQLException {
+        assertEquals(0, countRows(connection,
+                "select count(*) from meetings where code = 'NDEF2026' and public_query_token = 'pq_seed_ndef2026'"),
+            "空库初始化后不能保留 V1 的演示会议");
+        assertEquals(0, countRows(connection,
+                "select count(*) from app_users where username = 'admin' and password_hash = '{noop}admin123' and status = 'DISABLED'"),
+            "空库初始化后不能保留 V1 的弱密码演示账号");
+    }
+
+    private int countRows(Connection connection, String sql) throws SQLException {
+        try (Statement statement = connection.createStatement();
+             ResultSet row = statement.executeQuery(sql)) {
+            assertTrue(row.next());
+            return row.getInt(1);
         }
     }
 

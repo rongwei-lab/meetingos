@@ -81,6 +81,7 @@ public interface AttendeeRepository extends JpaRepository<Attendee, Long>, Atten
               and (:hasSeat is null
                    or (:hasSeat = true and exists (select 1 from SeatAssignment sa where sa.attendee = a))
                    or (:hasSeat = false and not exists (select 1 from SeatAssignment sa where sa.attendee = a)))
+              and (:unregistered is null or a.unregistered = :unregistered)
             """)
     Page<Attendee> search(@Param("meetingId") Long meetingId,
                           @Param("keyword") String keyword,
@@ -88,6 +89,7 @@ public interface AttendeeRepository extends JpaRepository<Attendee, Long>, Atten
                           @Param("checkinStatus") CheckinStatus checkinStatus,
                           @Param("attendeeType") AttendeeType attendeeType,
                           @Param("hasSeat") Boolean hasSeat,
+                          @Param("unregistered") Boolean unregistered,
                           @Param("tagKeyword") String tagKeyword,
                           Pageable pageable);
 

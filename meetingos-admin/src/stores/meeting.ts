@@ -109,7 +109,8 @@ interface MeetingDetailDto {
 interface AttendeeDto {
   id: number;
   name: string;
-  phone: string;
+  phone?: string | null;
+  unregistered?: boolean;
   organization?: string;
   title?: string;
   identityNo?: string;
@@ -136,6 +137,15 @@ interface AttendeeDto {
   attendeeCode?: string;
   tduckDataId?: string;
   formValues?: Record<string, unknown>;
+}
+
+/**
+ * 未报名入座人员的资料编辑沿用当前会议 TDuck 表单的字段和值。mappings 仅供本地演示
+ * 回退时同步 MeetingOS 标准字段，发送给服务端的请求体只包含 formValues。
+ */
+export interface UnregisteredAttendeeProfileInput {
+  formValues: Record<string, string>;
+  mappings: TduckFieldMappingDto[];
 }
 
 interface DinnerAssignmentDto {
@@ -182,6 +192,10 @@ interface SeatViewDto {
   seatType: Seat["seatType"];
   status: Seat["status"];
   locked: boolean;
+  structuralBlank?: boolean;
+  aisle?: boolean;
+  aisleAfterSeatNos?: number[];
+  unregistered?: boolean;
   attendeeId?: number;
   attendeeName?: string;
   attendeeTags?: string;
@@ -195,6 +209,8 @@ export interface SeatLayoutPayload {
   sortOrder?: number;
   venueName?: string;
   defaultSeatType?: Exclude<Seat["seatType"], "DISABLED">;
+  /** 区域级虚拟过道，格式：v1:3,7，表示每排第 3、7 座后插入间距。 */
+  aisleSettings?: string;
 }
 
 interface RoomDto {
@@ -1943,7 +1959,7 @@ export const useMeetingStore = defineStore("meeting", {
       if (targetMeetingId) requestRuntime.requests.cancel(`attendee-search:${targetMeetingId}`);
     },
     async searchAttendees(
-      filters: { keyword?: string; auditStatus?: string | null; hasSeat?: boolean | null; tags?: string[] },
+      filters: { keyword?: string; auditStatus?: string | null; hasSeat?: boolean | null; unregistered?: boolean | null; tags?: string[] },
       options: { meetingId?: string } = {}
     ) {
       const meetingId = requireMeetingId(options.meetingId || this.currentMeetingId);
@@ -1958,6 +1974,7 @@ export const useMeetingStore = defineStore("meeting", {
               keyword: keyword || undefined,
               reviewStatus: filters.auditStatus || undefined,
               hasSeat: filters.hasSeat == null ? undefined : filters.hasSeat,
+              unregistered: filters.unregistered == null ? undefined : filters.unregistered,
               tags: tags.length ? tags.join(",") : undefined,
               page: 0,
               size: ADMIN_PAGE_SIZE
@@ -2005,6 +2022,7 @@ export const useMeetingStore = defineStore("meeting", {
       const originalAreaName = payload.originalAreaName?.trim() || undefined;
       const rowCount = Math.max(1, Math.floor(payload.rowCount));
       const seatsPerRow = Math.max(1, Math.floor(payload.seatsPerRow));
+      const aisleSettings = normalizeAisleSettings(payload.aisleSettings, seatsPerRow);
       try {
         await http.post("/admin/seating/layouts", {
           meetingId: backendId(meetingId),
@@ -2014,15 +2032,24 @@ export const useMeetingStore = defineStore("meeting", {
           rowCount,
           seatsPerRow,
           numberingRule: "row-seat",
-          aisleSettings: "",
+          aisleSettings,
           stageDirection: "北",
           sortOrder: payload.sortOrder,
-          defaultSeatType: payload.defaultSeatType || "NORMAL"
+          defaultSeatType: payload.defaultSeatType
         });
         await Promise.allSettled([this.loadSeats(meetingId), this.loadStatistics(meetingId)]);
       } catch (error) {
         if (!canUseDemoFallback(error)) throw error;
-        this.saveSeatLayoutLocally({ originalAreaName, areaName, rowCount, seatsPerRow, sortOrder: payload.sortOrder, venueName: payload.venueName, defaultSeatType: payload.defaultSeatType });
+        this.saveSeatLayoutLocally({
+          originalAreaName,
+          areaName,
+          rowCount,
+          seatsPerRow,
+          sortOrder: payload.sortOrder,
+          venueName: payload.venueName,
+          defaultSeatType: payload.defaultSeatType,
+          aisleSettings
+        });
       }
       this.reconcileAssignments();
       this.refreshMeetingCounters();
@@ -2940,6 +2967,67 @@ export const useMeetingStore = defineStore("meeting", {
         );
       }
     },
+    async updateUnregisteredAttendeeProfile(attendeeId: string, input: UnregisteredAttendeeProfileInput) {
+      const formValues = normalizeUnregisteredProfileFormValues(input.formValues);
+      const name = mappedUnregisteredProfileValue(input.mappings, formValues, "NAME");
+      if (name.mapped && !name.value) throw new Error("请填写姓名");
+      const payload = {
+        formValues
+      };
+
+      try {
+        const updated = unwrapApi(
+          await http.put<AttendeeDto>(`/admin/attendees/${backendId(attendeeId)}/unregistered-profile`, payload)
+        );
+        const existing = this.attendees.find((item) => item.id === attendeeId);
+        const merged = mergeAttendeeResponseKeepingAssignments(updated, existing, this.currentMeetingId);
+        this.attendees = this.attendees.map((item) => (item.id === attendeeId ? merged : item));
+        this.seats = this.seats.map((seat) =>
+          seat.attendeeId === attendeeId
+            ? {
+                ...seat,
+                attendeeName: merged.name,
+                attendeeTags: merged.tags.length ? merged.tags.join(",") : undefined
+              }
+            : seat
+        );
+      } catch (error) {
+        if (!canUseDemoFallback(error)) throw new Error(extractErrorMessage(error, "未报名人员资料保存失败"));
+
+        const existing = this.attendees.find((item) => item.id === attendeeId);
+        if (!existing?.unregistered) throw new Error("仅支持编辑未报名入座人员");
+        const phone = mappedUnregisteredProfileValue(input.mappings, formValues, "PHONE");
+        const organization = mappedUnregisteredProfileValue(input.mappings, formValues, "ORGANIZATION");
+        const title = mappedUnregisteredProfileValue(input.mappings, formValues, "TITLE");
+        const identityNo = mappedUnregisteredProfileValue(input.mappings, formValues, "IDENTITY_NO");
+        const email = mappedUnregisteredProfileValue(input.mappings, formValues, "EMAIL");
+        const remark = mappedUnregisteredProfileValue(input.mappings, formValues, "REMARK");
+        const updated: Attendee = {
+          ...existing,
+          name: name.mapped ? name.value || existing.name : existing.name,
+          phone: phone.mapped ? normalizeLocalOptionalPhone(phone.value) : existing.phone,
+          company: organization.mapped ? organization.value : existing.company,
+          title: title.mapped ? title.value : existing.title,
+          identityNo: identityNo.mapped ? identityNo.value || undefined : existing.identityNo,
+          email: email.mapped ? email.value || undefined : existing.email,
+          remark: remark.mapped ? remark.value || undefined : existing.remark,
+          formValues: {
+            ...(existing.formValues || {}),
+            ...formValues
+          }
+        };
+        this.attendees = this.attendees.map((item) => (item.id === attendeeId ? updated : item));
+        this.seats = this.seats.map((seat) =>
+          seat.attendeeId === attendeeId
+            ? {
+                ...seat,
+                attendeeName: updated.name,
+                attendeeTags: updated.tags.length ? updated.tags.join(",") : undefined
+              }
+            : seat
+        );
+      }
+    },
     async autoAssignSeats() {
       const meetingId = requireMeetingId(this.currentMeetingId);
       try {
@@ -2964,6 +3052,25 @@ export const useMeetingStore = defineStore("meeting", {
       }
       this.refreshMeetingCounters();
     },
+    async assignUnregisteredSeat(seatId: string, attendeeName: string, phone?: string) {
+      const meetingId = requireMeetingId(this.currentMeetingId);
+      const normalizedName = attendeeName.trim();
+      const normalizedPhone = phone?.trim() || undefined;
+      if (!normalizedName) throw new Error("请填写未报名人员姓名");
+      try {
+        await http.post("/admin/seating/unregistered-assignment", {
+          seatId: backendId(seatId),
+          attendeeName: normalizedName,
+          phone: normalizedPhone
+        });
+        await Promise.allSettled([this.loadSeats(meetingId), this.loadAttendees(meetingId), this.loadStatistics(meetingId)]);
+      } catch (error) {
+        if (!canUseDemoFallback(error)) throw error;
+        this.assignUnregisteredSeatLocally(seatId, normalizedName, normalizedPhone);
+      }
+      this.reconcileAssignments();
+      this.refreshMeetingCounters();
+    },
     async clearSeat(attendeeId: string) {
       const meetingId = requireMeetingId(this.currentMeetingId);
       try {
@@ -2974,6 +3081,18 @@ export const useMeetingStore = defineStore("meeting", {
         if (!canUseDemoFallback(error)) throw error;
         this.clearSeatLocally(attendeeId);
       }
+      this.refreshMeetingCounters();
+    },
+    async clearUnregisteredSeat(seatId: string) {
+      const meetingId = requireMeetingId(this.currentMeetingId);
+      try {
+        await http.delete(`/admin/seating/unregistered-assignment/${backendId(seatId)}`);
+        await Promise.allSettled([this.loadSeats(meetingId), this.loadAttendees(meetingId), this.loadStatistics(meetingId)]);
+      } catch (error) {
+        if (!canUseDemoFallback(error)) throw error;
+        this.clearUnregisteredSeatLocally(seatId);
+      }
+      this.reconcileAssignments();
       this.refreshMeetingCounters();
     },
     async swapSeats(firstAttendeeId: string, secondAttendeeId: string) {
@@ -3021,6 +3140,18 @@ export const useMeetingStore = defineStore("meeting", {
       } catch (error) {
         if (this.apiAvailable || !canUseDemoFallback(error)) throw error;
         this.setSeatDisabledLocally(seatId, disabled);
+      }
+      this.reconcileAssignments();
+      this.refreshMeetingCounters();
+    },
+    async setSeatAisle(seatId: string, aisle: boolean) {
+      const meetingId = requireMeetingId(this.currentMeetingId);
+      try {
+        await http.put(`/admin/seating/seats/${backendId(seatId)}/aisle`, { aisle });
+        await Promise.allSettled([this.loadSeats(meetingId), this.loadStatistics(meetingId)]);
+      } catch (error) {
+        if (this.apiAvailable || !canUseDemoFallback(error)) throw error;
+        this.setSeatAisleLocally(seatId, aisle);
       }
       this.reconcileAssignments();
       this.refreshMeetingCounters();
@@ -3537,7 +3668,7 @@ export const useMeetingStore = defineStore("meeting", {
       return settings;
     },
     filterAttendeesLocally(
-      filters: { keyword?: string; auditStatus?: string | null; hasSeat?: boolean | null; tags?: string[] },
+      filters: { keyword?: string; auditStatus?: string | null; hasSeat?: boolean | null; unregistered?: boolean | null; tags?: string[] },
       meetingId?: string
     ) {
       const targetMeetingId = meetingId || this.currentMeetingId;
@@ -3548,10 +3679,12 @@ export const useMeetingStore = defineStore("meeting", {
         const text = `${item.name}${item.phone}${item.company}`;
         const tagMatched = !tags.length || tags.every((tag) => item.tags.includes(tag));
         const seatMatched = filters.hasSeat == null || Boolean(item.seatLabel) === filters.hasSeat;
+        const sourceMatched = filters.unregistered == null || Boolean(item.unregistered) === filters.unregistered;
         return (
           (!keyword || text.includes(keyword)) &&
           (!filters.auditStatus || item.auditStatus === filters.auditStatus) &&
           seatMatched &&
+          sourceMatched &&
           tagMatched
         );
       });
@@ -3656,6 +3789,7 @@ export const useMeetingStore = defineStore("meeting", {
         const seat = availableSeats.splice(fallbackIndex, 1)[0];
         if (!seat) break;
         seat.status = "ASSIGNED";
+        seat.unregistered = false;
         seat.attendeeId = attendee.id;
         seat.attendeeName = attendee.name;
         seat.attendeeTags = attendee.tags.join(",");
@@ -3666,28 +3800,75 @@ export const useMeetingStore = defineStore("meeting", {
     assignSeatLocally(attendeeId: string, seatId: string) {
       const attendee = this.attendees.find((item) => item.id === attendeeId);
       const seat = this.seats.find((item) => item.id === seatId);
-      if (!attendee || !seat || seat.locked || seat.status === "DISABLED") return;
+      if (!attendee || !seat || seat.locked || seat.status !== "EMPTY" || seat.structuralBlank) return;
 
       // 手动调座必须先释放旧座位，避免一个参会人占多个座位。
       for (const oldSeat of this.seats.filter((item) => item.attendeeId === attendeeId)) {
         oldSeat.status = "EMPTY";
+        oldSeat.unregistered = false;
         oldSeat.attendeeId = undefined;
       }
       seat.status = "ASSIGNED";
+      seat.unregistered = false;
       seat.attendeeId = attendeeId;
       seat.attendeeName = attendee.name;
       seat.attendeeTags = attendee.tags.join(",");
       attendee.seatLabel = `${seat.areaName} ${seat.rowNo}排${seat.seatNo}座`;
       attendee.seatAssigned = true;
     },
+    assignUnregisteredSeatLocally(seatId: string, attendeeName: string, phone?: string) {
+      const seat = this.seats.find((item) => item.id === seatId);
+      if (!seat || seat.locked || seat.status !== "EMPTY" || seat.structuralBlank) return;
+
+      const now = nowIso();
+      const attendee: Attendee = {
+        id: `local-unregistered-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+        meetingId: this.currentMeetingId,
+        name: attendeeName.trim(),
+        phone: phone?.trim() || "",
+        unregistered: true,
+        company: "",
+        title: "",
+        attendeeType: "NORMAL",
+        tags: [],
+        auditStatus: "APPROVED",
+        auditedAt: now,
+        registeredAt: now,
+        seatLabel: `${seat.areaName} ${seat.rowNo}排${seat.seatNo}座`,
+        seatAssigned: true,
+        checkinStatus: "NOT_CHECKED_IN"
+      };
+      this.attendees.push(attendee);
+      seat.status = "ASSIGNED";
+      seat.unregistered = true;
+      seat.attendeeId = attendee.id;
+      seat.attendeeName = attendee.name;
+      seat.attendeeTags = undefined;
+    },
     clearSeatLocally(attendeeId: string) {
       const attendee = this.attendees.find((item) => item.id === attendeeId);
       for (const seat of this.seats.filter((item) => item.attendeeId === attendeeId)) {
         seat.status = "EMPTY";
+        seat.unregistered = false;
         seat.attendeeId = undefined;
         seat.attendeeName = undefined;
         seat.attendeeTags = undefined;
       }
+      if (attendee) {
+        attendee.seatLabel = undefined;
+        attendee.seatAssigned = false;
+      }
+    },
+    clearUnregisteredSeatLocally(seatId: string) {
+      const seat = this.seats.find((item) => item.id === seatId);
+      if (!seat || (!seat.unregistered && seat.status !== "UNREGISTERED")) return;
+
+      const attendee = seat.attendeeId ? this.attendees.find((item) => item.id === seat.attendeeId) : undefined;
+      seat.status = "EMPTY";
+      seat.unregistered = false;
+      seat.attendeeId = undefined;
+      seat.attendeeName = undefined;
+      seat.attendeeTags = undefined;
       if (attendee) {
         attendee.seatLabel = undefined;
         attendee.seatAssigned = false;
@@ -3720,23 +3901,26 @@ export const useMeetingStore = defineStore("meeting", {
     setSeatLockedLocally(seatId: string, locked: boolean) {
       const seat = this.seats.find((item) => item.id === seatId);
       if (!seat) return;
-      if (seat.status === "DISABLED") {
-        throw new Error("停用座位不能锁定");
+      if (seat.status === "DISABLED" || seat.status === "AISLE" || seat.aisle) {
+        throw new Error(seat.status === "AISLE" || seat.aisle ? "过道不能锁定" : "停用座位不能锁定");
       }
       seat.locked = locked;
     },
     updateSeatTypeLocally(seatId: string, seatType: Seat["seatType"]) {
       const seat = this.seats.find((item) => item.id === seatId);
       if (!seat) return;
-      if (seat.status === "DISABLED") {
-        throw new Error("停用座位不能修改类型");
+      if (seat.status === "DISABLED" || seat.status === "AISLE" || seat.aisle) {
+        throw new Error(seat.status === "AISLE" || seat.aisle ? "过道不能修改类型" : "停用座位不能修改类型");
       }
       seat.seatType = seatType;
     },
     setSeatDisabledLocally(seatId: string, disabled: boolean) {
       const seat = this.seats.find((item) => item.id === seatId);
       if (!seat) return;
-      if (disabled && (seat.attendeeId || seat.status === "ASSIGNED" || seat.status === "CHECKED_IN")) {
+      if (seat.status === "AISLE" || seat.aisle) {
+        throw new Error("过道不能设置为普通禁用座，请先取消过道");
+      }
+      if (disabled && (seat.attendeeId || seat.status === "ASSIGNED" || seat.status === "UNREGISTERED" || seat.status === "CHECKED_IN")) {
         throw new Error("该座位已有人员入座，请先解除座位分配后再停用");
       }
       seat.status = disabled ? "DISABLED" : "EMPTY";
@@ -3748,6 +3932,24 @@ export const useMeetingStore = defineStore("meeting", {
       seat.attendeeName = undefined;
       seat.attendeeTags = undefined;
     },
+    setSeatAisleLocally(seatId: string, aisle: boolean) {
+      const seat = this.seats.find((item) => item.id === seatId);
+      if (!seat) return;
+      if (aisle && (seat.attendeeId || seat.status === "ASSIGNED" || seat.status === "UNREGISTERED" || seat.status === "CHECKED_IN")) {
+        throw new Error("该位置已有人员入座，请先解除座位分配后再设为过道");
+      }
+      seat.aisle = aisle;
+      seat.locked = false;
+      seat.attendeeId = undefined;
+      seat.attendeeName = undefined;
+      seat.attendeeTags = undefined;
+      if (aisle) {
+        seat.status = "AISLE";
+        return;
+      }
+      seat.status = "EMPTY";
+      if (seat.seatType === "DISABLED") seat.seatType = "NORMAL";
+    },
     saveSeatLayoutLocally(payload: SeatLayoutPayload) {
       const meetingId = this.currentMeetingId;
       const nextAreaName = payload.areaName.trim() || "A区";
@@ -3755,14 +3957,16 @@ export const useMeetingStore = defineStore("meeting", {
       const renamed = lookupAreaName !== nextAreaName;
       const rowCount = Math.max(1, Math.floor(payload.rowCount));
       const seatsPerRow = Math.max(1, Math.floor(payload.seatsPerRow));
-      const nextSeatType = payload.defaultSeatType || "NORMAL";
+      const requestedSeatType = payload.defaultSeatType;
+      const nextSeatType = requestedSeatType || "NORMAL";
+      const aisleAfterSeatNos = parseAisleAfterSeatNos(payload.aisleSettings, seatsPerRow);
       const areaSeats = this.seats.filter((seat) => seat.meetingId === meetingId && seat.areaName === lookupAreaName);
       if (renamed && this.seats.some((seat) => seat.meetingId === meetingId && seat.areaName === nextAreaName)) {
         throw new Error("区域名称已存在，请换一个名称");
       }
       const removable = areaSeats.filter((seat) => seat.rowNo > rowCount || seat.seatNo > seatsPerRow);
-      if (removable.some((seat) => seat.locked || seat.attendeeId || seat.status === "ASSIGNED" || seat.status === "CHECKED_IN")) {
-        throw new Error("缩小座位数量会删除已分配或锁定座位，请先清空这些座位后再调整");
+      if (removable.some((seat) => seat.locked || seat.attendeeId || seat.status === "ASSIGNED" || seat.status === "UNREGISTERED" || seat.status === "CHECKED_IN")) {
+        throw new Error("缩小座位数量会删除已入座或锁定座位，请先清空这些座位后再调整");
       }
 
       // 本地演示模式也按“原区域名 -> 新区域名”处理，保证改名不会误建第二个区域。
@@ -3775,8 +3979,9 @@ export const useMeetingStore = defineStore("meeting", {
                 areaName: nextAreaName,
                 areaSortOrder: payload.sortOrder,
                 seatCode: `${nextAreaName}-${seat.rowNo}-${seat.seatNo}`,
-                // 布局弹窗的默认座位类型是区域级批量设置，保存后旧座位也要同步更新。
-                seatType: nextSeatType
+                // 布局调整不能改变已有座位类型；只有旧调用方明确提交类型时才批量更新。
+                ...(requestedSeatType ? { seatType: requestedSeatType } : {}),
+                aisleAfterSeatNos
               }
             : seat
         );
@@ -3795,7 +4000,8 @@ export const useMeetingStore = defineStore("meeting", {
             seatCode: `${nextAreaName}-${rowNo}-${seatNo}`,
             seatType: nextSeatType,
             status: "EMPTY",
-            locked: false
+            locked: false,
+            aisleAfterSeatNos
           });
         }
       }
@@ -3804,8 +4010,8 @@ export const useMeetingStore = defineStore("meeting", {
       const meetingId = this.currentMeetingId;
       const areaSeats = this.seats.filter((seat) => seat.meetingId === meetingId && seat.areaName === areaName);
       if (!areaSeats.length) return;
-      if (areaSeats.some((seat) => seat.locked || seat.attendeeId || seat.status === "ASSIGNED" || seat.status === "CHECKED_IN")) {
-        throw new Error("删除区域会删除已分配或锁定座位，请先清空这些座位后再删除");
+      if (areaSeats.some((seat) => seat.locked || seat.attendeeId || seat.status === "ASSIGNED" || seat.status === "UNREGISTERED" || seat.status === "CHECKED_IN")) {
+        throw new Error("删除区域会删除已入座或锁定座位，请先清空这些座位后再删除");
       }
       this.seats = this.seats.filter((seat) => !(seat.meetingId === meetingId && seat.areaName === areaName));
     },
@@ -3942,7 +4148,8 @@ function mapAttendee(item: AttendeeDto, meetingId: string): Attendee {
     tduckDataId: item.tduckDataId,
     attendeeCode: item.attendeeCode,
     name: item.name,
-    phone: item.phone,
+    phone: item.phone || "",
+    unregistered: Boolean(item.unregistered),
     company: item.organization || "",
     title: item.title || "",
     identityNo: item.identityNo,
@@ -3970,6 +4177,54 @@ function mapAttendee(item: AttendeeDto, meetingId: string): Attendee {
   };
 }
 
+function mergeAttendeeResponseKeepingAssignments(item: AttendeeDto, existing: Attendee | undefined, fallbackMeetingId: string): Attendee {
+  const updated = mapAttendee(item, existing?.meetingId || fallbackMeetingId);
+  if (!existing) return updated;
+
+  /*
+   * 资料编辑接口只返回 Attendee 实体，未聚合当前座位、晚宴和查询记录。
+   * 这些值已经在列表中加载过，保存资料时必须保留，避免前端错误显示为“未分配/未查询”。
+   */
+  return {
+    ...existing,
+    ...updated,
+    // 新旧后端在资料接口的响应字段曾有差异；未返回的标签和来源标记不能被默认值覆盖。
+    tags: item.tags == null ? existing.tags : updated.tags,
+    unregistered: item.unregistered == null ? existing.unregistered : updated.unregistered,
+    seatLabel: existing.seatLabel,
+    roomId: existing.roomId,
+    seatAssigned: existing.seatAssigned,
+    roomAssigned: existing.roomAssigned,
+    dinnerAssigned: existing.dinnerAssigned,
+    seatQueried: existing.seatQueried,
+    roomQueried: existing.roomQueried,
+    dinnerQueried: existing.dinnerQueried
+  };
+}
+
+function normalizeAisleAfterSeatNos(value: unknown, seatsPerRow = 80): number[] {
+  if (!Array.isArray(value)) return [];
+  const maxSeatNo = Math.max(1, Math.floor(seatsPerRow));
+  return Array.from(
+    new Set(
+      value
+        .map((item) => (typeof item === "number" ? item : Number(item)))
+        .filter((seatNo) => Number.isInteger(seatNo) && seatNo >= 1 && seatNo < maxSeatNo)
+    )
+  ).sort((left, right) => left - right);
+}
+
+function parseAisleAfterSeatNos(aisleSettings: string | undefined, seatsPerRow: number): number[] {
+  const match = aisleSettings?.trim().match(/^v1:(.*)$/);
+  if (!match || !match[1]) return [];
+  return normalizeAisleAfterSeatNos(match[1].split(","), seatsPerRow);
+}
+
+function normalizeAisleSettings(aisleSettings: string | undefined, seatsPerRow: number): string {
+  const aisleAfterSeatNos = parseAisleAfterSeatNos(aisleSettings, seatsPerRow);
+  return aisleAfterSeatNos.length ? `v1:${aisleAfterSeatNos.join(",")}` : "";
+}
+
 function mapSeat(item: SeatViewDto, meetingId: string): Seat {
   return {
     id: idOf(item.seatId),
@@ -3982,6 +4237,10 @@ function mapSeat(item: SeatViewDto, meetingId: string): Seat {
     seatType: item.seatType,
     status: item.status,
     locked: item.locked,
+    structuralBlank: Boolean(item.structuralBlank),
+    aisle: Boolean(item.aisle),
+    aisleAfterSeatNos: normalizeAisleAfterSeatNos(item.aisleAfterSeatNos),
+    unregistered: Boolean(item.unregistered),
     attendeeId: item.attendeeId == null ? undefined : idOf(item.attendeeId),
     attendeeName: item.attendeeName,
     attendeeTags: item.attendeeTags
@@ -4593,6 +4852,7 @@ function localAdminCandidates(store: ReturnType<typeof useMeetingStore>, meeting
       attendeeId: Number(attendee.id),
       attendeeName: attendee.name,
       phone: attendee.phone,
+      unregistered: attendee.unregistered,
       organization: attendee.company,
       title: attendee.title,
       reviewStatus: attendee.auditStatus,
@@ -4738,6 +4998,38 @@ function normalizeRoomCapacity(capacity: number | null | undefined) {
 
 function normalizeTags(tags: string[]) {
   return Array.from(new Set(tags.map((tag) => tag.trim()).filter(Boolean)));
+}
+
+function normalizeUnregisteredProfileFormValues(values: Record<string, string>) {
+  return Object.entries(values).reduce<Record<string, string>>((result, [key, value]) => {
+    const normalizedKey = key.trim();
+    if (!normalizedKey) return result;
+    result[normalizedKey] = typeof value === "string" ? value.trim() : String(value ?? "").trim();
+    return result;
+  }, {});
+}
+
+function mappedUnregisteredProfileValue(
+  mappings: TduckFieldMappingDto[],
+  formValues: Record<string, string>,
+  attendeeField: string
+) {
+  const mapping = mappings.find((item) => item.attendeeField === attendeeField && item.tduckFieldKey.trim());
+  if (!mapping) return { mapped: false, value: "" };
+
+  const key = mapping.tduckFieldKey.trim();
+  const labelKey = `${key}label`;
+  // TDuck 的选择组件会同时保存内部值和展示值；资料编辑优先沿用展示值。
+  const value = Object.prototype.hasOwnProperty.call(formValues, labelKey) ? formValues[labelKey] : formValues[key];
+  return { mapped: true, value: (value || "").trim() };
+}
+
+function normalizeLocalOptionalPhone(value?: string) {
+  const normalized = value?.trim().replace(/[\s-]/g, "") || "";
+  if (normalized && !/^\+?\d{6,20}$/.test(normalized)) {
+    throw new Error("手机号格式不正确");
+  }
+  return normalized;
 }
 
 function mapExportTask(item: ExportTaskWireDto): ExportTaskDto {

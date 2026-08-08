@@ -1,16 +1,20 @@
 package com.meetingos.seating;
 
 import com.meetingos.attendee.Attendee;
+import com.meetingos.attendee.AttendeeCodeGenerator;
 import com.meetingos.attendee.AttendeeRepository;
 import com.meetingos.attendee.AttendeeType;
+import com.meetingos.attendee.CheckinStatus;
 import com.meetingos.attendee.ReviewStatus;
 import com.meetingos.common.BusinessException;
 import com.meetingos.meeting.Meeting;
 import com.meetingos.meeting.MeetingRepository;
 import com.meetingos.security.SecurityUtils;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
+import java.time.LocalDateTime;
 import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.EnumMap;
@@ -27,27 +31,46 @@ import java.util.Objects;
 import java.util.Set;
 import java.util.TreeMap;
 import java.util.TreeSet;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
 import java.util.stream.Collectors;
 
 @Service
 public class SeatingService {
+
+    private static final String AISLE_SETTINGS_V1_PREFIX = "v1:";
+    private static final Pattern LEGACY_AISLE_AFTER_SEAT_PATTERN = Pattern.compile(
+            "(\\d+)\\s*(?:号)?\\s*座\\s*后\\s*(?:过道|通道)"
+    );
 
     private final MeetingRepository meetingRepository;
     private final AttendeeRepository attendeeRepository;
     private final SeatLayoutRepository layoutRepository;
     private final SeatRepository seatRepository;
     private final SeatAssignmentRepository assignmentRepository;
+    private final AttendeeCodeGenerator attendeeCodeGenerator;
 
+    @Autowired
     public SeatingService(MeetingRepository meetingRepository,
                           AttendeeRepository attendeeRepository,
                           SeatLayoutRepository layoutRepository,
                           SeatRepository seatRepository,
-                          SeatAssignmentRepository assignmentRepository) {
+                          SeatAssignmentRepository assignmentRepository,
+                          AttendeeCodeGenerator attendeeCodeGenerator) {
         this.meetingRepository = meetingRepository;
         this.attendeeRepository = attendeeRepository;
         this.layoutRepository = layoutRepository;
         this.seatRepository = seatRepository;
         this.assignmentRepository = assignmentRepository;
+        this.attendeeCodeGenerator = attendeeCodeGenerator;
+    }
+
+    SeatingService(MeetingRepository meetingRepository,
+                   AttendeeRepository attendeeRepository,
+                   SeatLayoutRepository layoutRepository,
+                   SeatRepository seatRepository,
+                   SeatAssignmentRepository assignmentRepository) {
+        this(meetingRepository, attendeeRepository, layoutRepository, seatRepository, assignmentRepository, null);
     }
 
     @Transactional
@@ -74,15 +97,23 @@ public class SeatingService {
 
         boolean overrideDisabledSeats = request.disabledSeatCodes() != null;
         Set<String> disabledCodes = overrideDisabledSeats ? new HashSet<>(request.disabledSeatCodes()) : Set.of();
-        SeatType requestedSeatType = request.defaultSeatType() == null ? SeatType.NORMAL : request.defaultSeatType();
+        boolean overrideStructuralBlanks = request.structuralBlankSeatCodes() != null;
+        Set<String> structuralBlankCodes = overrideStructuralBlanks ? new HashSet<>(request.structuralBlankSeatCodes()) : Set.of();
+        boolean overrideAisles = request.aisleSeatCodes() != null;
+        Set<String> aisleCodes = overrideAisles ? new HashSet<>(request.aisleSeatCodes()) : Set.of();
+        SeatType requestedSeatType = request.defaultSeatType();
+        boolean overrideSeatType = requestedSeatType != null;
         Map<String, Seat> existingByPosition = existingSeats.stream()
                 .collect(Collectors.toMap(this::positionKey, seat -> seat));
         List<Seat> seatsToDelete = seatsOutsideLayout(existingSeats, request.rowCount(), request.seatsPerRow());
         ensureSeatsCanBeRemoved(seatsToDelete);
+        if (overrideAisles) {
+            ensureSeatsCanBecomeAisles(existingSeats, request.rowCount(), request.seatsPerRow(), areaName, aisleCodes);
+        }
 
         // 管理员调整座位数量时，同一区域按“创建或更新”处理：
         // 1. 已存在且仍在新范围内的座位保留 ID、锁定、分配状态，避免丢失手动排座结果。
-        // 2. 默认座位类型是区域级配置，管理员在布局弹窗切换后应覆盖该区域当前范围内座位类型。
+        // 2. 只有旧调用方明确提交座位类型时才批量覆盖；布局调整本身不能重置既有座位类型。
         // 3. 新增出来的位置补建座位。
         // 4. 缩小范围时只删除未锁定且未分配的座位，防止误删业务结果。
         List<Seat> seatsToSave = new ArrayList<>();
@@ -96,14 +127,45 @@ public class SeatingService {
                     seat.setRowNo(row);
                     seat.setSeatNo(no);
                     seat.setDisabled(disabledCodes.contains(seatCode));
+                    seat.setSeatType(overrideSeatType ? requestedSeatType : SeatType.NORMAL);
                 }
                 seat.setLayout(layout);
                 // 区域改名时复用原座位 ID，保证已有手动排座/签到关系继续指向同一个座位。
                 seat.setAreaName(areaName);
                 seat.setSeatCode(seatCode);
-                seat.setSeatType(requestedSeatType);
-                if (overrideDisabledSeats) {
-                    seat.setDisabled(disabledCodes.contains(seatCode));
+                boolean wasAisle = seat.isAisle();
+                boolean aisle = overrideAisles ? aisleCodes.contains(seatCode) : wasAisle;
+                if (aisle) {
+                    // 过道不是“被人工停用的座位”，但同样必须从所有排座路径中排除。
+                    // 强制归一化其状态，避免旧布局请求的默认座位类型、锁定或结构留白残留。
+                    seat.setAisle(true);
+                    seat.setSeatType(SeatType.NORMAL);
+                    seat.setDisabled(true);
+                    seat.setLocked(false);
+                    seat.setStructuralBlank(false);
+                } else {
+                    if (wasAisle) {
+                        // 批量布局里取消过道时，若调用方未提交禁用清单，也要恢复为可用位置。
+                        seat.setAisle(false);
+                        seat.setStructuralBlank(false);
+                        seat.setLocked(false);
+                        if (!overrideDisabledSeats) {
+                            seat.setDisabled(false);
+                        }
+                    }
+                    if (overrideSeatType) {
+                        seat.setSeatType(requestedSeatType);
+                    }
+                    if (overrideStructuralBlanks) {
+                        seat.setStructuralBlank(structuralBlankCodes.contains(seatCode));
+                    }
+                    if (seat.isStructuralBlank()) {
+                        // 结构留白不可参与自动/手动排座，也不应保留锁定状态。
+                        seat.setDisabled(true);
+                        seat.setLocked(false);
+                    } else if (overrideDisabledSeats) {
+                        seat.setDisabled(disabledCodes.contains(seatCode));
+                    }
                 }
                 seatsToSave.add(seat);
             }
@@ -127,6 +189,14 @@ public class SeatingService {
         if (request.disabledSeatCodes() != null
                 && request.disabledSeatCodes().size() > SeatLayoutRequest.MAX_SEATS_PER_AREA) {
             throw BusinessException.badRequest("禁用座位数量不能超过 6400");
+        }
+        if (request.structuralBlankSeatCodes() != null
+                && request.structuralBlankSeatCodes().size() > SeatLayoutRequest.MAX_SEATS_PER_AREA) {
+            throw BusinessException.badRequest("结构空白数量不能超过 6400");
+        }
+        if (request.aisleSeatCodes() != null
+                && request.aisleSeatCodes().size() > SeatLayoutRequest.MAX_SEATS_PER_AREA) {
+            throw BusinessException.badRequest("过道数量不能超过 6400");
         }
     }
 
@@ -178,6 +248,7 @@ public class SeatingService {
         Map<Long, SeatAssignment> assignedBySeat = existingAssignments.stream()
                 .collect(Collectors.toMap(assignment -> assignment.getSeat().getId(), assignment -> assignment));
         List<Seat> availableSeats = seatRepository.findByMeetingIdAndDisabledFalseOrderByRowNoAscSeatNoAsc(meetingId).stream()
+                .filter(seat -> !seat.isAisle())
                 .filter(seat -> !seat.isLocked())
                 .filter(seat -> !assignedBySeat.containsKey(seat.getId()))
                 .toList();
@@ -229,6 +300,51 @@ public class SeatingService {
     }
 
     @Transactional
+    public SeatAssignment assignUnregistered(AssignUnregisteredSeatRequest request) {
+        Seat seat = seatRepository.findById(request.seatId())
+                .orElseThrow(() -> BusinessException.notFound("座位不存在"));
+        ensureAssignableSeat(seat);
+        assignmentRepository.findBySeatId(seat.getId()).ifPresent(existing -> {
+            throw BusinessException.conflict("座位已被分配，请先清空或交换座位");
+        });
+
+        String phone = normalizeOptionalPhone(request.phone());
+        if (phone != null) {
+            attendeeRepository.findByMeetingIdAndPhone(seat.getMeeting().getId(), phone)
+                    .ifPresent(existing -> {
+                        throw BusinessException.conflict("该手机号已存在参会人，请从参会人列表分配座位");
+                    });
+        }
+
+        Attendee attendee = new Attendee();
+        attendee.setMeeting(seat.getMeeting());
+        attendee.setName(request.attendeeName().trim());
+        attendee.setPhone(phone);
+        attendee.setAttendeeType(AttendeeType.NORMAL);
+        attendee.setReviewStatus(ReviewStatus.APPROVED);
+        attendee.setReviewedAt(LocalDateTime.now());
+        attendee.setReviewedBy(SecurityUtils.currentUsernameOrSystem());
+        // 现场入座不是 TDuck 报名，不写 registeredAt/tduckDataId，避免伪造成普通报名记录。
+        attendee.setCheckinStatus(CheckinStatus.NOT_CHECKED_IN);
+        attendee.setUnregistered(true);
+        attendee.setAttendeeCode(requireAttendeeCodeGenerator().generate(seat.getMeeting()));
+        Attendee saved = attendeeRepository.saveAndFlush(attendee);
+        return saveAssignment(seat.getMeeting(), saved, seat, true);
+    }
+
+    @Transactional
+    public void clearUnregistered(Long seatId) {
+        Seat seat = seatRepository.findById(seatId)
+                .orElseThrow(() -> BusinessException.notFound("座位不存在"));
+        SeatAssignment assignment = assignmentRepository.findBySeatId(seat.getId())
+                .orElseThrow(() -> BusinessException.notFound("该座位没有未报名人员入座"));
+        if (!assignment.getAttendee().isUnregistered()) {
+            throw BusinessException.badRequest("该座位分配的是已报名参会人");
+        }
+        assignmentRepository.delete(assignment);
+    }
+
+    @Transactional
     public void swap(SwapSeatRequest request) {
         if (Objects.equals(request.firstAttendeeId(), request.secondAttendeeId())) {
             throw BusinessException.badRequest("不能和同一个参会人交换座位");
@@ -245,6 +361,8 @@ public class SeatingService {
         Attendee secondAttendee = second.getAttendee();
         Seat firstSeat = first.getSeat();
         Seat secondSeat = second.getSeat();
+        ensureNotAisle(firstSeat);
+        ensureNotAisle(secondSeat);
 
         /*
          * seat_assignments 同时对 attendee_id 和 seat_id 建了唯一索引。
@@ -267,6 +385,8 @@ public class SeatingService {
     public Seat lock(Long seatId, SeatLockRequest request) {
         Seat seat = seatRepository.findById(seatId)
                 .orElseThrow(() -> BusinessException.notFound("座位不存在"));
+        ensureNotStructuralBlank(seat);
+        ensureNotAisle(seat);
         seat.setLocked(request.locked());
         return seat;
     }
@@ -275,6 +395,8 @@ public class SeatingService {
     public Seat updateSeatType(Long seatId, SeatTypeRequest request) {
         Seat seat = seatRepository.findById(seatId)
                 .orElseThrow(() -> BusinessException.notFound("座位不存在"));
+        ensureNotStructuralBlank(seat);
+        ensureNotAisle(seat);
         if (request.seatType() == SeatType.DISABLED) {
             ensureSeatCanBeDisabled(seat);
         }
@@ -287,6 +409,8 @@ public class SeatingService {
     public Seat updateSeatDisabled(Long seatId, SeatDisabledRequest request) {
         Seat seat = seatRepository.findById(seatId)
                 .orElseThrow(() -> BusinessException.notFound("座位不存在"));
+        ensureNotStructuralBlank(seat);
+        ensureNotAisle(seat);
         if (request.disabled()) {
             ensureSeatCanBeDisabled(seat);
         }
@@ -298,6 +422,34 @@ public class SeatingService {
         if (request.disabled()) {
             seat.setLocked(false);
         }
+        return seat;
+    }
+
+    @Transactional
+    public Seat updateSeatAisle(Long seatId, SeatAisleRequest request) {
+        Seat seat = seatRepository.findById(seatId)
+                .orElseThrow(() -> BusinessException.notFound("座位不存在"));
+        if (request.aisle()) {
+            ensureSeatHasNoAssignment(seat, "该座位已有人员入座，请先解除座位分配后再设为过道");
+            // 过道占据网格位置，但不是座位。强制清除与座位概念冲突的配置，保证切换可逆。
+            seat.setAisle(true);
+            seat.setDisabled(true);
+            seat.setLocked(false);
+            seat.setStructuralBlank(false);
+            seat.setSeatType(SeatType.NORMAL);
+            return seat;
+        }
+
+        // 对非过道的 false 请求保持幂等，避免误将普通禁用座位或结构留白重新启用。
+        if (!seat.isAisle()) {
+            return seat;
+        }
+        ensureSeatHasNoAssignment(seat, "过道仍有关联人员，不能恢复为座位");
+        seat.setAisle(false);
+        seat.setDisabled(false);
+        seat.setLocked(false);
+        seat.setStructuralBlank(false);
+        seat.setSeatType(SeatType.NORMAL);
         return seat;
     }
 
@@ -325,7 +477,8 @@ public class SeatingService {
         if (name != null && !name.isBlank() && !Objects.equals(attendee.getName(), name)) {
             throw BusinessException.notFound("姓名与手机号不匹配");
         }
-        if (phoneLast4 != null && !phoneLast4.isBlank() && !attendee.getPhone().endsWith(phoneLast4)) {
+        if (phoneLast4 != null && !phoneLast4.isBlank()
+                && (attendee.getPhone() == null || !attendee.getPhone().endsWith(phoneLast4))) {
             throw BusinessException.notFound("手机号后四位不匹配");
         }
         if (attendee.getReviewStatus() != ReviewStatus.APPROVED) {
@@ -363,15 +516,41 @@ public class SeatingService {
         if (!Objects.equals(attendee.getMeeting().getId(), seat.getMeeting().getId())) {
             throw BusinessException.badRequest("参会人与座位不属于同一会议");
         }
+        ensureNotAisle(seat);
         if (seat.isDisabled() || seat.getSeatType() == SeatType.DISABLED) {
             throw BusinessException.badRequest("禁用座位不能分配");
+        }
+        ensureNotStructuralBlank(seat);
+    }
+
+    private void ensureAssignableSeat(Seat seat) {
+        ensureNotAisle(seat);
+        if (seat.isDisabled() || seat.getSeatType() == SeatType.DISABLED) {
+            throw BusinessException.badRequest("禁用座位不能分配");
+        }
+        ensureNotStructuralBlank(seat);
+    }
+
+    private void ensureNotStructuralBlank(Seat seat) {
+        if (seat.isStructuralBlank()) {
+            throw BusinessException.badRequest("结构空白不能修改或分配");
+        }
+    }
+
+    private void ensureNotAisle(Seat seat) {
+        if (seat.isAisle()) {
+            throw BusinessException.badRequest("过道不能修改或分配");
         }
     }
 
     private void ensureSeatCanBeDisabled(Seat seat) {
         // 禁用座位会从座位图和自动排座中排除；若已有分配关系，必须先解除，避免出现“人还占座但座位不可见”的业务脏状态。
+        ensureSeatHasNoAssignment(seat, "该座位已有人员入座，请先解除座位分配后再停用");
+    }
+
+    private void ensureSeatHasNoAssignment(Seat seat, String assignedSeatMessage) {
         if (assignmentRepository.findBySeatId(seat.getId()).isPresent()) {
-            throw BusinessException.conflict("该座位已有人员入座，请先解除座位分配后再停用");
+            throw BusinessException.conflict(assignedSeatMessage);
         }
     }
 
@@ -536,7 +715,7 @@ public class SeatingService {
         layout.setSeatsPerRow(request.seatsPerRow());
         layout.setSortOrder(request.sortOrder() == null ? nextSortOrder(layout) : Math.max(0, request.sortOrder()));
         layout.setNumberingRule(request.numberingRule());
-        layout.setAisleSettings(request.aisleSettings());
+        layout.setAisleSettings(normalizeAisleSettings(request.aisleSettings(), request.seatsPerRow()));
         layout.setStageDirection(request.stageDirection());
     }
 
@@ -577,6 +756,22 @@ public class SeatingService {
         }
     }
 
+    private void ensureSeatsCanBecomeAisles(List<Seat> existingSeats,
+                                             int rowCount,
+                                             int seatsPerRow,
+                                             String areaName,
+                                             Set<String> aisleCodes) {
+        Set<Long> targetSeatIds = existingSeats.stream()
+                .filter(seat -> seat.getRowNo() <= rowCount && seat.getSeatNo() <= seatsPerRow)
+                .filter(seat -> aisleCodes.contains(areaName + "-" + seat.getRowNo() + "-" + seat.getSeatNo()))
+                .map(Seat::getId)
+                .filter(Objects::nonNull)
+                .collect(Collectors.toSet());
+        if (!targetSeatIds.isEmpty() && assignmentRepository.existsBySeatIdIn(targetSeatIds)) {
+            throw BusinessException.conflict("已分配座位不能改为过道，请先解除座位分配");
+        }
+    }
+
     private void ensureAreaHasNoAssignments(List<Seat> areaSeats) {
         if (areaSeats.isEmpty()) {
             return;
@@ -588,22 +783,103 @@ public class SeatingService {
     }
 
     private SeatView toView(Seat seat, SeatAssignment assignment) {
+        List<Integer> aisleAfterSeatNos = aisleAfterSeatNos(seat);
+        if (seat.isAisle()) {
+            return new SeatView(seat.getId(), seat.getAreaName(), areaSortOrder(seat), seat.getRowNo(), seat.getSeatNo(),
+                    seat.getSeatCode(), seat.getSeatType(), SeatStatus.AISLE, false, false, true, aisleAfterSeatNos,
+                    false, null, null, null);
+        }
         if (seat.isDisabled() || seat.getSeatType() == SeatType.DISABLED) {
             return new SeatView(seat.getId(), seat.getAreaName(), areaSortOrder(seat), seat.getRowNo(), seat.getSeatNo(),
-                    seat.getSeatCode(), seat.getSeatType(), SeatStatus.DISABLED, seat.isLocked(), null, null, null);
+                    seat.getSeatCode(), seat.getSeatType(), SeatStatus.DISABLED, seat.isLocked(), seat.isStructuralBlank(), false,
+                    aisleAfterSeatNos, false, null, null, null);
         }
         if (assignment == null) {
             return new SeatView(seat.getId(), seat.getAreaName(), areaSortOrder(seat), seat.getRowNo(), seat.getSeatNo(),
-                    seat.getSeatCode(), seat.getSeatType(), SeatStatus.EMPTY, seat.isLocked(), null, null, null);
+                    seat.getSeatCode(), seat.getSeatType(), SeatStatus.EMPTY, seat.isLocked(), seat.isStructuralBlank(), false,
+                    aisleAfterSeatNos, false, null, null, null);
         }
         Attendee attendee = assignment.getAttendee();
-        SeatStatus status = attendee.getCheckinStatus().name().equals("CHECKED_IN") ? SeatStatus.CHECKED_IN : SeatStatus.ASSIGNED;
+        // “未报名入座”是人员来源，而不是签到状态。两者拆开返回，现场签到后既能保留来源标记，也能正确计入已签到。
+        SeatStatus status = attendee.getCheckinStatus() == CheckinStatus.CHECKED_IN ? SeatStatus.CHECKED_IN : SeatStatus.ASSIGNED;
         return new SeatView(seat.getId(), seat.getAreaName(), areaSortOrder(seat), seat.getRowNo(), seat.getSeatNo(),
-                seat.getSeatCode(), seat.getSeatType(), status, seat.isLocked(),
+                seat.getSeatCode(), seat.getSeatType(), status, seat.isLocked(), seat.isStructuralBlank(), false,
+                aisleAfterSeatNos, attendee.isUnregistered(),
                 attendee.getId(), attendee.getName(), attendee.getTags());
+    }
+
+    private List<Integer> aisleAfterSeatNos(Seat seat) {
+        SeatLayout layout = seat.getLayout();
+        if (layout == null || layout.getSeatsPerRow() < 2) {
+            return List.of();
+        }
+        return parseAisleAfterSeatNos(layout.getAisleSettings(), layout.getSeatsPerRow());
+    }
+
+    /**
+     * 布局级过道只描述“第 N 座后”的间距，不能占用真实座位编号。
+     * 兼容早期以中文文案保存的配置，读取时统一过滤非法位置，避免旧数据影响座位图渲染。
+     */
+    private List<Integer> parseAisleAfterSeatNos(String aisleSettings, int seatsPerRow) {
+        if (aisleSettings == null || aisleSettings.isBlank() || seatsPerRow < 2) {
+            return List.of();
+        }
+
+        TreeSet<Integer> aisleAfterSeatNos = new TreeSet<>();
+        String normalizedSettings = aisleSettings.trim();
+        if (normalizedSettings.regionMatches(true, 0, AISLE_SETTINGS_V1_PREFIX, 0, AISLE_SETTINGS_V1_PREFIX.length())) {
+            for (String value : normalizedSettings.substring(AISLE_SETTINGS_V1_PREFIX.length()).split("[,，]")) {
+                addAisleAfterSeatNo(aisleAfterSeatNos, value, seatsPerRow);
+            }
+        } else {
+            Matcher matcher = LEGACY_AISLE_AFTER_SEAT_PATTERN.matcher(normalizedSettings);
+            while (matcher.find()) {
+                addAisleAfterSeatNo(aisleAfterSeatNos, matcher.group(1), seatsPerRow);
+            }
+        }
+        return aisleAfterSeatNos.isEmpty() ? List.of() : List.copyOf(aisleAfterSeatNos);
+    }
+
+    private String normalizeAisleSettings(String aisleSettings, int seatsPerRow) {
+        List<Integer> aisleAfterSeatNos = parseAisleAfterSeatNos(aisleSettings, seatsPerRow);
+        if (aisleAfterSeatNos.isEmpty()) {
+            return null;
+        }
+        return AISLE_SETTINGS_V1_PREFIX + aisleAfterSeatNos.stream()
+                .map(String::valueOf)
+                .collect(Collectors.joining(","));
+    }
+
+    private void addAisleAfterSeatNo(TreeSet<Integer> aisleAfterSeatNos, String value, int seatsPerRow) {
+        try {
+            int seatNo = Integer.parseInt(value.trim());
+            if (seatNo >= 1 && seatNo < seatsPerRow) {
+                aisleAfterSeatNos.add(seatNo);
+            }
+        } catch (NumberFormatException ignored) {
+            // 旧配置可能来自可编辑文本；无法识别的片段不应阻断座位图查询。
+        }
     }
 
     private int areaSortOrder(Seat seat) {
         return seat.getLayout() == null ? 0 : seat.getLayout().getSortOrder();
+    }
+
+    private String normalizeOptionalPhone(String phone) {
+        if (phone == null || phone.isBlank()) {
+            return null;
+        }
+        String normalized = phone.replaceAll("[\\s-]", "");
+        if (!normalized.matches("^\\+?\\d{6,20}$")) {
+            throw BusinessException.badRequest("手机号格式不正确");
+        }
+        return normalized;
+    }
+
+    private AttendeeCodeGenerator requireAttendeeCodeGenerator() {
+        if (attendeeCodeGenerator == null) {
+            throw new IllegalStateException("未配置参会码生成器");
+        }
+        return attendeeCodeGenerator;
     }
 }

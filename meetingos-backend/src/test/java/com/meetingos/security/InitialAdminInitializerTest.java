@@ -9,6 +9,7 @@ import java.util.List;
 import java.util.Optional;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
@@ -36,5 +37,20 @@ class InitialAdminInitializerTest {
         assertThat(created.getUsername()).isEqualTo("platform-root");
         assertThat(created.getStatus()).isEqualTo(UserStatus.ACTIVE);
         assertThat(created.getRoles()).contains(Role.SUPER_ADMIN, Role.MEETING_ADMIN);
+    }
+
+    @Test
+    void rejectsInitialPasswordShorterThanTwelveCharacters() {
+        AppUserRepository userRepository = mock(AppUserRepository.class);
+        PasswordEncoder passwordEncoder = mock(PasswordEncoder.class);
+        InitialAdminProperties properties = new InitialAdminProperties();
+        properties.setPassword("short-pass1");
+
+        when(userRepository.findByUsername("admin")).thenReturn(Optional.empty());
+        when(userRepository.findAll()).thenReturn(List.of());
+
+        assertThatThrownBy(() -> new InitialAdminInitializer(userRepository, passwordEncoder, properties).run(mock(ApplicationArguments.class)))
+                .isInstanceOf(IllegalStateException.class)
+                .hasMessageContaining("至少 12 位");
     }
 }

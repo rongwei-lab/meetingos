@@ -3,6 +3,7 @@ package com.meetingos.seating;
 import com.meetingos.common.ApiResponse;
 import com.meetingos.operationlog.AuditLog;
 import jakarta.validation.Valid;
+import org.springframework.http.MediaType;
 import org.springframework.security.access.prepost.PreAuthorize;
 import org.springframework.web.bind.annotation.DeleteMapping;
 import org.springframework.web.bind.annotation.GetMapping;
@@ -12,7 +13,9 @@ import org.springframework.web.bind.annotation.PutMapping;
 import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RequestParam;
+import org.springframework.web.bind.annotation.RequestPart;
 import org.springframework.web.bind.annotation.RestController;
+import org.springframework.web.multipart.MultipartFile;
 
 import java.util.List;
 
@@ -21,9 +24,11 @@ import java.util.List;
 public class SeatingController {
 
     private final SeatingService seatingService;
+    private final SeatChartImportService seatChartImportService;
 
-    public SeatingController(SeatingService seatingService) {
+    public SeatingController(SeatingService seatingService, SeatChartImportService seatChartImportService) {
         this.seatingService = seatingService;
+        this.seatChartImportService = seatChartImportService;
     }
 
     @PostMapping("/layouts")
@@ -31,6 +36,16 @@ public class SeatingController {
     @AuditLog(action = "SEATING_CREATE_LAYOUT", targetType = "SEAT_LAYOUT")
     public ApiResponse<List<Seat>> createLayout(@Valid @RequestBody SeatLayoutRequest request) {
         return ApiResponse.ok(seatingService.createLayout(request));
+    }
+
+    @PostMapping(value = "/import-chart", consumes = MediaType.MULTIPART_FORM_DATA_VALUE)
+    @PreAuthorize("@meetingAccess.canManage(#meetingId)")
+    @AuditLog(action = "SEATING_IMPORT_CHART", targetType = "SEAT_LAYOUT")
+    public ApiResponse<SeatChartImportResult> importChart(@RequestParam Long meetingId,
+                                                           @RequestParam(required = false) String venueName,
+                                                           @RequestParam(required = false) String areaName,
+                                                           @RequestPart("file") MultipartFile file) {
+        return ApiResponse.ok(seatChartImportService.importChart(meetingId, venueName, areaName, file));
     }
 
     @DeleteMapping("/layouts")
@@ -53,6 +68,21 @@ public class SeatingController {
     @AuditLog(action = "SEATING_MANUAL_ASSIGN", targetType = "SEAT_ASSIGNMENT")
     public ApiResponse<SeatAssignment> manualAssign(@Valid @RequestBody ManualAssignSeatRequest request) {
         return ApiResponse.ok(seatingService.manualAssign(request));
+    }
+
+    @PostMapping("/unregistered-assignment")
+    @PreAuthorize("@meetingAccess.canManageSeat(#request.seatId())")
+    @AuditLog(action = "SEATING_ASSIGN_UNREGISTERED", targetType = "SEAT")
+    public ApiResponse<SeatAssignment> assignUnregistered(@Valid @RequestBody AssignUnregisteredSeatRequest request) {
+        return ApiResponse.ok(seatingService.assignUnregistered(request));
+    }
+
+    @DeleteMapping("/unregistered-assignment/{seatId}")
+    @PreAuthorize("@meetingAccess.canManageSeat(#seatId)")
+    @AuditLog(action = "SEATING_CLEAR_UNREGISTERED", targetType = "SEAT")
+    public ApiResponse<Void> clearUnregistered(@PathVariable Long seatId) {
+        seatingService.clearUnregistered(seatId);
+        return ApiResponse.ok();
     }
 
     @PostMapping("/swap")
@@ -90,6 +120,13 @@ public class SeatingController {
     @AuditLog(action = "SEATING_TOGGLE_SEAT_DISABLED", targetType = "SEAT")
     public ApiResponse<Seat> updateDisabled(@PathVariable Long seatId, @Valid @RequestBody SeatDisabledRequest request) {
         return ApiResponse.ok(seatingService.updateSeatDisabled(seatId, request));
+    }
+
+    @PutMapping("/seats/{seatId}/aisle")
+    @PreAuthorize("@meetingAccess.canManageSeat(#seatId)")
+    @AuditLog(action = "SEATING_TOGGLE_SEAT_AISLE", targetType = "SEAT")
+    public ApiResponse<Seat> updateAisle(@PathVariable Long seatId, @RequestBody SeatAisleRequest request) {
+        return ApiResponse.ok(seatingService.updateSeatAisle(seatId, request));
     }
 
     @GetMapping("/map/{meetingId}")

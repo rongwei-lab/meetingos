@@ -48,6 +48,22 @@ public class Seat extends BaseEntity {
     @Column(nullable = false)
     private boolean disabled;
 
+    /**
+     * 座位图中的结构留白（例如扇形会场两侧的空格）。
+     *
+     * 留白仍需保留在网格里，才能维持每排的横向坐标；但它不是可用座位，管理端也不应把它
+     * 统计成禁用座位。该状态与人工停用的 disabled 分开保存，避免后续维护布局时误隐藏真实座位。
+     */
+    @Column(nullable = false)
+    private boolean structuralBlank;
+
+    /**
+     * 座位图中的过道。过道需要占据网格坐标以保持现场座位图的版式，
+     * 但不能作为座位被分配、锁定或改成其他座位类型。
+     */
+    @Column(nullable = false)
+    private boolean aisle;
+
     @Column(nullable = false)
     private boolean locked;
 
@@ -113,6 +129,22 @@ public class Seat extends BaseEntity {
 
     public void setDisabled(boolean disabled) {
         this.disabled = disabled;
+    }
+
+    public boolean isStructuralBlank() {
+        return structuralBlank;
+    }
+
+    public void setStructuralBlank(boolean structuralBlank) {
+        this.structuralBlank = structuralBlank;
+    }
+
+    public boolean isAisle() {
+        return aisle;
+    }
+
+    public void setAisle(boolean aisle) {
+        this.aisle = aisle;
     }
 
     public boolean isLocked() {

@@ -112,9 +112,10 @@ H5 还可配置独立签到按钮和单目标查询按钮。签到进入 `/publi
 | 方法 | 路径 | 说明 |
 | --- | --- | --- |
 | `POST` | `/api/admin/attendees` | 新增参会人 |
-| `GET` | `/api/admin/attendees?meetingId={meetingId}` | 查询参会人列表，支持 `keyword`、`reviewStatus`、`checkinStatus`、`attendeeType`、`hasSeat`、`tags` |
+| `GET` | `/api/admin/attendees?meetingId={meetingId}` | 查询参会人列表，支持 `keyword`、`reviewStatus`、`checkinStatus`、`attendeeType`、`hasSeat`、`unregistered`、`tags` |
 | `GET` | `/api/admin/attendees/{attendeeId}` | 查询参会人详情 |
 | `PUT` | `/api/admin/attendees/{attendeeId}` | 修改参会人 |
+| `PUT` | `/api/admin/attendees/{attendeeId}/unregistered-profile` | 更新未报名入座人员的 TDuck 映射资料，请求体仅包含 `formValues` |
 | `PUT` | `/api/admin/attendees/{attendeeId}/review` | 单个审核 |
 | `PUT` | `/api/admin/attendees/batch-review` | 批量审核 |
 | `PUT` | `/api/admin/attendees/{attendeeId}/tags` | 修改标签 |
@@ -142,18 +143,22 @@ H5 还可配置独立签到按钮和单目标查询按钮。签到进入 `/publi
 
 | 方法 | 路径 | 说明 |
 | --- | --- | --- |
-| `POST` | `/api/admin/seating/layout` | 创建或重建座位布局 |
+| `POST` | `/api/admin/seating/layouts` | 创建或更新座位布局 |
+| `POST` | `/api/admin/seating/import-chart` | 上传 `.xlsx` 座位图；multipart 字段为 `file`，并传 `meetingId`、可选 `venueName`、`areaName` |
 | `GET` | `/api/admin/seating/map/{meetingId}` | 查询座位图 |
 | `POST` | `/api/admin/seating/auto-assign/{meetingId}` | 自动排座 |
 | `POST` | `/api/admin/seating/manual-assign` | 手动分配座位 |
+| `POST` | `/api/admin/seating/unregistered-assignment` | 为可用座位创建未报名入座人员；请求为 `seatId`、姓名和可选手机号 |
+| `DELETE` | `/api/admin/seating/unregistered-assignment/{seatId}` | 清空未报名入座人员的座位分配 |
 | `POST` | `/api/admin/seating/swap` | 交换座位 |
 | `POST` | `/api/admin/seating/clear/{attendeeId}` | 清空参会人座位 |
 | `POST` | `/api/admin/seating/lock/{seatId}` | 锁定或解锁座位 |
+| `PUT` | `/api/admin/seating/seats/{seatId}/aisle` | 将空座设置为过道，或恢复为普通座位 |
 | `GET` | `/api/admin/exports/download?meetingId={meetingId}&type=seats` | 导出座位表 |
 | `POST` | `/api/public/seat-query` | 个人座位查询，按会议查询配置校验字段 |
 | `GET` | `/api/public/seat-query?meetingId={meetingId}&phone={phone}` | 个人座位查询旧接口兼容 |
 
-自动排座不得覆盖已锁定座位和已有手动分配结果。
+自动排座不得覆盖已锁定座位和已有手动分配结果；过道和结构留白不可锁定、禁用、分配或参与公开座位查询。未报名入座人员不会伪造 TDuck 数据或报名时间，资料更新仅允许当前会议 TDuck 字段映射白名单。
 
 ## 住宿接口
 

@@ -23,6 +23,7 @@ import com.meetingos.security.SecurityUtils;
 import com.meetingos.seating.SeatAssignmentRepository;
 import com.meetingos.seating.SeatAssignment;
 import com.meetingos.settings.SystemSettingsService;
+import com.meetingos.tduck.AttendeeField;
 import com.meetingos.tduck.TduckFieldMapping;
 import com.meetingos.tduck.TduckFieldMappingRepository;
 import com.meetingos.tduck.TduckSubmissionFields;
@@ -182,7 +183,7 @@ public class AttendeeService {
     @Transactional(readOnly = true)
     public PageResponse<Attendee> search(Long meetingId, String keyword, ReviewStatus reviewStatus,
                                          CheckinStatus checkinStatus, AttendeeType attendeeType,
-                                         Boolean hasSeat, String tags, int page, int size) {
+                                         Boolean hasSeat, Boolean unregistered, String tags, int page, int size) {
         return PageResponse.from(attendeeRepository.search(
                 meetingId,
                 blankToNull(keyword),
@@ -190,6 +191,7 @@ public class AttendeeService {
                 checkinStatus,
                 attendeeType,
                 hasSeat,
+                unregistered,
                 blankToNull(tags),
                 PageRequests.of(page, size)
         ));
@@ -219,6 +221,36 @@ public class AttendeeService {
                 });
         synchronizeRoomRequest(attendee, request, "ATTENDEE_UPDATE");
         applyRequest(attendee, request);
+        return attendee;
+    }
+
+    @Transactional(isolation = Isolation.READ_COMMITTED)
+    public Attendee updateUnregisteredProfile(Long attendeeId, UnregisteredAttendeeProfileRequest request) {
+        Attendee attendee = attendeeRepository.findByIdForUpdate(attendeeId)
+                .orElseThrow(() -> BusinessException.notFound("参会人不存在"));
+        meetingAccessService.requireManage(attendee.getMeeting().getId());
+        if (!attendee.isUnregistered()) {
+            throw BusinessException.badRequest("仅支持编辑未报名入座人员");
+        }
+
+        UnregisteredProfileFormUpdate formUpdate = prepareUnregisteredProfileFormUpdate(
+                attendee,
+                request,
+                tduckFieldMappingRepository.findByMeetingIdOrderByIdAsc(attendee.getMeeting().getId())
+        );
+        String normalizedPhone = null;
+        if (formUpdate.mappedValues().containsKey(AttendeeField.PHONE)) {
+            normalizedPhone = normalizeOptionalPhone(formValueText(formUpdate.mappedValues().get(AttendeeField.PHONE)));
+        }
+        if (normalizedPhone != null) {
+            attendeeRepository.findByMeetingAndPhone(attendee.getMeeting(), normalizedPhone)
+                    .filter(existing -> !existing.getId().equals(attendee.getId()))
+                    .ifPresent(existing -> {
+                        throw BusinessException.conflict("同一会议内手机号已存在报名记录");
+                    });
+        }
+        applyUnregisteredProfileFormUpdate(attendee, formUpdate.mappedValues(), normalizedPhone);
+        attendee.setRawDataSnapshot(formUpdate.snapshot());
         return attendee;
     }
 
@@ -443,6 +475,170 @@ public class AttendeeService {
         attendee.setAttendeeType(request.attendeeType() == null ? AttendeeType.NORMAL : request.attendeeType());
         attendee.setRemark(request.remark());
         attendee.setTags(request.tags());
+    }
+
+    private UnregisteredProfileFormUpdate prepareUnregisteredProfileFormUpdate(Attendee attendee,
+                                                                                 UnregisteredAttendeeProfileRequest request,
+                                                                                 List<TduckFieldMapping> mappings) {
+        if (request == null || request.formValues() == null) {
+            throw BusinessException.badRequest("formValues 不能为空");
+        }
+
+        Map<String, TduckFieldMapping> editableMappingsByKey = editableTduckMappingsByKey(mappings);
+        Map<String, Object> submittedValues = request.formValues();
+        for (String key : submittedValues.keySet()) {
+            if (!isEditableFormValueKey(key, editableMappingsByKey)) {
+                throw BusinessException.badRequest("仅支持编辑当前会议报名表中的字段: " + safeFormValueKey(key));
+            }
+        }
+
+        Map<String, Object> snapshot = attendee.getRawDataSnapshot() == null
+                ? new LinkedHashMap<>()
+                : new LinkedHashMap<>(attendee.getRawDataSnapshot());
+        snapshot.putAll(submittedValues);
+
+        for (String fieldKey : editableMappingsByKey.keySet()) {
+            String labelKey = fieldKey + "label";
+            /*
+             * TDuck 组件会同时返回 key 和 keylabel，字段映射读取时优先使用后者。编辑时若只更新
+             * key 而不清掉旧 label，主表会继续写入已失效的旧展示值；因此把未提交的伴随 label 删除。
+             * 如果 labelKey 本身也是一个真实 TDuck 字段，则它不是伴随字段，不能在这里误删。
+             */
+            if (submittedValues.containsKey(fieldKey)
+                    && !submittedValues.containsKey(labelKey)
+                    && !editableMappingsByKey.containsKey(labelKey)) {
+                snapshot.remove(labelKey);
+            }
+        }
+
+        Map<AttendeeField, Object> mappedValues = new LinkedHashMap<>();
+        for (TduckFieldMapping mapping : editableMappingsByKey.values()) {
+            AttendeeField attendeeField = mapping.getAttendeeField();
+            String fieldKey = mapping.getTduckFieldKey();
+            if (attendeeField == null || !isMappedFieldTouched(submittedValues, fieldKey, editableMappingsByKey)) {
+                continue;
+            }
+            mappedValues.put(attendeeField, preferredFormValue(snapshot, fieldKey, editableMappingsByKey));
+        }
+        return new UnregisteredProfileFormUpdate(snapshot, mappedValues);
+    }
+
+    private Map<String, TduckFieldMapping> editableTduckMappingsByKey(List<TduckFieldMapping> mappings) {
+        Map<String, TduckFieldMapping> result = new LinkedHashMap<>();
+        if (mappings == null) {
+            return result;
+        }
+        for (TduckFieldMapping mapping : mappings) {
+            if (mapping == null || !isEditableTduckFieldKey(mapping.getTduckFieldKey())) {
+                continue;
+            }
+            result.putIfAbsent(mapping.getTduckFieldKey(), mapping);
+        }
+        return result;
+    }
+
+    private boolean isEditableTduckFieldKey(String key) {
+        return key != null
+                && !key.isBlank()
+                && !TduckSubmissionFields.isMetaField(key)
+                && !"source".equals(key);
+    }
+
+    private boolean isEditableFormValueKey(String key, Map<String, TduckFieldMapping> mappingsByKey) {
+        return key != null && (mappingsByKey.containsKey(key) || isMappedFieldLabelKey(key, mappingsByKey));
+    }
+
+    private boolean isMappedFieldTouched(Map<String, Object> submittedValues,
+                                         String fieldKey,
+                                         Map<String, TduckFieldMapping> mappingsByKey) {
+        return submittedValues.containsKey(fieldKey)
+                || (isMappedFieldLabelKey(fieldKey + "label", mappingsByKey)
+                && submittedValues.containsKey(fieldKey + "label"));
+    }
+
+    private boolean isMappedFieldLabelKey(String key, Map<String, TduckFieldMapping> mappingsByKey) {
+        if (key == null || !key.endsWith("label") || mappingsByKey.containsKey(key)) {
+            return false;
+        }
+        String fieldKey = key.substring(0, key.length() - "label".length());
+        return mappingsByKey.containsKey(fieldKey);
+    }
+
+    private Object preferredFormValue(Map<String, Object> snapshot,
+                                      String fieldKey,
+                                      Map<String, TduckFieldMapping> mappingsByKey) {
+        String labelKey = fieldKey + "label";
+        if (isMappedFieldLabelKey(labelKey, mappingsByKey) && snapshot.containsKey(labelKey)) {
+            return snapshot.get(labelKey);
+        }
+        return snapshot.get(fieldKey);
+    }
+
+    private void applyUnregisteredProfileFormUpdate(Attendee attendee,
+                                                    Map<AttendeeField, Object> mappedValues,
+                                                    String normalizedPhone) {
+        if (mappedValues.containsKey(AttendeeField.NAME)) {
+            String name = formValueText(mappedValues.get(AttendeeField.NAME));
+            if (name == null) {
+                throw BusinessException.badRequest("姓名不能为空");
+            }
+            attendee.setName(requireMaxLength(name, 120, "姓名"));
+        }
+        if (mappedValues.containsKey(AttendeeField.PHONE)) {
+            attendee.setPhone(normalizedPhone);
+        }
+        if (mappedValues.containsKey(AttendeeField.ORGANIZATION)) {
+            attendee.setOrganization(optionalMaxLength(formValueText(mappedValues.get(AttendeeField.ORGANIZATION)), 160, "单位"));
+        }
+        if (mappedValues.containsKey(AttendeeField.TITLE)) {
+            attendee.setTitle(optionalMaxLength(formValueText(mappedValues.get(AttendeeField.TITLE)), 120, "职务"));
+        }
+        if (mappedValues.containsKey(AttendeeField.IDENTITY_NO)) {
+            attendee.setIdentityNo(optionalMaxLength(formValueText(mappedValues.get(AttendeeField.IDENTITY_NO)), 80, "证件号"));
+        }
+        if (mappedValues.containsKey(AttendeeField.EMAIL)) {
+            attendee.setEmail(optionalMaxLength(formValueText(mappedValues.get(AttendeeField.EMAIL)), 160, "邮箱"));
+        }
+        if (mappedValues.containsKey(AttendeeField.ATTENDEE_TYPE)) {
+            attendee.setAttendeeType(mappedAttendeeType(formValueText(mappedValues.get(AttendeeField.ATTENDEE_TYPE))));
+        }
+        if (mappedValues.containsKey(AttendeeField.REMARK)) {
+            attendee.setRemark(optionalMaxLength(formValueText(mappedValues.get(AttendeeField.REMARK)), 500, "备注"));
+        }
+        /*
+         * 是否住宿、房号和房间备注虽然也能被 TDuck 映射，但它们会影响已完成的住宿安排。
+         * 本接口只保存其表单快照，不回写这些资源字段；座位、审核、签到、TDuck 标识同样没有写入口。
+         */
+    }
+
+    private AttendeeType mappedAttendeeType(String value) {
+        if (value == null || value.isBlank()) {
+            return AttendeeType.NORMAL;
+        }
+        String normalized = value.trim().toUpperCase(Locale.ROOT);
+        return switch (normalized) {
+            case "VIP", "贵宾" -> AttendeeType.VIP;
+            case "GUEST", "嘉宾" -> AttendeeType.GUEST;
+            case "MEDIA", "媒体" -> AttendeeType.MEDIA;
+            case "STAFF", "工作人员" -> AttendeeType.STAFF;
+            default -> AttendeeType.NORMAL;
+        };
+    }
+
+    private String formValueText(Object value) {
+        if (value == null) {
+            return null;
+        }
+        String text = String.valueOf(value).strip();
+        return text.isEmpty() ? null : text;
+    }
+
+    private String safeFormValueKey(String key) {
+        return key == null || key.isBlank() ? "(空字段)" : key;
+    }
+
+    private record UnregisteredProfileFormUpdate(Map<String, Object> snapshot,
+                                                 Map<AttendeeField, Object> mappedValues) {
     }
 
     private Attendee synchronizeRoomRequest(Attendee attendee, AttendeeRequest request, String source) {
@@ -784,8 +980,16 @@ public class AttendeeService {
     }
 
     private String normalizePhone(String phone) {
-        if (phone == null || phone.isBlank()) {
+        String normalized = normalizeOptionalPhone(phone);
+        if (normalized == null) {
             throw BusinessException.badRequest("手机号不能为空");
+        }
+        return normalized;
+    }
+
+    private String normalizeOptionalPhone(String phone) {
+        if (phone == null || phone.isBlank()) {
+            return null;
         }
         String normalized = phone.replaceAll("[\\s-]", "");
         if (!normalized.matches("^\\+?\\d{6,20}$")) {

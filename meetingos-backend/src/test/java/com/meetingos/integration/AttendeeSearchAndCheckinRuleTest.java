@@ -10,6 +10,7 @@ import com.meetingos.checkin.CheckinType;
 import com.meetingos.common.BusinessException;
 import com.meetingos.dinner.DinnerAssignRequest;
 import com.meetingos.dinner.DinnerService;
+import com.meetingos.seating.AssignUnregisteredSeatRequest;
 import com.meetingos.seating.ManualAssignSeatRequest;
 import com.meetingos.seating.SeatRepository;
 import com.meetingos.seating.SeatingService;
@@ -134,8 +135,8 @@ class AttendeeSearchAndCheckinRuleTest {
         Long seatId = seatRepository.findByMeetingIdOrderByRowNoAscSeatNoAsc(1L).get(0).getId();
         seatingService.manualAssign(new ManualAssignSeatRequest(1L, seatId));
 
-        var seated = attendeeService.search(1L, null, ReviewStatus.APPROVED, null, null, true, "接待", 0, 20);
-        var unseated = attendeeService.search(1L, null, ReviewStatus.APPROVED, null, null, false, null, 0, 20);
+        var seated = attendeeService.search(1L, null, ReviewStatus.APPROVED, null, null, true, null, "接待", 0, 20);
+        var unseated = attendeeService.search(1L, null, ReviewStatus.APPROVED, null, null, false, null, null, 0, 20);
 
         assertThat(seated.content())
                 .extracting("phone")
@@ -144,6 +145,23 @@ class AttendeeSearchAndCheckinRuleTest {
                 .extracting("phone")
                 .contains("13800000002")
                 .doesNotContain("13800000001");
+    }
+
+    @Test
+    void attendeeSearchCanFilterByUnregisteredSeatingSource() {
+        Long seatId = seatRepository.findByMeetingIdOrderByRowNoAscSeatNoAsc(1L).get(0).getId();
+        seatingService.assignUnregistered(new AssignUnregisteredSeatRequest(seatId, "现场未报名人员", null));
+
+        var unregistered = attendeeService.search(1L, null, null, null, null, null, true, null, 0, 20);
+        var registered = attendeeService.search(1L, null, null, null, null, null, false, null, 0, 20);
+
+        assertThat(unregistered.content())
+                .extracting("name")
+                .containsExactly("现场未报名人员");
+        assertThat(registered.content())
+                .extracting("name")
+                .contains("陈嘉宁", "王子墨", "李若彤")
+                .doesNotContain("现场未报名人员");
     }
 
     @Test

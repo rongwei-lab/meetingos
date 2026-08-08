@@ -25,7 +25,11 @@ public record SeatLayoutRequest(
         Integer sortOrder,
         SeatType defaultSeatType,
         @Size(max = MAX_SEATS_PER_AREA, message = "禁用座位数量不能超过 6400")
-        List<String> disabledSeatCodes
+        List<String> disabledSeatCodes,
+        @Size(max = MAX_SEATS_PER_AREA, message = "结构空白数量不能超过 6400")
+        List<String> structuralBlankSeatCodes,
+        @Size(max = MAX_SEATS_PER_AREA, message = "过道数量不能超过 6400")
+        List<String> aisleSeatCodes
 ) {
     public static final int MAX_ROWS = 80;
     public static final int MAX_SEATS_PER_ROW = 80;
@@ -34,6 +38,38 @@ public record SeatLayoutRequest(
     public SeatLayoutRequest(Long meetingId,
                              String venueName,
                              String areaName,
+                             String originalAreaName,
+                             int rowCount,
+                             int seatsPerRow,
+                             String numberingRule,
+                             String aisleSettings,
+                             String stageDirection,
+                             Integer sortOrder,
+                             SeatType defaultSeatType,
+                             List<String> disabledSeatCodes,
+                             List<String> structuralBlankSeatCodes) {
+        this(
+                meetingId,
+                venueName,
+                areaName,
+                originalAreaName,
+                rowCount,
+                seatsPerRow,
+                numberingRule,
+                aisleSettings,
+                stageDirection,
+                sortOrder,
+                defaultSeatType,
+                disabledSeatCodes,
+                structuralBlankSeatCodes,
+                null
+        );
+    }
+
+    public SeatLayoutRequest(Long meetingId,
+                             String venueName,
+                             String areaName,
+                             String originalAreaName,
                              int rowCount,
                              int seatsPerRow,
                              String numberingRule,
@@ -46,7 +82,7 @@ public record SeatLayoutRequest(
                 meetingId,
                 venueName,
                 areaName,
-                null,
+                originalAreaName,
                 rowCount,
                 seatsPerRow,
                 numberingRule,
@@ -54,7 +90,23 @@ public record SeatLayoutRequest(
                 stageDirection,
                 sortOrder,
                 defaultSeatType,
-                disabledSeatCodes
+                disabledSeatCodes,
+                null,
+                null
         );
+    }
+
+    public SeatLayoutRequest(Long meetingId,
+                             String venueName,
+                             String areaName,
+                             int rowCount,
+                             int seatsPerRow,
+                             String numberingRule,
+                             String aisleSettings,
+                             String stageDirection,
+                             Integer sortOrder,
+                             SeatType defaultSeatType,
+                             List<String> disabledSeatCodes) {
+        this(meetingId, venueName, areaName, null, rowCount, seatsPerRow, numberingRule, aisleSettings, stageDirection, sortOrder, defaultSeatType, disabledSeatCodes, null, null);
     }
 }

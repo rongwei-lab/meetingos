@@ -94,7 +94,8 @@ TDuck 字段到 MeetingOS 标准字段的映射。
 | `meeting_id` | bigint | 会议 ID |
 | `tduck_data_id` | varchar(128) | TDuck 数据 ID |
 | `name` | varchar(100) | 姓名 |
-| `phone` | varchar(50) | 手机号 |
+| `phone` | varchar(50)，可空 | 手机号；未报名入座人员可不填写 |
+| `unregistered` | tinyint | 是否为现场未报名入座人员；该来源不写 TDuck 数据 ID 或报名时间 |
 | `company` | varchar(200) | 单位 |
 | `title` | varchar(200) | 职务 |
 | `id_number` | varchar(100) | 证件号，建议加密或脱敏存储 |
@@ -126,12 +127,16 @@ TDuck 字段到 MeetingOS 标准字段的映射。
 | `seat_no` | varchar(50) | 座号 |
 | `seat_label` | varchar(100) | 展示座位号 |
 | `seat_type` | varchar(32) | 普通、VIP、嘉宾、媒体、工作人员、禁用 |
-| `status` | varchar(32) | 空座、已分配、已签到、禁用 |
+| `status` | varchar(32) | 空座、已分配、已签到、禁用、过道 |
 | `locked` | tinyint | 是否锁定 |
+| `structural_blank` | tinyint | 原始座位图的结构留白；保留网格位置但不可分配 |
+| `aisle` | tinyint | 是否为网格过道；不可作为座位分配 |
 | `created_at` | datetime | 创建时间 |
 | `updated_at` | datetime | 更新时间 |
 
 建议唯一约束：`meeting_id + area_name + row_no + seat_no`。
+
+`seat_layouts.aisle_settings` 保存“第 N 座后”插入的区域级过道配置。结构留白、网格过道和区域级过道均不计为可用座位，也不能被自动或手动排座。
 
 ### seat_assignment
 

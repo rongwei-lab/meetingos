@@ -1014,6 +1014,7 @@ public class PublicQueryService {
                 attendee.getOrganization(),
                 attendee.getTitle(),
                 attendee.getReviewStatus(),
+                attendee.isUnregistered(),
                 seatLabel,
                 attendee.getRoomNo(),
                 attendee.getRoomRemark()

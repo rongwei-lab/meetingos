@@ -126,7 +126,7 @@ require_strong_secret TDUCK_MYSQL_PASSWORD 32
 require_strong_secret REDIS_PASSWORD 32
 require_strong_secret MINIO_ROOT_PASSWORD 32
 require_strong_secret MINIO_SECRET_KEY 32
-require_strong_secret MEETINGOS_INIT_ADMIN_PASSWORD 32
+require_strong_secret MEETINGOS_INIT_ADMIN_PASSWORD 12
 require_strong_secret TDUCK_ADMIN_PASSWORD 16
 
 # 邀请函访客标识和点击令牌必须使用独立密钥，避免一个集成密钥泄漏后扩大影响范围。

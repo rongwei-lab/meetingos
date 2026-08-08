@@ -1,7 +1,7 @@
 export type MeetingStatus = "DRAFT" | "REGISTRATION_OPEN" | "REGISTRATION_CLOSED" | "READY" | "IN_PROGRESS" | "ENDED" | "ARCHIVED";
 export type AuditStatus = "PENDING" | "APPROVED" | "REJECTED" | "CANCELLED";
 export type AttendeeType = "VIP" | "GUEST" | "MEDIA" | "STAFF" | "NORMAL";
-export type SeatStatus = "EMPTY" | "ASSIGNED" | "CHECKED_IN" | "DISABLED";
+export type SeatStatus = "EMPTY" | "ASSIGNED" | "UNREGISTERED" | "CHECKED_IN" | "DISABLED" | "AISLE";
 export type SeatType = AttendeeType | "DISABLED";
 export type RoomStatus = "AVAILABLE" | "ASSIGNED" | "DISABLED";
 export type PublicQueryField = "NAME" | "PHONE" | "PHONE_LAST4" | "ATTENDEE_CODE" | "ORGANIZATION" | "TITLE" | "EMAIL";
@@ -80,6 +80,7 @@ export interface Attendee {
   attendeeCode?: string;
   name: string;
   phone: string;
+  unregistered?: boolean;
   company: string;
   title: string;
   identityNo?: string;
@@ -118,6 +119,11 @@ export interface Seat {
   seatType: SeatType;
   status: SeatStatus;
   locked: boolean;
+  structuralBlank?: boolean;
+  aisle?: boolean;
+  /** 区域级虚拟过道：每排在这些座号之后插入间距，不占用座位编号。 */
+  aisleAfterSeatNos?: number[];
+  unregistered?: boolean;
   attendeeId?: string;
   attendeeName?: string;
   attendeeTags?: string;
@@ -323,7 +329,8 @@ export interface PublicCheckinPreview {
 export interface AdminQueryCandidate {
   attendeeId: number;
   attendeeName: string;
-  phone: string;
+  phone: string | null;
+  unregistered?: boolean;
   organization?: string;
   title?: string;
   reviewStatus: AuditStatus;

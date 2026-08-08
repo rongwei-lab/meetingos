@@ -60,6 +60,7 @@
           <n-input v-model:value="keyword" placeholder="姓名/手机号/单位" clearable />
           <n-select v-model:value="auditStatus" :options="auditOptions" placeholder="审核状态" clearable />
           <n-select v-model:value="hasSeat" :options="seatOptions" placeholder="是否已排座" clearable />
+          <n-select v-model:value="unregistered" :options="attendeeSourceOptions" placeholder="人员来源" />
           <n-select
             v-model:value="selectedTags"
             :options="tagOptions"
@@ -95,10 +96,13 @@
         <div class="mobile-card-list attendee-card-list">
         <article v-for="attendee in mobileAttendees" :key="attendee.id" class="mobile-data-card attendee-mobile-card">
           <div class="mobile-card-head">
-            <button type="button" class="attendee-card-title" @click="openDetail(attendee)">
-              <strong>{{ attendee.name || "-" }}</strong>
-              <span>{{ attendee.phone || "-" }}</span>
-            </button>
+            <div class="attendee-card-title-wrap">
+              <button type="button" class="attendee-card-title" @click="openDetail(attendee)">
+                <strong>{{ attendee.name || "-" }}</strong>
+                <span>{{ attendee.phone || "-" }}</span>
+              </button>
+              <n-tag v-if="attendee.unregistered" type="warning" size="small" :bordered="false">未报名入座</n-tag>
+            </div>
             <status-tag v-if="isSystemFieldVisible('auditStatus')" :value="attendee.auditStatus" />
           </div>
 
@@ -110,6 +114,12 @@
             <div class="mobile-field">
               <span>类型</span>
               <strong>{{ attendeeTypeLabel(attendee.attendeeType) }}</strong>
+            </div>
+            <div v-if="isSystemFieldVisible('unregistered')" class="mobile-field">
+              <span>记录来源</span>
+              <n-tag :type="attendee.unregistered ? 'warning' : 'default'" size="small" :bordered="false">
+                {{ attendee.unregistered ? "未报名入座" : "已报名" }}
+              </n-tag>
             </div>
             <div v-if="isSystemFieldVisible('seatLabel')" class="mobile-field">
               <span>座位</span>
@@ -143,6 +153,15 @@
 
           <div class="mobile-card-actions">
             <n-button size="small" secondary type="primary" @click="openDetail(attendee)">详情</n-button>
+            <n-button
+              v-if="attendee.unregistered"
+              size="small"
+              secondary
+              type="warning"
+              @click="openUnregisteredProfileEditor(attendee)"
+            >
+              编辑资料
+            </n-button>
             <n-button
               v-if="canAuditTo(attendee, 'APPROVED')"
               size="small"
@@ -197,6 +216,43 @@
         <n-space justify="end">
           <n-button @click="tagModalVisible = false">取消</n-button>
           <n-button type="primary" :loading="savingTags" @click="saveTags">保存</n-button>
+        </n-space>
+      </template>
+    </n-modal>
+
+    <n-modal
+      v-model:show="unregisteredProfileModalVisible"
+      preset="card"
+      :title="unregisteredProfileEditingAttendee ? `编辑 ${unregisteredProfileEditingAttendee.name} 的资料` : '编辑未报名人员资料'"
+      class="unregistered-profile-modal"
+      style="width: min(760px, calc(100vw - 48px))"
+      :mask-closable="!savingUnregisteredProfile"
+      :closable="!savingUnregisteredProfile"
+    >
+      <n-form label-placement="top">
+        <div class="unregistered-profile-form-grid">
+          <n-form-item
+            v-for="mapping in unregisteredProfileFormMappings"
+            :key="fieldKeyOf(mapping)"
+            :label="fieldDisplayLabel(mapping)"
+            :required="isUnregisteredProfileFieldRequired(mapping)"
+            :class="{ 'unregistered-profile-field-wide': isUnregisteredProfileWideField(mapping) }"
+          >
+            <n-input
+              v-model:value="unregisteredProfileForm.formValues[mapping.tduckFieldKey]"
+              :type="isUnregisteredProfileTextarea(mapping) ? 'textarea' : 'text'"
+              :autosize="isUnregisteredProfileTextarea(mapping) ? { minRows: 3, maxRows: 6 } : undefined"
+              :maxlength="unregisteredProfileFieldMaxLength(mapping)"
+              show-count
+              :placeholder="unregisteredProfileFieldPlaceholder(mapping)"
+            />
+          </n-form-item>
+        </div>
+      </n-form>
+      <template #footer>
+        <n-space justify="end">
+          <n-button :disabled="savingUnregisteredProfile" @click="unregisteredProfileModalVisible = false">取消</n-button>
+          <n-button type="primary" :loading="savingUnregisteredProfile" @click="saveUnregisteredProfile">保存</n-button>
         </n-space>
       </template>
     </n-modal>
@@ -475,6 +531,16 @@
             </div>
           </div>
           <div class="detail-field-row">
+            <div class="detail-field-label">记录来源</div>
+            <div class="detail-field-value">
+              <n-space v-if="detailAttendee.unregistered" size="small" align="center">
+                <n-tag type="warning" size="small" :bordered="false">未报名入座</n-tag>
+                <n-button text type="primary" @click="openUnregisteredProfileEditor(detailAttendee)">编辑资料</n-button>
+              </n-space>
+              <span v-else>报名记录</span>
+            </div>
+          </div>
+          <div class="detail-field-row">
             <div class="detail-field-label">标签</div>
             <div class="detail-field-value">
               <n-space size="small">
@@ -579,7 +645,7 @@ import { useImportTaskFlow } from "@/composables/useImportTaskFlow";
 import { useClientPagination } from "@/composables/useClientPagination";
 import { useRouteMeeting } from "@/composables/useRouteMeeting";
 import { useIsMobile } from "@/composables/useResponsive";
-import type { MeetingPrintFieldSettingsDto, TduckFieldMappingDto } from "@/stores/meeting";
+import type { MeetingPrintFieldSettingsDto, TduckFieldMappingDto, UnregisteredAttendeeProfileInput } from "@/stores/meeting";
 import { useMeetingStore } from "@/stores/meeting";
 import { attendeeFieldLabel, normalizedAttendeeFieldText } from "@/utils/attendeeFields";
 import { attendeeTypeLabel, formatDateLikeValue, formatDateTimeLabel, seatTypeLabel } from "@/utils/meetingDisplay";
@@ -597,6 +663,7 @@ const NColorPicker = defineAsyncComponent(() => import("naive-ui/es/color-picker
 const keyword = ref("");
 const auditStatus = ref<AuditStatus | null>(null);
 const hasSeat = ref<boolean | null>(null);
+const unregistered = ref<boolean | null>(null);
 const selectedTags = ref<string[]>([]);
 const remoteFilteredAttendees = ref<Attendee[] | null>(null);
 const checkedKeys = ref<string[]>([]);
@@ -649,6 +716,10 @@ const remarkModalVisible = ref(false);
 const remarkEditingAttendeeId = ref<string | null>(null);
 const editingRemark = ref("");
 const savingRemark = ref(false);
+const unregisteredProfileModalVisible = ref(false);
+const unregisteredProfileEditingAttendeeId = ref<string | null>(null);
+const unregisteredProfileForm = ref<UnregisteredAttendeeProfileInput>(emptyUnregisteredProfileInput());
+const savingUnregisteredProfile = ref(false);
 const fieldMappings = ref<TduckFieldMappingDto[]>([]);
 const visibleFieldKeys = ref<string[]>([]);
 const detailVisible = ref(false);
@@ -695,10 +766,16 @@ const seatOptions = [
   { label: "已排座", value: true },
   { label: "未排座", value: false }
 ];
+const attendeeSourceOptions = [
+  { label: "全部", value: null },
+  { label: "已报名", value: false },
+  { label: "未报名入座", value: true }
+];
 
 type SystemColumnKey =
   | "tags"
   | "auditStatus"
+  | "unregistered"
   | "seatLabel"
   | "roomNo"
   | "seatQueried"
@@ -788,15 +865,23 @@ const remarkEditingAttendee = computed(() =>
     : null
 );
 
+const unregisteredProfileEditingAttendee = computed(() =>
+  unregisteredProfileEditingAttendeeId.value
+    ? store.currentAttendees.find((attendee) => attendee.id === unregisteredProfileEditingAttendeeId.value) || null
+    : null
+);
+
 const localFilteredAttendees = computed(() =>
   store.currentAttendees.filter((item) => {
     const text = `${item.name}${item.phone}${item.company}${Object.values(item.formValues || {}).map(formatFieldValue).join("")}`;
     const tagMatched = !selectedTags.value.length || selectedTags.value.every((tag) => item.tags.includes(tag));
     const seatMatched = hasSeat.value == null || Boolean(item.seatLabel) === hasSeat.value;
+    const sourceMatched = unregistered.value == null || Boolean(item.unregistered) === unregistered.value;
     return (
       (!keyword.value || text.includes(keyword.value)) &&
       (!auditStatus.value || item.auditStatus === auditStatus.value) &&
       seatMatched &&
+      sourceMatched &&
       tagMatched
     );
   })
@@ -811,7 +896,7 @@ const {
 } = useClientPagination(
   filteredAttendees,
   20,
-  computed(() => [routeMeetingId.value, keyword.value, auditStatus.value, hasSeat.value, selectedTags.value.join("|")])
+  computed(() => [routeMeetingId.value, keyword.value, auditStatus.value, hasSeat.value, unregistered.value, selectedTags.value.join("|")])
 );
 
 const defaultNameplateSizePreset = nameplateSizePresets.find((size) => size.value === "100x220") || nameplateSizePresets[0];
@@ -918,7 +1003,7 @@ const nameplatePreviewFaceStyle = computed(() => {
   };
 });
 
-watch([keyword, auditStatus, hasSeat, selectedTags], () => {
+watch([keyword, auditStatus, hasSeat, unregistered, selectedTags], () => {
   remoteFilteredAttendees.value = null;
 }, { deep: true });
 
@@ -1020,6 +1105,8 @@ const fallbackFormMappings = computed<TduckFieldMappingDto[]>(() => [
 ]);
 
 const activeFormMappings = computed(() => (fieldMappings.value.length ? fieldMappings.value : fallbackFormMappings.value));
+// 弹窗打开后固定字段快照，避免异步刷新 TDuck 映射时表单标签和保存字段发生错位。
+const unregisteredProfileFormMappings = computed(() => unregisteredProfileForm.value.mappings);
 const visibleFormMappings = computed(() => {
   const selectedKeys = new Set(visibleFieldKeys.value);
   return activeFormMappings.value.filter((mapping) => selectedKeys.has(fieldKeyOf(mapping)));
@@ -1054,7 +1141,16 @@ const formColumns = computed(() =>
       render: (row: Attendee) => {
         const value = attendeeMappedValue(row, mapping);
         if (index === 0 || mapping.attendeeField === "NAME") {
-          return h(NButton, { text: true, type: "primary", onClick: () => openDetail(row) }, { default: () => value || "-" });
+          return h(
+            "span",
+            { style: { display: "inline-flex", alignItems: "center", gap: "6px", whiteSpace: "nowrap" } },
+            [
+              h(NButton, { text: true, type: "primary", onClick: () => openDetail(row) }, { default: () => value || "-" }),
+              ...(row.unregistered
+                ? [h(NTag, { type: "warning", size: "small", bordered: false }, { default: () => "未报名入座" })]
+                : [])
+            ]
+          );
         }
         return value || "-";
       }
@@ -1085,6 +1181,21 @@ const systemColumnDefinitions = computed(() => [
     resizable: true,
     sorter: compareAttendeeAuditStatus,
     render: (row: Attendee) => h(StatusTag, { value: row.auditStatus })
+  },
+  {
+    title: "记录来源",
+    key: "unregistered" as const,
+    minWidth: 116,
+    maxWidth: MAX_PERSISTED_TABLE_COLUMN_WIDTH,
+    width: storedAttendeeColumnWidth("unregistered", 116),
+    resizable: true,
+    sorter: (left: Attendee, right: Attendee) => compareAttendeeBoolean(left.unregistered, right.unregistered),
+    render: (row: Attendee) =>
+      h(
+        NTag,
+        { size: "small", type: row.unregistered ? "warning" : "default", bordered: false },
+        { default: () => (row.unregistered ? "未报名入座" : "已报名") }
+      )
   },
   {
     title: "座位",
@@ -1161,15 +1272,18 @@ const actionColumn = {
   key: "actions",
   /*
    * Naive UI 的横向滚动表格不会用 minWidth 锁定列宽，字段较多时操作列会被压缩，
-   * 导致末尾“标签/备注”按钮溢出后无法点击。固定明确宽度并吸附右侧，确保所有操作始终可达。
+   * 导致末尾“标签/备注/编辑资料”按钮溢出后无法点击。固定明确宽度并吸附右侧，确保所有操作始终可达。
    */
-  width: 320,
+  width: 392,
   fixed: "right" as const,
   render: (row: Attendee) =>
     h("div", actionCellProps(), [
       // 所有报名字段都可隐藏，因此详情入口必须固定保留在操作列。
       h(NButton, { text: true, type: "primary", onClick: () => openDetail(row) }, { default: () => "详情" }),
       ...renderAuditActions(row),
+      ...(row.unregistered
+        ? [h(NButton, { text: true, type: "warning", onClick: () => openUnregisteredProfileEditor(row) }, { default: () => "编辑资料" })]
+        : []),
       h(NButton, { text: true, onClick: () => openTagEditor(row) }, { default: () => "标签" }),
       h(NButton, { text: true, onClick: () => openRemarkEditor(row) }, { default: () => "备注" })
     ])
@@ -1352,7 +1466,7 @@ watch(activeFormMappings, (mappings) => {
   reconcileVisibleFields(mappings);
 }, { immediate: true });
 
-watch([keyword, auditStatus, hasSeat, selectedTags], () => {
+watch([keyword, auditStatus, hasSeat, unregistered, selectedTags], () => {
   scheduleAttendeeFilter();
 }, { deep: true });
 
@@ -1369,6 +1483,7 @@ function scheduleAttendeeFilter() {
       keyword: keyword.value,
       auditStatus: auditStatus.value,
       hasSeat: hasSeat.value,
+      unregistered: unregistered.value,
       tags: [...selectedTags.value]
     };
     void store.searchAttendees(filters, { meetingId: targetMeetingId }).then((items) => {
@@ -1390,6 +1505,7 @@ watch(
     keyword.value = normalizeQueryValue(query.keyword);
     auditStatus.value = parseAuditStatus(normalizeQueryValue(query.auditStatus));
     hasSeat.value = parseBooleanFilter(normalizeQueryValue(query.hasSeat));
+    unregistered.value = parseBooleanFilter(normalizeQueryValue(query.unregistered));
   },
   { immediate: true }
 );
@@ -1719,6 +1835,122 @@ function saveRemark() {
     .finally(() => {
       savingRemark.value = false;
     });
+}
+
+function emptyUnregisteredProfileInput(): UnregisteredAttendeeProfileInput {
+  return {
+    formValues: {},
+    mappings: []
+  };
+}
+
+function unregisteredProfileInputOf(attendee: Attendee, mappings: TduckFieldMappingDto[]): UnregisteredAttendeeProfileInput {
+  const formValues = mappings.reduce<Record<string, string>>((values, mapping) => {
+    const key = mapping.tduckFieldKey.trim();
+    if (!key) return values;
+
+    const labelKey = `${key}label`;
+    const source = attendee.formValues || {};
+    const hasDisplayLabel = Object.prototype.hasOwnProperty.call(source, labelKey);
+    const value = hasDisplayLabel
+      ? source[labelKey]
+      : source[key] ?? (mapping.attendeeField ? fallbackAttendeeFieldValue(attendee, mapping.attendeeField) : "");
+    values[key] = unregisteredProfileInputText(value);
+    // 选择、多选等字段需同时覆盖 label，否则详情和列表会继续优先显示历史选项文本。
+    if (hasDisplayLabel) values[labelKey] = values[key];
+    return values;
+  }, {});
+
+  return {
+    formValues,
+    mappings: mappings.filter((mapping) => Boolean(mapping.tduckFieldKey.trim())).map((mapping) => ({ ...mapping }))
+  };
+}
+
+function unregisteredProfileInputText(value: unknown): string {
+  if (value == null) return "";
+  if (Array.isArray(value)) return value.map(unregisteredProfileInputText).filter(Boolean).join("、");
+  if (typeof value === "object") return JSON.stringify(value);
+  if (typeof value === "boolean") return value ? "是" : "否";
+  return String(value);
+}
+
+function openUnregisteredProfileEditor(attendee: Attendee) {
+  if (!attendee.unregistered) return;
+  if (attendeePageLoading.value) {
+    message.info("报名字段加载中，请稍后再编辑");
+    return;
+  }
+  if (!fieldMappings.value.length) {
+    message.warning("未获取到当前会议的报名字段，暂不能按表单编辑");
+    return;
+  }
+  unregisteredProfileEditingAttendeeId.value = attendee.id;
+  unregisteredProfileForm.value = unregisteredProfileInputOf(attendee, fieldMappings.value);
+  unregisteredProfileModalVisible.value = true;
+}
+
+function saveUnregisteredProfile() {
+  const attendee = unregisteredProfileEditingAttendee.value;
+  if (!attendee || !attendee.unregistered || savingUnregisteredProfile.value) return;
+  if (!unregisteredProfileForm.value.mappings.length) {
+    message.warning("未获取到当前会议的报名字段，暂不能保存");
+    return;
+  }
+  const requiredMapping = unregisteredProfileForm.value.mappings.find(
+    (mapping) => isUnregisteredProfileFieldRequired(mapping) && !unregisteredProfileForm.value.formValues[mapping.tduckFieldKey]?.trim()
+  );
+  if (requiredMapping) {
+    message.warning(`请填写${fieldDisplayLabel(requiredMapping)}`);
+    return;
+  }
+
+  savingUnregisteredProfile.value = true;
+  void store.updateUnregisteredAttendeeProfile(attendee.id, unregisteredProfileForm.value)
+    .then(() => {
+      // 远程筛选缓存持有的是保存前对象，清掉后列表和详情会立即使用更新后的资料。
+      invalidateRemoteAttendeeResults();
+      unregisteredProfileModalVisible.value = false;
+      message.success("未报名人员资料已更新");
+    })
+    .catch((error) => {
+      message.error(error instanceof Error ? error.message : "未报名人员资料保存失败");
+    })
+    .finally(() => {
+      savingUnregisteredProfile.value = false;
+    });
+}
+
+function isUnregisteredProfileFieldRequired(mapping: TduckFieldMappingDto) {
+  return Boolean(mapping.tduckRequired || mapping.requiredMapping);
+}
+
+function isUnregisteredProfileTextarea(mapping: TduckFieldMappingDto) {
+  const type = (mapping.tduckFieldType || "").toLowerCase();
+  const label = fieldDisplayLabel(mapping);
+  return /textarea|text-area|longtext|long-text|paragraph/.test(type) || /建议|备注|说明|意见|需求/.test(label);
+}
+
+function isUnregisteredProfileWideField(mapping: TduckFieldMappingDto) {
+  return isUnregisteredProfileTextarea(mapping) || fieldDisplayLabel(mapping).length >= 14;
+}
+
+function unregisteredProfileFieldMaxLength(mapping: TduckFieldMappingDto) {
+  const limits: Record<string, number> = {
+    NAME: 120,
+    PHONE: 40,
+    ORGANIZATION: 160,
+    TITLE: 120,
+    IDENTITY_NO: 80,
+    EMAIL: 160,
+    REMARK: 500
+  };
+  return limits[mapping.attendeeField || ""] || 500;
+}
+
+function unregisteredProfileFieldPlaceholder(mapping: TduckFieldMappingDto) {
+  if (mapping.attendeeField === "PHONE") return "可留空，填写后按会议内唯一性校验";
+  return `填写${fieldDisplayLabel(mapping)}`;
 }
 
 function batchAudit(status: AuditStatus) {
@@ -2794,6 +3026,24 @@ function reconcileVisibleFields(mappings: TduckFieldMappingDto[]) {
   max-width: 520px;
 }
 
+.unregistered-profile-modal {
+  max-width: 760px;
+}
+
+.unregistered-profile-form-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  column-gap: 16px;
+}
+
+.unregistered-profile-field-wide {
+  grid-column: 1 / -1;
+}
+
+.unregistered-profile-form-grid :deep(.n-dynamic-tags) {
+  width: 100%;
+}
+
 .nameplate-modal :deep(.n-card__content) {
   padding-top: 8px;
 }
@@ -3096,6 +3346,13 @@ function reconcileVisibleFields(mappings: TduckFieldMappingDto[]) {
   cursor: pointer;
 }
 
+.attendee-card-title-wrap {
+  min-width: 0;
+  display: flex;
+  align-items: flex-start;
+  gap: 6px;
+}
+
 .attendee-card-title strong {
   color: var(--accent-pressed);
 }
@@ -3243,6 +3500,14 @@ function reconcileVisibleFields(mappings: TduckFieldMappingDto[]) {
   .detail-field-label {
     border-right: 0;
     border-bottom: 1px solid var(--border-color);
+  }
+
+  .unregistered-profile-form-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .unregistered-profile-field-wide {
+    grid-column: auto;
   }
 }
 </style>

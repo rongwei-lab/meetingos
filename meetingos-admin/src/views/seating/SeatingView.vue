@@ -9,6 +9,17 @@
         <template #icon><n-icon :component="DownloadOutline" /></template>
         导出座位表
       </n-button>
+      <input
+        ref="seatChartFileInputRef"
+        class="seat-chart-file-input"
+        type="file"
+        accept=".xlsx"
+        @change="handleSeatChartFileChange"
+      />
+      <n-button secondary size="large" :loading="importingSeatChart" @click="openSeatChartFilePicker">
+        <template #icon><n-icon :component="CloudUploadOutline" /></template>
+        导入座位表
+      </n-button>
       <n-button type="primary" size="large" :loading="autoAssigning" @click="autoAssign">
         <template #icon><n-icon :component="FlashOutline" /></template>
         自动排座
@@ -46,13 +57,24 @@
           <div class="seat-legend" aria-label="座位状态图例">
             <span><i class="empty"></i>空座</span>
             <span><i class="assigned"></i>已分配</span>
+            <span><i class="unregistered"></i>未报名入座</span>
             <span><i class="checked-in"></i>已签到</span>
             <span><i class="disabled"></i>禁用</span>
+            <span><i class="aisle"></i>过道</span>
           </div>
         </div>
       </section>
 
-      <section ref="seatBoardRef" class="seat-board surface">
+      <div class="seat-board-toolbar" aria-label="座位画布操作">
+        <n-tooltip trigger="hover">
+          <template #trigger>
+            <n-button circle quaternary size="small" aria-label="座位归中" title="座位归中" @click="centerSeatBoard">
+              <template #icon><n-icon :component="LocateOutline" /></template>
+            </n-button>
+          </template>
+          座位归中
+        </n-tooltip>
+
         <div class="seat-board-controls" aria-label="座位图缩放">
           <n-button circle quaternary size="small" title="缩小座位图" :disabled="seatZoom <= MIN_SEAT_ZOOM" @click="zoomSeatBoard(-ZOOM_STEP)">
             <template #icon><n-icon :component="RemoveOutline" /></template>
@@ -64,7 +86,19 @@
             <template #icon><n-icon :component="AddOutline" /></template>
           </n-button>
         </div>
+      </div>
 
+      <section
+        ref="seatBoardRef"
+        class="seat-board surface"
+        :class="{ 'is-panning': isPanningSeatBoard }"
+        @pointerdown="beginSeatBoardPan"
+        @pointermove="moveSeatBoardPan"
+        @pointerup="endSeatBoardPan"
+        @pointercancel="endSeatBoardPan"
+        @lostpointercapture="endSeatBoardPan"
+        @click.capture="suppressSeatClickAfterPan"
+      >
         <div class="seat-board-viewport" :style="seatMetricsStyle">
           <div class="stage-pill">主席台 / 舞台</div>
           <div class="seat-areas">
@@ -72,16 +106,23 @@
               <div class="seat-grid-shell" :style="areaGridStyle(area)">
                 <template v-for="rowNo in area.rowCount" :key="`${area.name}-${rowNo}`">
                   <div class="row-index left">{{ rowNo }}</div>
-                  <button
-                    v-for="seat in seatsByAreaRow(area.name, rowNo)"
-                    :key="seat.id"
-                    class="seat-cell"
-                    :class="[seat.status.toLowerCase().replace('_', '-'), { locked: seat.locked }]"
-                    :title="seatTooltip(seat)"
-                    @click="openSeatModal(seat)"
-                  >
-                    <span :class="{ 'name-label': seatLabelMode === 'NAME' }">{{ seatLabel(seat) }}</span>
-                  </button>
+                  <template v-for="seat in seatsByAreaRow(area.name, rowNo)" :key="seat.id">
+                    <div v-if="seat.structuralBlank" class="seat-structural-blank" aria-hidden="true"></div>
+                    <button
+                      v-else
+                      class="seat-cell"
+                      :class="[seat.status.toLowerCase().replace('_', '-'), { locked: seat.locked, unregistered: isUnregisteredSeat(seat) }]"
+                      :title="seatTooltip(seat)"
+                      @click="openSeatModal(seat)"
+                    >
+                      <span :class="{ 'name-label': seatLabelMode === 'NAME' }">{{ seatLabel(seat) }}</span>
+                    </button>
+                    <div
+                      v-if="isLayoutAisleAfterSeat(area, seat.seatNo)"
+                      class="seat-layout-aisle"
+                      aria-hidden="true"
+                    ></div>
+                  </template>
                   <div class="row-index right">{{ rowNo }}</div>
                 </template>
               </div>
@@ -133,6 +174,7 @@
                 </div>
                 <div class="layout-area-meta">
                   <span>{{ layoutAreaSeatCount(draft) }} 座</span>
+                  <span v-if="layoutAreaAisleCount(draft)">每排 {{ layoutAreaAisleCount(draft) }} 个过道</span>
                   <span>{{ layoutAreaOccupancySummary(draft) }}</span>
                 </div>
               </div>
@@ -158,22 +200,18 @@
               </n-form-item>
             </div>
 
-            <div class="seat-type-selector">
-              <span class="seat-type-label">默认座位类型</span>
-              <div class="seat-type-chip-group" role="radiogroup" aria-label="默认座位类型">
-                <button
-                  v-for="option in seatTypeOptions"
-                  :key="option.value"
-                  type="button"
-                  class="seat-type-chip"
-                  :class="{ active: draft.defaultSeatType === option.value }"
-                  :aria-checked="draft.defaultSeatType === option.value"
-                  role="radio"
-                  @click="draft.defaultSeatType = option.value"
-                >
-                  {{ option.label }}
-                </button>
-              </div>
+            <div class="layout-aisle-settings">
+              <n-form-item label="过道位置" :show-feedback="false">
+                <n-select
+                  v-model:value="draft.aisleAfterSeatNos"
+                  multiple
+                  clearable
+                  :disabled="draft.seatsPerRow <= 1"
+                  :options="aisleAfterSeatOptions(draft)"
+                  :placeholder="draft.seatsPerRow <= 1 ? '每排至少 2 座后可设置过道' : '选择第 N 座后插入过道'"
+                />
+              </n-form-item>
+              <p class="layout-aisle-help">过道只在画布中显示为间距，不占座位数、不改变座位编号，也不能分配人员。</p>
             </div>
 
             <div class="layout-area-total">共 {{ layoutAreaSeatCount(draft) }} 个座位</div>
@@ -213,8 +251,11 @@
         <n-alert v-if="selectedSeat.status === 'DISABLED'" type="warning" :show-icon="false">
           该座位已禁用，不能分配参会人。
         </n-alert>
+        <n-alert v-else-if="isAisleSeat(selectedSeat)" type="info" :show-icon="false">
+          该位置为过道，不计入座位数量，也不能分配或锁定。
+        </n-alert>
 
-        <div class="seat-maintenance-panel">
+        <div v-if="!isAisleSeat(selectedSeat)" class="seat-maintenance-panel">
           <n-form label-placement="top" :show-feedback="false">
             <n-form-item label="座位类型">
               <n-select
@@ -234,7 +275,20 @@
           </n-form>
         </div>
 
-        <template v-if="selectedSeat.status !== 'DISABLED' && selectedSeat.attendeeId">
+        <template v-if="isUnregisteredSeat(selectedSeat)">
+          <div class="current-assignee unregistered-assignee">
+            <span class="assignee-avatar">{{ currentAssigneeInitial }}</span>
+            <div>
+              <strong>{{ selectedSeat.attendeeName || '未报名人员' }}</strong>
+              <p>未报名人员 · {{ selectedSeat.status === 'CHECKED_IN' ? '已签到' : '已入座' }}</p>
+            </div>
+          </div>
+          <n-alert type="warning" :show-icon="false">
+            该人员已创建参会人记录，并标记为未报名入座。
+          </n-alert>
+        </template>
+
+        <template v-else-if="!isUnavailableSeat(selectedSeat) && selectedSeat.attendeeId">
           <div class="current-assignee">
             <span class="assignee-avatar">{{ currentAssigneeInitial }}</span>
             <div>
@@ -259,9 +313,15 @@
           </n-form>
         </template>
 
-        <template v-else-if="selectedSeat.status !== 'DISABLED'">
+        <template v-else-if="!isUnavailableSeat(selectedSeat)">
           <n-form label-placement="top" :show-feedback="false">
-            <n-form-item label="选择参会人">
+            <n-form-item label="分配方式">
+              <n-radio-group :value="seatAssignmentMode" size="small" @update:value="changeSeatAssignmentMode">
+                <n-radio-button value="REGISTERED">已报名人员</n-radio-button>
+                <n-radio-button value="UNREGISTERED">未报名人员</n-radio-button>
+              </n-radio-group>
+            </n-form-item>
+            <n-form-item v-if="seatAssignmentMode === 'REGISTERED'" label="选择参会人">
               <n-select
                 v-model:value="selectedAttendeeId"
                 filterable
@@ -270,8 +330,26 @@
                 :options="assignableAttendeeOptions"
               />
             </n-form-item>
+            <n-form-item v-else label="未报名人员姓名">
+              <n-input
+                v-model:value="unregisteredAttendeeName"
+                maxlength="80"
+                show-count
+                clearable
+                placeholder="请输入姓名"
+              />
+            </n-form-item>
+            <n-form-item v-if="seatAssignmentMode === 'UNREGISTERED'" label="手机号（可选）">
+              <n-input
+                v-model:value="unregisteredAttendeePhone"
+                inputmode="tel"
+                maxlength="32"
+                clearable
+                placeholder="未填写则按未提供处理"
+              />
+            </n-form-item>
           </n-form>
-          <div class="candidate-summary">
+          <div v-if="seatAssignmentMode === 'REGISTERED'" class="candidate-summary">
             当前可分配 {{ assignableAttendeeOptions.length }} 人，仅展示已审核通过且未排座人员。
           </div>
         </template>
@@ -281,17 +359,17 @@
         <n-space justify="space-between" align="center">
           <n-space>
             <n-button
-              v-if="selectedSeat?.attendeeId"
+              v-if="selectedSeat?.attendeeId || isUnregisteredSeat(selectedSeat)"
               type="error"
               secondary
               :loading="clearingSeat"
-              :disabled="assigningSeat || togglingSeatStatus"
+              :disabled="assigningSeat || togglingSeatStatus || togglingSeatAisle"
               @click="clearSelectedSeat"
             >
               解除分配
             </n-button>
             <n-button
-              v-if="selectedSeat?.attendeeId"
+              v-if="selectedSeat?.attendeeId && !isUnregisteredSeat(selectedSeat)"
               type="primary"
               secondary
               :loading="swappingSeat"
@@ -301,11 +379,21 @@
               交换座位
             </n-button>
             <n-button
-              v-else-if="selectedSeat"
+              v-if="selectedSeat && isAisleSeat(selectedSeat) && !isSeatOccupied(selectedSeat)"
+              type="primary"
+              secondary
+              :loading="togglingSeatAisle"
+              :disabled="seatModalBusy"
+              @click="restoreSelectedAisleSeat"
+            >
+              恢复为座位
+            </n-button>
+            <n-button
+              v-if="selectedSeat && !isUnregisteredSeat(selectedSeat) && !isAisleSeat(selectedSeat)"
               :type="selectedSeat.status === 'DISABLED' ? 'primary' : 'error'"
               secondary
               :loading="togglingSeatStatus"
-              :disabled="assigningSeat || clearingSeat"
+              :disabled="assigningSeat || clearingSeat || togglingSeatAisle"
               @click="toggleSelectedSeatDisabled"
             >
               {{ selectedSeat.status === "DISABLED" ? "启用该座位" : "停用该座位" }}
@@ -314,13 +402,13 @@
           <n-space>
             <n-button :disabled="seatModalBusy" @click="seatModalVisible = false">取消</n-button>
             <n-button
-              v-if="selectedSeat && !selectedSeat.attendeeId && selectedSeat.status !== 'DISABLED'"
+              v-if="selectedSeat?.status === 'EMPTY'"
               type="primary"
-              :disabled="!selectedAttendeeId"
+              :disabled="seatAssignmentMode === 'REGISTERED' ? !selectedAttendeeId : !unregisteredAttendeeName.trim()"
               :loading="assigningSeat"
               @click="assignSelected"
             >
-              确认分配
+              {{ seatAssignmentMode === 'UNREGISTERED' ? '确认录入' : '确认分配' }}
             </n-button>
           </n-space>
         </n-space>
@@ -371,12 +459,12 @@
 <script setup lang="ts">
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from "vue";
 import { NButtonGroup, NIcon, NRadioButton, NRadioGroup, NSwitch, useDialog, useMessage } from "naive-ui";
-import { AddOutline, DownloadOutline, FlashOutline, GridOutline, RemoveOutline, ReorderThreeOutline, SettingsOutline, TrashOutline } from "@vicons/ionicons5";
+import { AddOutline, CloudUploadOutline, DownloadOutline, FlashOutline, GridOutline, LocateOutline, RemoveOutline, ReorderThreeOutline, SettingsOutline, TrashOutline } from "@vicons/ionicons5";
 import PageHeader from "@/components/PageHeader.vue";
 import { useRouteMeeting } from "@/composables/useRouteMeeting";
 import { useMeetingStore } from "@/stores/meeting";
 import type { Seat, SeatType } from "@/utils/types";
-import { extractErrorMessage } from "@/api/http";
+import { extractErrorMessage, http, unwrapApi } from "@/api/http";
 import { attendeeTypeLabel, seatTypeLabel } from "@/utils/meetingDisplay";
 import type { ExportFormat } from "@/utils/exportSeating";
 
@@ -386,21 +474,45 @@ interface LayoutAreaDraft {
   areaName: string;
   rowCount: number;
   seatsPerRow: number;
-  defaultSeatType: Exclude<SeatType, "DISABLED">;
+  aisleAfterSeatNos: number[];
   color: string;
   persisted: boolean;
 }
 
+interface SeatArea {
+  name: string;
+  seats: Seat[];
+  rows: Map<number, Seat[]>;
+  rowCount: number;
+  seatsPerRow: number;
+  aisleAfterSeatNos: number[];
+}
+
 type SeatLabelMode = "SEAT_NO" | "NAME";
+type SeatAssignmentMode = "REGISTERED" | "UNREGISTERED";
+
+interface SeatChartImportResult {
+  rowCount: number;
+  seatsPerRow: number;
+  totalSeatCount: number;
+  structuralBlankCount: number;
+  aisleCount: number;
+  namedSeatCount: number;
+  assignedCount: number;
+  unassignedCount: number;
+}
 
 const store = useMeetingStore();
 const message = useMessage();
 const dialog = useDialog();
 const { routeMeetingId, syncMeetingFromRoute } = useRouteMeeting({ autoSync: false, loadWorkspace: false });
 const selectedAttendeeId = ref<string | null>(null);
+const unregisteredAttendeeName = ref("");
+const unregisteredAttendeePhone = ref("");
 const selectedSeat = ref<Seat | null>(null);
 const selectedSeatType = ref<Exclude<SeatType, "DISABLED">>("NORMAL");
 const swapTargetAttendeeId = ref<string | null>(null);
+const seatAssignmentMode = ref<SeatAssignmentMode>("REGISTERED");
 const activeArea = ref("ALL");
 const seatLabelMode = ref<SeatLabelMode>("SEAT_NO");
 const layoutModalVisible = ref(false);
@@ -410,11 +522,14 @@ const savingLayout = ref(false);
 const assigningSeat = ref(false);
 const clearingSeat = ref(false);
 const togglingSeatStatus = ref(false);
+const togglingSeatAisle = ref(false);
 const lockingSeat = ref(false);
 const updatingSeatType = ref(false);
 const swappingSeat = ref(false);
 const autoAssigning = ref(false);
 const exporting = ref(false);
+const importingSeatChart = ref(false);
+const seatChartFileInputRef = ref<HTMLInputElement | null>(null);
 const deletingAreaUid = ref<string | null>(null);
 const bootstrapping = ref(true);
 const exportFormat = ref<ExportFormat>("pdf");
@@ -425,20 +540,28 @@ const DEFAULT_SEAT_ZOOM = 0.9;
 const seatBoardRef = ref<HTMLElement | null>(null);
 const seatZoom = ref(DEFAULT_SEAT_ZOOM);
 const manualSeatZoom = ref(false);
+const isPanningSeatBoard = ref(false);
 let seatBoardResizeObserver: ResizeObserver | undefined;
 let seatingPageLoadToken = 0;
+let seatBoardPanPointerId: number | null = null;
+let seatBoardPanStartX = 0;
+let seatBoardPanStartY = 0;
+let seatBoardPanStartScrollLeft = 0;
+let seatBoardPanStartScrollTop = 0;
+let seatBoardPanDidMove = false;
+let suppressNextSeatBoardClick = false;
+let seatBoardPanResetTimer: number | undefined;
 const layoutDrafts = ref<LayoutAreaDraft[]>([]);
 const draggingLayoutUid = ref<string | null>(null);
 const layoutDragStartY = ref(0);
 const areaPalette = ["#3b82f6", "#60a5fa", "#f6bd60", "#f28482", "#a7c7e7", "#8ecae6"];
-const seatTypeOptions: Array<{ label: string; value: LayoutAreaDraft["defaultSeatType"] }> = [
+const seatTypeSelectOptions: Array<{ label: string; value: Exclude<SeatType, "DISABLED"> }> = [
   { label: "普通座", value: "NORMAL" },
   { label: "VIP座", value: "VIP" },
   { label: "嘉宾座", value: "GUEST" },
   { label: "媒体座", value: "MEDIA" },
   { label: "工作座", value: "STAFF" }
 ];
-const seatTypeSelectOptions = seatTypeOptions.map((item) => ({ label: item.label, value: item.value }));
 
 onMounted(() => {
   void syncSeatingWorkspace();
@@ -456,6 +579,9 @@ onMounted(() => {
 watch(routeMeetingId, () => {
   selectedSeat.value = null;
   selectedAttendeeId.value = null;
+  unregisteredAttendeeName.value = "";
+  unregisteredAttendeePhone.value = "";
+  seatAssignmentMode.value = "REGISTERED";
   swapTargetAttendeeId.value = null;
   activeArea.value = "ALL";
   void syncSeatingWorkspace();
@@ -463,10 +589,13 @@ watch(routeMeetingId, () => {
 
 onBeforeUnmount(() => {
   seatBoardResizeObserver?.disconnect();
+  if (seatBoardPanResetTimer !== undefined) {
+    window.clearTimeout(seatBoardPanResetTimer);
+  }
 });
 
 watch(
-  () => store.currentSeats.map((seat) => `${seat.areaName}:${seat.rowNo}-${seat.seatNo}:${seat.status}:${seat.attendeeId || ""}`).join("|"),
+  () => store.currentSeats.map((seat) => `${seat.areaName}:${seat.rowNo}-${seat.seatNo}:${seat.status}:${seat.unregistered ? 1 : 0}:${seat.aisleAfterSeatNos?.join(",") || ""}:${seat.attendeeId || ""}`).join("|"),
   () => {
     syncLayoutDraftFromSeats();
     void nextTick(fitSeatBoardToWidth);
@@ -516,12 +645,12 @@ const sortedSeats = computed(() =>
 );
 
 const seatAreaIndex = computed(() => {
-  const index = new Map<string, { name: string; seats: Seat[]; rows: Map<number, Seat[]>; rowCount: number; seatsPerRow: number }>();
+  const index = new Map<string, SeatArea>();
   for (const seat of sortedSeats.value) {
     const name = seat.areaName || "A区";
     let area = index.get(name);
     if (!area) {
-      area = { name, seats: [], rows: new Map(), rowCount: 1, seatsPerRow: 1 };
+      area = { name, seats: [], rows: new Map(), rowCount: 1, seatsPerRow: 1, aisleAfterSeatNos: [] };
       index.set(name, area);
     }
     area.seats.push(seat);
@@ -530,6 +659,12 @@ const seatAreaIndex = computed(() => {
     const row = area.rows.get(seat.rowNo);
     if (row) row.push(seat);
     else area.rows.set(seat.rowNo, [seat]);
+    if (seat.aisleAfterSeatNos?.length) {
+      area.aisleAfterSeatNos = Array.from(new Set([...area.aisleAfterSeatNos, ...seat.aisleAfterSeatNos]));
+    }
+  }
+  for (const area of index.values()) {
+    area.aisleAfterSeatNos = normalizeAisleAfterSeatNos(area.aisleAfterSeatNos, area.seatsPerRow);
   }
   return index;
 });
@@ -554,27 +689,33 @@ watch(
 );
 
 const stats = computed(() => {
-  const total = store.currentSeats.length;
+  // 过道和结构留白都只是网格位置，不能计入可管理座位或空余座位。
+  const displaySeats = store.currentSeats.filter((seat) => !seat.structuralBlank && !isAisleSeat(seat));
+  const total = displaySeats.length;
   let assigned = 0;
+  let unregistered = 0;
   let checkedIn = 0;
   let disabled = 0;
-  for (const seat of store.currentSeats) {
-    if (seat.status === "ASSIGNED" || seat.status === "CHECKED_IN") assigned += 1;
+  for (const seat of displaySeats) {
+    if (!isUnregisteredSeat(seat) && (seat.status === "ASSIGNED" || seat.status === "CHECKED_IN")) assigned += 1;
+    if (isUnregisteredSeat(seat)) unregistered += 1;
     if (seat.status === "CHECKED_IN") checkedIn += 1;
     if (seat.status === "DISABLED") disabled += 1;
   }
   return {
     total,
     assigned,
+    unregistered,
     checkedIn,
     disabled,
-    empty: Math.max(total - assigned - disabled, 0)
+    empty: Math.max(total - assigned - unregistered - disabled, 0)
   };
 });
 
 const statsCards = computed(() => [
   { label: "总座位", value: stats.value.total, tone: "neutral" },
   { label: "已分配", value: stats.value.assigned, tone: "blue" },
+  { label: "未报名入座", value: stats.value.unregistered, tone: "warning" },
   { label: "空余", value: stats.value.empty, tone: "green" },
   { label: "已签到", value: stats.value.checkedIn, tone: "success" },
   { label: "禁用", value: stats.value.disabled, tone: "danger" }
@@ -589,10 +730,12 @@ const seatMetricsStyle = computed(() => {
   const width = Math.round(72 * seatZoom.value);
   const height = Math.round(46 * seatZoom.value);
   const gap = Math.max(6, Math.round(10 * seatZoom.value));
+  const aisleWidth = Math.max(14, Math.round(28 * seatZoom.value));
   return {
     "--seat-width": `${width}px`,
     "--seat-height": `${height}px`,
     "--seat-gap": `${gap}px`,
+    "--aisle-width": `${aisleWidth}px`,
     "--row-index-width": `${Math.max(18, Math.round(24 * seatZoom.value))}px`,
     "--seat-font-size": `${Math.max(12, Math.round(15 * seatZoom.value))}px`,
     "--stage-width": `${Math.round(330 * seatZoom.value)}px`,
@@ -616,7 +759,7 @@ const assignableAttendeeOptions = computed(() =>
 const swapTargetOptions = computed(() => {
   const currentAttendeeId = selectedSeat.value?.attendeeId;
   return store.currentSeats
-    .filter((seat) => seat.attendeeId && seat.attendeeId !== currentAttendeeId && seat.status !== "DISABLED" && !seat.locked)
+    .filter((seat) => seat.attendeeId && seat.attendeeId !== currentAttendeeId && seat.status !== "DISABLED" && !isUnregisteredSeat(seat) && !seat.locked)
     .map((seat) => {
       const attendee = seat.attendeeId ? store.currentAttendeeById.get(seat.attendeeId) : undefined;
       return {
@@ -641,16 +784,56 @@ const selectedSeatAssigneeTypeLabel = computed(() => {
   if (currentAssignee.value?.attendeeType) return attendeeTypeLabel(currentAssignee.value.attendeeType);
   return seatTypeLabel(selectedSeat.value?.seatType);
 });
-const seatModalBusy = computed(() => assigningSeat.value || clearingSeat.value || togglingSeatStatus.value || lockingSeat.value || updatingSeatType.value || swappingSeat.value);
+const seatModalBusy = computed(() => assigningSeat.value || clearingSeat.value || togglingSeatStatus.value || togglingSeatAisle.value || lockingSeat.value || updatingSeatType.value || swappingSeat.value);
 
 function seatsByAreaRow(areaName: string, rowNo: number) {
   return seatAreaIndex.value.get(areaName)?.rows.get(rowNo) || [];
 }
 
-function areaGridStyle(area: { seatsPerRow: number }) {
+function areaGridStyle(area: SeatArea) {
+  const aisleAfterSeatNos = new Set(normalizeAisleAfterSeatNos(area.aisleAfterSeatNos, area.seatsPerRow));
+  const columns = ["var(--row-index-width)"];
+  for (let seatNo = 1; seatNo <= Math.max(1, area.seatsPerRow); seatNo++) {
+    columns.push("var(--seat-width)");
+    if (aisleAfterSeatNos.has(seatNo)) columns.push("var(--aisle-width)");
+  }
+  columns.push("var(--row-index-width)");
   return {
-    gridTemplateColumns: `var(--row-index-width) repeat(${Math.max(1, area.seatsPerRow)}, var(--seat-width)) var(--row-index-width)`
+    gridTemplateColumns: columns.join(" ")
   };
+}
+
+function normalizeAisleAfterSeatNos(value: unknown, seatsPerRow: number): number[] {
+  if (!Array.isArray(value)) return [];
+  const maxSeatNo = Math.max(1, Math.floor(seatsPerRow || 1));
+  return Array.from(
+    new Set(
+      value
+        .map((item) => (typeof item === "number" ? item : Number(item)))
+        .filter((seatNo) => Number.isInteger(seatNo) && seatNo >= 1 && seatNo < maxSeatNo)
+    )
+  ).sort((left, right) => left - right);
+}
+
+function aisleAfterSeatOptions(draft: LayoutAreaDraft) {
+  const seatsPerRow = Math.max(1, Math.floor(draft.seatsPerRow || 1));
+  return Array.from({ length: Math.max(0, seatsPerRow - 1) }, (_, index) => {
+    const seatNo = index + 1;
+    return { label: `第 ${seatNo} 座后`, value: seatNo };
+  });
+}
+
+function layoutAisleAfterSeatNos(draft: LayoutAreaDraft) {
+  return normalizeAisleAfterSeatNos(draft.aisleAfterSeatNos, draft.seatsPerRow);
+}
+
+function serializeAisleSettings(draft: LayoutAreaDraft) {
+  const aisleAfterSeatNos = layoutAisleAfterSeatNos(draft);
+  return aisleAfterSeatNos.length ? `v1:${aisleAfterSeatNos.join(",")}` : "";
+}
+
+function isLayoutAisleAfterSeat(area: SeatArea, seatNo: number) {
+  return area.aisleAfterSeatNos.includes(seatNo);
 }
 
 function zoomSeatBoard(delta: number) {
@@ -664,17 +847,99 @@ function resetSeatZoom() {
   fitSeatBoardToWidth();
 }
 
+function centerSeatBoard() {
+  const board = seatBoardRef.value;
+  if (!board) return;
+
+  board.scrollTo({
+    left: Math.max(0, (board.scrollWidth - board.clientWidth) / 2),
+    top: Math.max(0, (board.scrollHeight - board.clientHeight) / 2),
+    behavior: "smooth"
+  });
+}
+
+function beginSeatBoardPan(event: PointerEvent) {
+  if (event.button !== 0) return;
+
+  const board = event.currentTarget as HTMLElement;
+  seatBoardPanPointerId = event.pointerId;
+  seatBoardPanStartX = event.clientX;
+  seatBoardPanStartY = event.clientY;
+  seatBoardPanStartScrollLeft = board.scrollLeft;
+  seatBoardPanStartScrollTop = board.scrollTop;
+  seatBoardPanDidMove = false;
+}
+
+function moveSeatBoardPan(event: PointerEvent) {
+  if (seatBoardPanPointerId !== event.pointerId) return;
+
+  const deltaX = event.clientX - seatBoardPanStartX;
+  const deltaY = event.clientY - seatBoardPanStartY;
+  if (!seatBoardPanDidMove && Math.hypot(deltaX, deltaY) < 4) return;
+
+  const board = event.currentTarget as HTMLElement;
+  if (!seatBoardPanDidMove) {
+    seatBoardPanDidMove = true;
+    // 仅在确认拖拽后捕获指针，普通点击才能继续落到具体座位按钮。
+    board.setPointerCapture(event.pointerId);
+  }
+  isPanningSeatBoard.value = true;
+  board.scrollLeft = seatBoardPanStartScrollLeft - deltaX;
+  board.scrollTop = seatBoardPanStartScrollTop - deltaY;
+  event.preventDefault();
+}
+
+function endSeatBoardPan(event: PointerEvent) {
+  if (seatBoardPanPointerId !== event.pointerId) return;
+
+  const board = event.currentTarget as HTMLElement;
+  const pointerId = seatBoardPanPointerId;
+  const shouldSuppressClick = seatBoardPanDidMove;
+  seatBoardPanPointerId = null;
+  seatBoardPanDidMove = false;
+  isPanningSeatBoard.value = false;
+  if (board.hasPointerCapture(pointerId)) {
+    board.releasePointerCapture(pointerId);
+  }
+
+  if (shouldSuppressClick) {
+    suppressNextSeatBoardClick = true;
+    if (seatBoardPanResetTimer !== undefined) {
+      window.clearTimeout(seatBoardPanResetTimer);
+    }
+    // click 会紧随 pointerup 触发；短暂保留标记，避免拖动结束时误打开座位详情。
+    seatBoardPanResetTimer = window.setTimeout(() => {
+      suppressNextSeatBoardClick = false;
+      seatBoardPanResetTimer = undefined;
+    }, 0);
+  }
+}
+
+function suppressSeatClickAfterPan(event: MouseEvent) {
+  if (!suppressNextSeatBoardClick) return;
+
+  suppressNextSeatBoardClick = false;
+  if (seatBoardPanResetTimer !== undefined) {
+    window.clearTimeout(seatBoardPanResetTimer);
+    seatBoardPanResetTimer = undefined;
+  }
+  event.preventDefault();
+  event.stopImmediatePropagation();
+}
+
 function fitSeatBoardToWidth() {
   if (manualSeatZoom.value || !seatBoardRef.value || !visibleAreas.value.length) return;
 
   const boardStyle = getComputedStyle(seatBoardRef.value);
   const horizontalPadding = Number.parseFloat(boardStyle.paddingLeft) + Number.parseFloat(boardStyle.paddingRight);
   const availableWidth = seatBoardRef.value.clientWidth - horizontalPadding;
-  const widestArea = Math.max(...visibleAreas.value.map((area) => area.seatsPerRow), 1);
-
   // 默认缩放按“最宽区域完整进入当前画布”计算，保证座位矩阵先居中显示；用户点 +/- 后则保留手动缩放。
   for (let zoom = DEFAULT_SEAT_ZOOM; zoom >= MIN_SEAT_ZOOM; zoom -= 0.01) {
-    if (seatGridWidthForZoom(widestArea, zoom) <= availableWidth) {
+    const widestGrid = Math.max(
+      ...visibleAreas.value.map((area) => seatGridWidthForZoom(area.seatsPerRow, area.aisleAfterSeatNos, zoom)),
+      1
+    );
+    if (widestGrid <= availableWidth) {
       seatZoom.value = Math.round(zoom * 100) / 100;
       return;
     }
@@ -682,14 +947,19 @@ function fitSeatBoardToWidth() {
   seatZoom.value = MIN_SEAT_ZOOM;
 }
 
-function seatGridWidthForZoom(seatsPerRow: number, zoom: number) {
+function seatGridWidthForZoom(seatsPerRow: number, aisleAfterSeatNos: number[], zoom: number) {
   const width = Math.round(72 * zoom);
   const gap = Math.max(6, Math.round(10 * zoom));
+  const aisleWidth = Math.max(14, Math.round(28 * zoom));
   const rowIndexWidth = Math.max(18, Math.round(24 * zoom));
-  return rowIndexWidth * 2 + width * seatsPerRow + gap * (seatsPerRow + 1);
+  const aisleCount = normalizeAisleAfterSeatNos(aisleAfterSeatNos, seatsPerRow).length;
+  return rowIndexWidth * 2 + width * seatsPerRow + aisleWidth * aisleCount + gap * (seatsPerRow + aisleCount + 1);
 }
 
 function seatLabel(seat: Seat) {
+  if (isAisleSeat(seat)) {
+    return "过道";
+  }
   if (seatLabelMode.value === "SEAT_NO") {
     return String(seat.seatNo);
   }
@@ -711,17 +981,28 @@ function formatSeatNameLabel(name: string) {
 function seatTooltip(seat: Seat) {
   const status = seatStatusMeta(seat.status).text;
   const assignee = seatAssigneeName(seat);
-  return `${seat.areaName} ${seat.rowNo}排${seat.seatNo}座 · ${status}${assignee ? ` · ${assignee}` : ""}`;
+  const source = isUnregisteredSeat(seat) && seat.status !== "UNREGISTERED" ? " · 未报名入座" : "";
+  return `${seat.areaName} ${seat.rowNo}排${seat.seatNo}座 · ${status}${source}${assignee ? ` · ${assignee}` : ""}`;
 }
 
 function seatStatusMeta(status: Seat["status"]) {
   const dictionary = {
     EMPTY: { text: "空座", type: "default" as const },
     ASSIGNED: { text: "已分配", type: "info" as const },
+    UNREGISTERED: { text: "未报名入座", type: "warning" as const },
     CHECKED_IN: { text: "已签到", type: "success" as const },
-    DISABLED: { text: "禁用", type: "error" as const }
+    DISABLED: { text: "禁用", type: "error" as const },
+    AISLE: { text: "过道", type: "default" as const }
   };
   return dictionary[status] || dictionary.EMPTY;
+}
+
+function isAisleSeat(seat: Seat | null | undefined) {
+  return Boolean(seat && (seat.aisle || seat.status === "AISLE"));
+}
+
+function isUnavailableSeat(seat: Seat | null | undefined) {
+  return Boolean(seat && (seat.status === "DISABLED" || isAisleSeat(seat)));
 }
 
 function openLayoutModal() {
@@ -732,6 +1013,9 @@ function openLayoutModal() {
 function openSeatModal(seat: Seat) {
   selectedSeat.value = seat;
   selectedAttendeeId.value = null;
+  unregisteredAttendeeName.value = "";
+  unregisteredAttendeePhone.value = "";
+  seatAssignmentMode.value = "REGISTERED";
   selectedSeatType.value = seat.seatType === "DISABLED" ? "NORMAL" : seat.seatType;
   swapTargetAttendeeId.value = null;
   seatModalVisible.value = true;
@@ -739,6 +1023,61 @@ function openSeatModal(seat: Seat) {
 
 function openExportModal() {
   exportModalVisible.value = true;
+}
+
+function openSeatChartFilePicker() {
+  if (!importingSeatChart.value) {
+    seatChartFileInputRef.value?.click();
+  }
+}
+
+function handleSeatChartFileChange(event: Event) {
+  const input = event.target as HTMLInputElement;
+  const file = input.files?.[0];
+  if (file) {
+    void uploadSeatChart(file).finally(() => {
+      input.value = "";
+    });
+  }
+}
+
+async function uploadSeatChart(file: File) {
+  if (importingSeatChart.value) {
+    message.warning("座位表正在导入，请等待处理完成");
+    return;
+  }
+  const meetingId = routeMeetingId.value || store.currentMeetingId;
+  if (!file || !meetingId) {
+    message.warning(file ? "请先选择会议" : "未读取到座位表文件");
+    return;
+  }
+  if (store.currentSeats.length) {
+    message.warning("当前会议已有座位图，不能直接覆盖导入");
+    return;
+  }
+
+  importingSeatChart.value = true;
+  try {
+    const formData = new FormData();
+    formData.append("meetingId", meetingId);
+    formData.append("venueName", store.currentMeeting?.venue || "主会场");
+    formData.append("areaName", "主会场");
+    formData.append("file", file);
+    const result = unwrapApi(
+      await http.post<SeatChartImportResult>("/admin/seating/import-chart", formData)
+    );
+    await Promise.all([store.loadSeats(meetingId), store.loadAttendees(meetingId), store.loadStatistics(meetingId)]);
+    store.reconcileAssignments();
+    store.refreshMeetingCounters();
+    const aisleSummary = result.aisleCount ? `，过道 ${result.aisleCount} 个` : "";
+    const summary = `已导入 ${result.rowCount} 排 × ${result.seatsPerRow} 个位置：座位 ${result.totalSeatCount} 个${aisleSummary}，已分配 ${result.assignedCount} 人${result.unassignedCount ? `，未匹配 ${result.unassignedCount} 人` : ""}`;
+    if (result.unassignedCount) message.warning(summary, { duration: 6000 });
+    else message.success(summary);
+  } catch (error) {
+    message.error(extractErrorMessage(error, "座位表导入失败"));
+  } finally {
+    importingSeatChart.value = false;
+  }
 }
 
 async function handleExport() {
@@ -768,19 +1107,47 @@ async function handleExport() {
   }
 }
 
+function changeSeatAssignmentMode(mode: SeatAssignmentMode) {
+  seatAssignmentMode.value = mode;
+  if (mode === "REGISTERED") {
+    unregisteredAttendeeName.value = "";
+    unregisteredAttendeePhone.value = "";
+  } else {
+    selectedAttendeeId.value = null;
+  }
+}
+
 function assignSelected() {
-  if (!selectedSeat.value || !selectedAttendeeId.value) {
-    message.warning("请选择座位和参会人");
+  if (!selectedSeat.value) {
+    message.warning("请选择座位");
     return;
   }
+
+  const assignmentMode = seatAssignmentMode.value;
+  const seat = selectedSeat.value;
+  const attendeeName = unregisteredAttendeeName.value.trim();
+  const attendeePhone = unregisteredAttendeePhone.value.trim();
+  if (assignmentMode === "REGISTERED" && !selectedAttendeeId.value) {
+    message.warning("请选择参会人");
+    return;
+  }
+  if (assignmentMode === "UNREGISTERED" && !attendeeName) {
+    message.warning("请填写未报名人员姓名");
+    return;
+  }
+
   assigningSeat.value = true;
-  void store
-    .assignSeat(selectedAttendeeId.value, selectedSeat.value.id)
+  const request = assignmentMode === "UNREGISTERED"
+    ? store.assignUnregisteredSeat(seat.id, attendeeName, attendeePhone)
+    : store.assignSeat(selectedAttendeeId.value as string, seat.id);
+  void request
     .then(() => {
-      message.success("座位已分配");
+      message.success(assignmentMode === "UNREGISTERED" ? "未报名人员已入座" : "座位已分配");
       seatModalVisible.value = false;
       selectedSeat.value = null;
       selectedAttendeeId.value = null;
+      unregisteredAttendeeName.value = "";
+      unregisteredAttendeePhone.value = "";
     })
     .catch((error) => {
       message.error(error instanceof Error ? error.message : "座位分配失败");
@@ -791,12 +1158,18 @@ function assignSelected() {
 }
 
 function clearSelectedSeat() {
-  if (!selectedSeat.value?.attendeeId) return;
+  if (!selectedSeat.value) return;
+  const seat = selectedSeat.value;
+  const isUnregistered = isUnregisteredSeat(seat);
+  if (!seat.attendeeId && !isUnregistered) return;
+
   clearingSeat.value = true;
-  void store
-    .clearSeat(selectedSeat.value.attendeeId)
+  const request = isUnregistered
+    ? store.clearUnregisteredSeat(seat.id)
+    : store.clearSeat(seat.attendeeId as string);
+  void request
     .then(() => {
-      message.success("已解除座位分配");
+      message.success(isUnregistered ? "已清空未报名人员座位" : "已解除座位分配");
       seatModalVisible.value = false;
       selectedSeat.value = null;
     })
@@ -868,7 +1241,7 @@ function changeSelectedSeatType(seatType: Exclude<SeatType, "DISABLED">) {
 
 function toggleSelectedSeatDisabled() {
   if (!selectedSeat.value) return;
-  if (selectedSeat.value.attendeeId) {
+  if (isSeatOccupied(selectedSeat.value)) {
     message.warning("请先解除当前座位分配，再停用该座位");
     return;
   }
@@ -906,6 +1279,25 @@ function toggleSelectedSeatDisabled() {
   });
 }
 
+function restoreSelectedAisleSeat() {
+  if (!selectedSeat.value || !isAisleSeat(selectedSeat.value) || isSeatOccupied(selectedSeat.value)) return;
+  const seatId = selectedSeat.value.id;
+  togglingSeatAisle.value = true;
+  void store
+    .setSeatAisle(seatId, false)
+    .then(() => {
+      message.success("已恢复为普通座位");
+      selectedSeat.value = store.currentSeats.find((seat) => seat.id === seatId) || null;
+      selectedSeatType.value = selectedSeat.value?.seatType === "DISABLED" ? "NORMAL" : selectedSeat.value?.seatType || "NORMAL";
+    })
+    .catch((error) => {
+      message.error(extractErrorMessage(error, "恢复座位失败"));
+    })
+    .finally(() => {
+      togglingSeatAisle.value = false;
+    });
+}
+
 function autoAssign() {
   autoAssigning.value = true;
   void store
@@ -929,7 +1321,7 @@ function addLayoutArea() {
     areaName: nextAreaName(),
     rowCount: 8,
     seatsPerRow: 10,
-    defaultSeatType: "NORMAL",
+    aisleAfterSeatNos: [],
     color: areaPalette[index % areaPalette.length],
     persisted: false
   });
@@ -942,11 +1334,11 @@ function requestRemoveLayoutArea(draft: LayoutAreaDraft) {
   }
 
   const lookupName = areaLookupName(draft);
-  const occupiedSeats = seatsForDraft(draft).filter((seat) => seat.attendeeId || seat.status === "ASSIGNED" || seat.status === "CHECKED_IN");
+  const occupiedSeats = seatsForDraft(draft).filter(isSeatOccupied);
   if (occupiedSeats.length) {
     dialog.warning({
       title: "该区域已有人员入座",
-      content: `${lookupName} 当前有 ${occupiedSeats.length} 个已分配或已签到座位。请先解除座位分配后再删除该区域。`,
+      content: `${lookupName} 当前有 ${occupiedSeats.length} 个已入座座位（含未报名人员）。请先解除座位分配后再删除该区域。`,
       positiveText: "知道了"
     });
     return;
@@ -954,7 +1346,7 @@ function requestRemoveLayoutArea(draft: LayoutAreaDraft) {
 
   dialog.warning({
     title: `删除 ${lookupName}`,
-    content: `该区域暂无人员入座。删除后会移除 ${layoutAreaSeatCount(draft)} 个座位，此操作会写入当前会议数据。`,
+      content: "该区域暂无人员入座。删除后会移除该区域的布局与座位数据，此操作会写入当前会议数据。",
     positiveText: "删除区域",
     negativeText: "取消",
     onPositiveClick: () => {
@@ -977,8 +1369,23 @@ function requestRemoveLayoutArea(draft: LayoutAreaDraft) {
   });
 }
 
-function layoutAreaSeatCount(draft: LayoutAreaDraft) {
+function layoutAreaGridPositionCount(draft: LayoutAreaDraft) {
   return Math.max(1, Math.floor(draft.rowCount || 1)) * Math.max(1, Math.floor(draft.seatsPerRow || 1));
+}
+
+function layoutAreaPhysicalAisleSeatCount(draft: LayoutAreaDraft) {
+  if (!draft.persisted) return 0;
+  const rowCount = Math.max(1, Math.floor(draft.rowCount || 1));
+  const seatsPerRow = Math.max(1, Math.floor(draft.seatsPerRow || 1));
+  return seatsForDraft(draft).filter((seat) => seat.rowNo <= rowCount && seat.seatNo <= seatsPerRow && isAisleSeat(seat)).length;
+}
+
+function layoutAreaAisleCount(draft: LayoutAreaDraft) {
+  return layoutAisleAfterSeatNos(draft).length;
+}
+
+function layoutAreaSeatCount(draft: LayoutAreaDraft) {
+  return Math.max(0, layoutAreaGridPositionCount(draft) - layoutAreaPhysicalAisleSeatCount(draft));
 }
 
 function seatsForArea(areaName: string) {
@@ -997,17 +1404,27 @@ function seatsForDraft(draft: LayoutAreaDraft) {
   return seatsForArea(areaLookupName(draft));
 }
 
+function isSeatOccupied(seat: Seat) {
+  return Boolean(seat.attendeeId || seat.status === "ASSIGNED" || seat.status === "UNREGISTERED" || seat.status === "CHECKED_IN");
+}
+
+function isUnregisteredSeat(seat: Seat | null | undefined) {
+  return Boolean(seat && (seat.unregistered || seat.status === "UNREGISTERED"));
+}
+
 function isProtectedSeat(seat: Seat) {
-  return Boolean(seat.locked || seat.attendeeId || seat.status === "ASSIGNED" || seat.status === "CHECKED_IN");
+  return Boolean(seat.locked || isSeatOccupied(seat));
 }
 
 function layoutAreaOccupancySummary(draft: LayoutAreaDraft) {
   if (!draft.persisted) return "新区域";
   const areaSeats = seatsForDraft(draft);
-  const assigned = areaSeats.filter((seat) => seat.status === "ASSIGNED" || seat.status === "CHECKED_IN").length;
+  const assigned = areaSeats.filter((seat) => !isUnregisteredSeat(seat) && (seat.status === "ASSIGNED" || seat.status === "CHECKED_IN")).length;
+  const unregistered = areaSeats.filter(isUnregisteredSeat).length;
   const locked = areaSeats.filter((seat) => seat.locked).length;
-  if (!assigned && !locked) return "未入座";
-  return `${assigned} 已入座${locked ? ` · ${locked} 锁定` : ""}`;
+  const occupied = assigned + unregistered;
+  if (!occupied && !locked) return "未入座";
+  return `${occupied} 已入座${unregistered ? ` · ${unregistered} 未报名` : ""}${locked ? ` · ${locked} 锁定` : ""}`;
 }
 
 function seatsRemovedByDraft(draft: LayoutAreaDraft) {
@@ -1035,13 +1452,18 @@ function nextAreaName() {
 }
 
 function normalizeLayoutDrafts() {
-  const normalized = layoutDrafts.value.map((draft) => ({
-    ...draft,
-    originalAreaName: draft.originalAreaName?.trim() || undefined,
-    areaName: draft.areaName.trim(),
-    rowCount: Math.max(1, Math.floor(draft.rowCount || 1)),
-    seatsPerRow: Math.max(1, Math.floor(draft.seatsPerRow || 1))
-  }));
+  const normalized = layoutDrafts.value.map((draft) => {
+    const rowCount = Math.max(1, Math.floor(draft.rowCount || 1));
+    const seatsPerRow = Math.max(1, Math.floor(draft.seatsPerRow || 1));
+    return {
+      ...draft,
+      originalAreaName: draft.originalAreaName?.trim() || undefined,
+      areaName: draft.areaName.trim(),
+      rowCount,
+      seatsPerRow,
+      aisleAfterSeatNos: normalizeAisleAfterSeatNos(draft.aisleAfterSeatNos, seatsPerRow)
+    };
+  });
   const names = normalized.map((draft) => draft.areaName);
   const duplicate = names.find((name, index) => name && names.indexOf(name) !== index);
   if (normalized.some((draft) => !draft.areaName)) {
@@ -1065,7 +1487,7 @@ function saveLayouts() {
   if (protectedRemovedSeats.length) {
     dialog.warning({
       title: "座位数量减少会影响已入座人员",
-      content: `本次调整会删除 ${protectedRemovedSeats.length} 个已分配、已签到或锁定座位：${formatSeatList(protectedRemovedSeats)}${protectedRemovedSeats.length > 6 ? " 等" : ""}。请先解除这些座位后再调整排数或每排座位数。`,
+      content: `本次调整会删除 ${protectedRemovedSeats.length} 个已分配、未报名入座、已签到或锁定座位：${formatSeatList(protectedRemovedSeats)}${protectedRemovedSeats.length > 6 ? " 等" : ""}。请先解除这些座位后再调整排数或每排座位数。`,
       positiveText: "知道了"
     });
     return;
@@ -1095,7 +1517,7 @@ function persistLayouts(drafts: LayoutAreaDraft[]) {
         seatsPerRow: draft.seatsPerRow,
         sortOrder: index,
         venueName: store.currentMeeting?.venue,
-        defaultSeatType: draft.defaultSeatType
+        aisleSettings: serializeAisleSettings(draft)
       })
     )
   )
@@ -1163,14 +1585,13 @@ function syncLayoutDraftsFromSeats() {
   }
   // 布局配置是全场级设置，不跟随页面上方的区域筛选；否则用户在 A 区时打开弹窗会误以为只有一个区域。
   layoutDrafts.value = areaGroups.value.map((area, index) => {
-    const firstSeat = area.seats.find((seat) => seat.seatType !== "DISABLED") || area.seats[0];
     return {
       uid: `area-${area.name}`,
       originalAreaName: area.name,
       areaName: area.name,
       rowCount: area.rowCount,
       seatsPerRow: area.seatsPerRow,
-      defaultSeatType: (firstSeat?.seatType === "DISABLED" ? "NORMAL" : firstSeat?.seatType || "NORMAL") as LayoutAreaDraft["defaultSeatType"],
+      aisleAfterSeatNos: normalizeAisleAfterSeatNos(area.aisleAfterSeatNos, area.seatsPerRow),
       color: areaPalette[index % areaPalette.length],
       persisted: true
     };
@@ -1185,7 +1606,7 @@ function syncLayoutDraftsFromSeats() {
 
 .seat-stats {
   display: grid;
-  grid-template-columns: repeat(5, minmax(0, 1fr));
+  grid-template-columns: repeat(6, minmax(0, 1fr));
   gap: 12px;
   margin-bottom: 16px;
 }
@@ -1206,6 +1627,7 @@ function syncLayoutDraftsFromSeats() {
 
 .seat-stat-value.neutral { color: #64748b; }
 .seat-stat-value.blue { color: #3b82f6; }
+.seat-stat-value.warning { color: #d97706; }
 .seat-stat-value.green { color: #10b981; }
 .seat-stat-value.success { color: #16a34a; }
 .seat-stat-value.danger { color: #ef4444; }
@@ -1257,27 +1679,41 @@ function syncLayoutDraftsFromSeats() {
 
 .seat-legend .empty { background: #e8eef6; }
 .seat-legend .assigned { background: #93c5fd; }
+.seat-legend .unregistered { background: #fbbf24; }
 .seat-legend .checked-in { background: #86efac; }
 .seat-legend .disabled { background: #fca5a5; }
+.seat-legend .aisle { background: #cbd5e1; }
 
 .seat-board {
   min-height: 560px;
   position: relative;
   padding: 36px 32px 44px;
   overflow: auto;
+  cursor: grab;
+  touch-action: none;
+  user-select: none;
+  -webkit-user-select: none;
+}
+
+.seat-board.is-panning,
+.seat-board.is-panning * {
+  cursor: grabbing !important;
+}
+
+.seat-board-toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 8px;
+  margin-bottom: 10px;
 }
 
 .seat-board-controls {
-  position: sticky;
-  top: 0;
-  right: 0;
-  z-index: 2;
   width: max-content;
   display: flex;
   align-items: center;
   gap: 4px;
-  margin-left: auto;
-  margin-bottom: 18px;
+  margin: 0;
   padding: 4px;
   border: 1px solid #e2e8f0;
   border-radius: 999px;
@@ -1336,6 +1772,8 @@ function syncLayoutDraftsFromSeats() {
 }
 
 .seat-cell {
+  position: relative;
+  cursor: pointer;
   width: var(--seat-width);
   min-width: var(--seat-width);
   max-width: var(--seat-width);
@@ -1355,6 +1793,20 @@ function syncLayoutDraftsFromSeats() {
   font-weight: 800;
   cursor: pointer;
   transition: transform 120ms ease, box-shadow 120ms ease, border-color 120ms ease;
+}
+
+.seat-structural-blank {
+  width: var(--seat-width);
+  height: var(--seat-height);
+  pointer-events: none;
+  visibility: hidden;
+}
+
+.seat-layout-aisle {
+  width: var(--aisle-width);
+  min-width: var(--aisle-width);
+  height: var(--seat-height);
+  pointer-events: none;
 }
 
 .seat-cell span {
@@ -1389,6 +1841,24 @@ function syncLayoutDraftsFromSeats() {
   background: #eff6ff;
 }
 
+.seat-cell.unregistered {
+  color: #b45309;
+  border-color: #fcd34d;
+  background: #fffbeb;
+}
+
+.seat-cell.unregistered::after {
+  content: "";
+  position: absolute;
+  top: 5px;
+  right: 5px;
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: #f59e0b;
+  box-shadow: 0 0 0 1px #ffffff;
+}
+
 .seat-cell.checked-in {
   color: #16a34a;
   border-color: #86efac;
@@ -1404,6 +1874,18 @@ function syncLayoutDraftsFromSeats() {
 .seat-cell.disabled:hover {
   border-color: #ef4444;
   box-shadow: 0 8px 18px rgba(239, 68, 68, 0.14);
+}
+
+.seat-cell.aisle {
+  color: #64748b;
+  border-color: #cbd5e1;
+  border-style: dashed;
+  background: #f1f5f9;
+}
+
+.seat-cell.aisle:hover {
+  border-color: #94a3b8;
+  box-shadow: 0 8px 18px rgba(100, 116, 139, 0.12);
 }
 
 .seat-cell.locked {
@@ -1457,6 +1939,16 @@ function syncLayoutDraftsFromSeats() {
   margin: 4px 0 0;
   color: #64748b;
   font-size: 13px;
+}
+
+.current-assignee.unregistered-assignee {
+  border-color: #fcd34d;
+  background: #fffbeb;
+}
+
+.unregistered-assignee .assignee-avatar {
+  color: #b45309;
+  border-color: #fcd34d;
 }
 
 @media (max-width: 1180px) {
@@ -1517,8 +2009,8 @@ function syncLayoutDraftsFromSeats() {
     overscroll-behavior: contain;
   }
 
-  .seat-board-controls {
-    margin-bottom: 12px;
+  .seat-board-toolbar {
+    margin-bottom: 8px;
   }
 
   .stage-pill {
@@ -1695,7 +2187,7 @@ function syncLayoutDraftsFromSeats() {
 }
 
 .layout-area-fields .n-form-item-label,
-.seat-type-label {
+.layout-aisle-settings .n-form-item-label {
   color: #8fa0b9;
   font-size: 13px;
   font-weight: 850;
@@ -1716,40 +2208,21 @@ function syncLayoutDraftsFromSeats() {
   font-weight: 750;
 }
 
-.seat-type-selector {
+.layout-aisle-settings {
   display: grid;
-  gap: 8px;
+  gap: 4px;
   margin-top: 10px;
 }
 
-.seat-type-chip-group {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 8px;
+.layout-aisle-settings .n-form-item {
+  margin: 0;
 }
 
-.seat-type-chip {
-  height: 34px;
-  padding: 0 14px;
-  border: 1px solid #d7dee9;
-  border-radius: 999px;
-  color: #8fa0b9;
-  background: #fff;
-  font-size: 14px;
-  font-weight: 850;
-  cursor: pointer;
-  transition: color 120ms ease, background 120ms ease, border-color 120ms ease;
-}
-
-.seat-type-chip.active {
-  border-color: var(--accent-border);
-  color: var(--accent-pressed);
-  background: var(--accent-soft);
-}
-
-.seat-type-chip:hover {
-  border-color: var(--accent-border);
-  color: var(--accent-pressed);
+.layout-aisle-help {
+  margin: 0;
+  color: #94a3b8;
+  font-size: 12px;
+  line-height: 1.5;
 }
 
 .layout-area-total {
@@ -1835,6 +2308,10 @@ function syncLayoutDraftsFromSeats() {
 
 .export-tips strong {
   color: #475569;
+}
+
+.seat-chart-file-input {
+  display: none;
 }
 
 @media (max-width: 760px) {

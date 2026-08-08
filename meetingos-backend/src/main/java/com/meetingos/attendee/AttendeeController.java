@@ -74,10 +74,11 @@ public class AttendeeController {
                                                               @RequestParam(required = false) CheckinStatus checkinStatus,
                                                               @RequestParam(required = false) AttendeeType attendeeType,
                                                               @RequestParam(required = false) Boolean hasSeat,
+                                                              @RequestParam(required = false) Boolean unregistered,
                                                               @RequestParam(required = false) String tags,
                                                               @RequestParam(defaultValue = "0") int page,
                                                               @RequestParam(defaultValue = "20") int size) {
-        PageResponse<Attendee> result = attendeeService.search(meetingId, keyword, reviewStatus, checkinStatus, attendeeType, hasSeat, tags, page, size);
+        PageResponse<Attendee> result = attendeeService.search(meetingId, keyword, reviewStatus, checkinStatus, attendeeType, hasSeat, unregistered, tags, page, size);
         boolean masked = systemSettingsService.maskSensitiveEnabled();
         /*
          * 参会人列表只展示当前页数据。这里先取当前页 attendeeId，再批量读取当前页需要的
@@ -151,6 +152,14 @@ public class AttendeeController {
     @AuditLog(action = "ATTENDEE_UPDATE", targetType = "ATTENDEE")
     public ApiResponse<AttendeeResponse> update(@PathVariable Long id, @Valid @RequestBody AttendeeRequest request) {
         return ApiResponse.ok(AttendeeResponse.raw(attendeeService.update(id, request)));
+    }
+
+    @PutMapping("/{id}/unregistered-profile")
+    @PreAuthorize("@meetingAccess.canManageAttendee(#id)")
+    @AuditLog(action = "ATTENDEE_UPDATE", targetType = "ATTENDEE")
+    public ApiResponse<AttendeeResponse> updateUnregisteredProfile(@PathVariable Long id,
+                                                                    @Valid @RequestBody UnregisteredAttendeeProfileRequest request) {
+        return ApiResponse.ok(AttendeeResponse.raw(attendeeService.updateUnregisteredProfile(id, request)));
     }
 
     @PutMapping("/{id}/review")

@@ -34,8 +34,16 @@ public class Attendee extends BaseEntity {
     @Column(nullable = false, length = 120)
     private String name;
 
-    @Column(nullable = false, length = 40)
+    @Column(length = 40)
     private String phone;
+
+    /**
+     * 现场未报名但由座位管理人工录入的参会人。
+     *
+     * 这类记录是可查询、可签到的真实参会人，但不代表 TDuck 报名数据，座位图据此使用独立颜色。
+     */
+    @Column(nullable = false)
+    private boolean unregistered;
 
     @Column(length = 160)
     private String organization;
@@ -129,6 +137,14 @@ public class Attendee extends BaseEntity {
 
     public void setPhone(String phone) {
         this.phone = phone;
+    }
+
+    public boolean isUnregistered() {
+        return unregistered;
+    }
+
+    public void setUnregistered(boolean unregistered) {
+        this.unregistered = unregistered;
     }
 
     public String getOrganization() {

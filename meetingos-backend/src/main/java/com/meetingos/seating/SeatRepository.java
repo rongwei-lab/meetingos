@@ -33,6 +33,8 @@ public interface SeatRepository extends JpaRepository<Seat, Long> {
                    coalesce(sum(case when seat.disabled = true then 1 else 0 end), 0)
             from Seat seat
             where seat.meeting.id = :meetingId
+              and seat.structuralBlank = false
+              and seat.aisle = false
             """)
     List<Object[]> countOverviewByMeetingId(@Param("meetingId") Long meetingId);
 

@@ -9,6 +9,7 @@ public record AdminQueryCandidate(
         String organization,
         String title,
         ReviewStatus reviewStatus,
+        boolean unregistered,
         String seatLabel,
         String roomNo,
         String roomRemark
