@@ -1,6 +1,10 @@
 <template>
   <div>
-    <page-header title="参会人管理">
+    <page-header title="参会人管理" class="attendee-page-header">
+      <n-button type="primary" :disabled="attendeePageLoading || !routeMeetingId" @click="createAttendeeModalVisible = true">
+        <template #icon><n-icon :component="AddOutline" /></template>
+        新增参会人
+      </n-button>
       <n-button
         :loading="batchAuditingStatus === 'APPROVED'"
         :disabled="batchAuditingStatus !== null || !canBatchAuditTo('APPROVED')"
@@ -23,6 +27,7 @@
       </n-button>
       <n-button secondary @click="openNameplatePrint">打印席签</n-button>
       <n-upload
+        class="attendee-import-button"
         :show-file-list="false"
         accept=".xlsx"
         :disabled="importing"
@@ -30,7 +35,53 @@
       >
         <n-button type="primary" :loading="importing">导入参会人</n-button>
       </n-upload>
+      <n-popover
+        v-model:show="fieldVisibilityMenuVisible"
+        trigger="click"
+        placement="bottom-end"
+        :show-arrow="false"
+        raw
+      >
+        <template #trigger>
+          <n-button class="field-visibility-button" :aria-expanded="fieldVisibilityMenuVisible">
+            <template #icon><n-icon :component="SettingsOutline" /></template>
+            列设置
+          </n-button>
+        </template>
+        <div class="field-visibility-menu" role="group" aria-label="列设置">
+          <strong class="field-visibility-title">列设置</strong>
+          <n-input v-model:value="fieldVisibilityKeyword" size="small" placeholder="搜索字段" clearable />
+          <div class="field-visibility-meta">
+            <n-checkbox
+              :checked="allFieldsVisible"
+              :indeterminate="visibleFieldKeys.length > 0 && !allFieldsVisible"
+              @update:checked="toggleAllVisibleFields"
+            >
+              全选
+            </n-checkbox>
+            <span>已显示 {{ visibleFieldKeys.length }} / {{ fieldVisibilityOptions.length }}</span>
+          </div>
+          <div class="field-visibility-list">
+            <n-checkbox-group :value="visibleFieldKeys" @update:value="updateVisibleFields">
+              <n-checkbox
+                v-for="field in filteredFieldVisibilityOptions"
+                :key="field.value"
+                class="field-visibility-option"
+                :value="field.value"
+              >
+                {{ field.label }}
+              </n-checkbox>
+            </n-checkbox-group>
+            <n-empty v-if="!filteredFieldVisibilityOptions.length" size="small" description="没有匹配的字段" />
+          </div>
+          <div class="field-visibility-footer">
+            <n-button text size="small" @click="resetVisibleFields">恢复默认</n-button>
+          </div>
+        </div>
+      </n-popover>
     </page-header>
+
+    <create-attendee-modal v-model:show="createAttendeeModalVisible" :meeting-id="routeMeetingId" @created="handleAttendeeCreated" />
 
     <import-task-feedback
       v-if="importFeedbackVisible"
@@ -71,16 +122,6 @@
             :max-tag-count="1"
           />
         </div>
-        <n-select
-          v-model:value="visibleFieldKeys"
-          class="field-visibility-select"
-          :options="fieldVisibilityOptions"
-          placeholder="显示字段"
-          multiple
-          filterable
-          clearable
-          :max-tag-count="2"
-        />
       </div>
       <n-data-table
         v-if="!isMobile"
@@ -631,13 +672,14 @@
 
 <script setup lang="ts">
 import type { DataTableBaseColumn, DataTableColumnKey, SelectOption, UploadCustomRequestOptions } from "naive-ui";
-import { NButton, NDataTable, NDivider, NDynamicTags, NForm, NFormItem, NModal, NPagination, NSpace, NSwitch, NTag, NUpload, useDialog, useMessage } from "naive-ui";
-import { TimeOutline } from "@vicons/ionicons5";
+import { NButton, NCheckbox, NCheckboxGroup, NDataTable, NDivider, NDynamicTags, NForm, NFormItem, NModal, NPagination, NPopover, NSpace, NSwitch, NTag, NUpload, useDialog, useMessage } from "naive-ui";
+import { AddOutline, SettingsOutline, TimeOutline } from "@vicons/ionicons5";
 import { computed, defineAsyncComponent, h, nextTick, onBeforeUnmount, onMounted, ref, watch } from "vue";
 import { useRoute } from "vue-router";
 import { isRequestCanceled } from "@/api/http";
 import ImportTaskFeedback from "@/components/ImportTaskFeedback.vue";
 import ImportTaskHistoryModal from "@/components/ImportTaskHistoryModal.vue";
+import CreateAttendeeModal from "@/components/CreateAttendeeModal.vue";
 import PageHeader from "@/components/PageHeader.vue";
 import StatusTag from "@/components/StatusTag.vue";
 import { useExportTaskDownload } from "@/composables/useExportTaskDownload";
@@ -722,6 +764,8 @@ const unregisteredProfileForm = ref<UnregisteredAttendeeProfileInput>(emptyUnreg
 const savingUnregisteredProfile = ref(false);
 const fieldMappings = ref<TduckFieldMappingDto[]>([]);
 const visibleFieldKeys = ref<string[]>([]);
+const fieldVisibilityMenuVisible = ref(false);
+const fieldVisibilityKeyword = ref("");
 const detailVisible = ref(false);
 const detailAttendeeId = ref<string | null>(null);
 const detailSeatId = ref<string | null>(null);
@@ -734,6 +778,7 @@ const savingDinnerAssignment = ref(false);
 const auditingById = ref<Record<string, AuditStatus>>({});
 const batchAuditingStatus = ref<AuditStatus | null>(null);
 const attendeePageLoading = ref(false);
+const createAttendeeModalVisible = ref(false);
 const nameplateModalVisible = ref(false);
 const printingNameplates = ref(false);
 const nameplateSizeValue = ref("100x220");
@@ -1125,6 +1170,30 @@ const fieldVisibilityOptions = computed(() =>
   ]
 );
 
+const filteredFieldVisibilityOptions = computed(() => {
+  const query = fieldVisibilityKeyword.value.trim().toLocaleLowerCase();
+  return fieldVisibilityOptions.value.filter((field) => field.label.toLocaleLowerCase().includes(query));
+});
+
+const allFieldsVisible = computed(() =>
+  fieldVisibilityOptions.value.length > 0 && fieldVisibilityOptions.value.every((field) => visibleFieldKeys.value.includes(field.value))
+);
+
+function updateVisibleFields(values: Array<string | number>) {
+  visibleFieldKeys.value = values.map(String);
+}
+
+function toggleAllVisibleFields(checked: boolean) {
+  visibleFieldKeys.value = checked ? fieldVisibilityOptions.value.map((field) => field.value) : [];
+}
+
+function resetVisibleFields() {
+  visibleFieldKeys.value = [
+    ...defaultVisibleMappings(activeFormMappings.value).map(fieldKeyOf),
+    ...defaultSystemFieldKeys.value
+  ];
+}
+
 const formColumns = computed(() =>
   visibleFormMappings.value.map((mapping, index) => {
     const key = `form-${fieldKeyOf(mapping)}`;
@@ -1267,14 +1336,16 @@ const visibleSystemColumns = computed(() => {
   return systemColumnDefinitions.value.filter((column) => selectedKeys.has(systemFieldKey(column.key)));
 });
 
-const actionColumn = {
+const actionColumn = computed(() => ({
   title: "操作",
   key: "actions",
   /*
-   * Naive UI 的横向滚动表格不会用 minWidth 锁定列宽，字段较多时操作列会被压缩，
-   * 导致末尾“标签/备注/编辑资料”按钮溢出后无法点击。固定明确宽度并吸附右侧，确保所有操作始终可达。
+   * 保留明确宽度，避免横向滚动时按钮被挤压；
+   * 仅在列表包含未报名人员时，为额外的“编辑资料”操作预留空间。
    */
-  width: 392,
+  width: filteredAttendees.value.some((attendee) => attendee.unregistered) ? 324 : 256,
+  align: "right" as const,
+  titleAlign: "center" as const,
   fixed: "right" as const,
   render: (row: Attendee) =>
     h("div", actionCellProps(), [
@@ -1287,7 +1358,7 @@ const actionColumn = {
       h(NButton, { text: true, onClick: () => openTagEditor(row) }, { default: () => "标签" }),
       h(NButton, { text: true, onClick: () => openRemarkEditor(row) }, { default: () => "备注" })
     ])
-};
+}));
 
 const tableScrollX = computed(() => {
   const selectionWidth = 56;
@@ -1297,7 +1368,7 @@ const tableScrollX = computed(() => {
   );
   const systemWidth = visibleSystemColumns.value.reduce(
     (total, column) => total + attendeeColumnDisplayWidth(column.key, column.minWidth),
-    actionColumn.width
+    actionColumn.value.width
   );
   return formWidth + systemWidth;
 });
@@ -1306,7 +1377,7 @@ const columns = computed(() => [
   { type: "selection" as const, width: 56 },
   ...formColumns.value,
   ...visibleSystemColumns.value,
-  actionColumn
+  actionColumn.value
 ]);
 
 function isSystemFieldVisible(key: SystemColumnKey) {
@@ -1447,6 +1518,7 @@ watch(routeMeetingId, (meetingId, previousMeetingId) => {
   cancelAttendeeImport();
   cancelAttendeeExport();
   importHistoryVisible.value = false;
+  createAttendeeModalVisible.value = false;
   attendeeFilterGeneration += 1;
   if (attendeeFilterTimer !== null) {
     window.clearTimeout(attendeeFilterTimer);
@@ -1457,6 +1529,8 @@ watch(routeMeetingId, (meetingId, previousMeetingId) => {
   checkedKeys.value = [];
   fieldVisibilityInitialized = false;
   visibleFieldKeys.value = [];
+  fieldVisibilityMenuVisible.value = false;
+  fieldVisibilityKeyword.value = "";
   nameplateTemplateUrl.value = "";
   selectedNameplateFieldSettings.value = [defaultNameplateFieldSetting("name")];
   if (meetingId) void loadAttendeePageData();
@@ -1607,6 +1681,18 @@ function confirmReject(rows: Attendee[], onConfirm: () => void) {
 function auditRowsByIds(ids: string[]) {
   const selected = new Set(ids);
   return store.currentAttendees.filter((attendee) => selected.has(attendee.id));
+}
+
+function handleAttendeeCreated(attendee: Attendee) {
+  if (attendee.meetingId !== routeMeetingId.value) return;
+  // 新记录先进入本地列表，废弃新增前发出的搜索响应，避免它覆盖刚创建的参会人。
+  attendeeFilterGeneration += 1;
+  if (attendeeFilterTimer !== null) {
+    window.clearTimeout(attendeeFilterTimer);
+    attendeeFilterTimer = null;
+  }
+  store.cancelAttendeeSearch(attendee.meetingId);
+  invalidateRemoteAttendeeResults();
 }
 
 function invalidateRemoteAttendeeResults() {
@@ -3001,6 +3087,10 @@ function reconcileVisibleFields(mappings: TduckFieldMappingDto[]) {
 </script>
 
 <style scoped>
+.attendee-page-header :deep(.page-actions) {
+  flex-wrap: wrap;
+}
+
 .filters {
   display: flex;
   align-items: flex-start;
@@ -3017,8 +3107,70 @@ function reconcileVisibleFields(mappings: TduckFieldMappingDto[]) {
   gap: 12px;
 }
 
-.field-visibility-select {
-  flex: 0 0 260px;
+.field-visibility-button {
+  flex: 0 0 auto;
+}
+
+.attendee-import-button {
+  width: auto;
+  flex: 0 0 auto;
+}
+
+.field-visibility-menu {
+  width: min(288px, calc(100vw - 32px));
+  padding: 14px;
+  display: grid;
+  gap: 12px;
+  border: 1px solid var(--border-color);
+  border-radius: 8px;
+  background: var(--surface-bg);
+  box-shadow: 0 14px 36px rgba(15, 23, 42, 0.14);
+}
+
+.field-visibility-title {
+  color: var(--text-primary);
+  font-size: 14px;
+}
+
+.field-visibility-meta {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.field-visibility-meta > span {
+  color: var(--text-secondary);
+  font-size: 12px;
+}
+
+.field-visibility-list {
+  max-height: min(360px, 50vh);
+  overflow-y: auto;
+  overscroll-behavior: contain;
+}
+
+.field-visibility-option {
+  width: 100%;
+  padding: 8px;
+  border-radius: 6px;
+}
+
+.field-visibility-option:hover {
+  background: var(--surface-muted);
+}
+
+.field-visibility-option :deep(.n-checkbox__label) {
+  min-width: 0;
+  white-space: normal;
+  overflow-wrap: anywhere;
+}
+
+.field-visibility-footer {
+  display: flex;
+  justify-content: flex-end;
+  padding-top: 10px;
+  border-top: 1px solid var(--border-color);
 }
 
 .tag-modal,
@@ -3428,12 +3580,6 @@ function reconcileVisibleFields(mappings: TduckFieldMappingDto[]) {
     grid-template-columns: minmax(220px, 1.2fr) repeat(3, minmax(140px, 0.7fr));
   }
 
-  .field-visibility-select {
-    width: min(320px, 100%);
-    flex-basis: auto;
-    align-self: flex-end;
-  }
-
   .nameplate-modal-body {
     grid-template-columns: 1fr;
   }
@@ -3449,9 +3595,8 @@ function reconcileVisibleFields(mappings: TduckFieldMappingDto[]) {
     grid-template-columns: 1fr;
   }
 
-  .field-visibility-select {
-    width: 100%;
-    flex-basis: auto;
+  .field-visibility-list {
+    max-height: min(280px, 35vh);
   }
 
   .nameplate-size-grid {

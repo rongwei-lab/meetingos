@@ -355,6 +355,19 @@ export interface CreateRoomPayload {
   status?: Room["status"];
 }
 
+export interface CreateAttendeePayload {
+  name: string;
+  phone: string;
+  organization?: string;
+  title?: string;
+  identityNo?: string;
+  email?: string;
+  attendeeType?: Attendee["attendeeType"];
+  accommodationRequired?: boolean;
+  tags?: string[];
+  remark?: string;
+}
+
 export interface DinnerAssignPayload {
   attendeeId: string;
   tableNo: string;
@@ -1908,6 +1921,45 @@ export const useMeetingStore = defineStore("meeting", {
       });
       workspaceLoadPromises.set(meetingId, promise);
       await promise;
+    },
+    async createAttendee(payload: CreateAttendeePayload, meetingId?: string) {
+      const targetMeetingId = requireMeetingId(meetingId || this.currentMeetingId);
+      const name = payload.name.trim();
+      const phone = normalizeLocalOptionalPhone(payload.phone);
+      const tags = normalizeTags(payload.tags || []).join(",");
+      if (!name) throw new Error("请填写姓名");
+      if (!phone) throw new Error("请填写手机号");
+      if (tags.length > 300) throw new Error("标签总长度不能超过 300 个字符");
+
+      let created: Attendee;
+      try {
+        const response = unwrapApi(await http.post<AttendeeDto>("/admin/attendees", {
+          meetingId: backendId(targetMeetingId),
+          name,
+          phone,
+          organization: payload.organization?.trim() || undefined,
+          title: payload.title?.trim() || undefined,
+          identityNo: payload.identityNo?.trim() || undefined,
+          email: payload.email?.trim() || undefined,
+          attendeeType: payload.attendeeType || "NORMAL",
+          accommodationRequired: payload.accommodationRequired ?? false,
+          tags: tags || undefined,
+          remark: payload.remark?.trim() || undefined
+        }));
+        created = mapAttendee(response, targetMeetingId);
+      } catch (error) {
+        throw new Error(extractErrorMessage(error, "新增参会人失败"));
+      }
+
+      /*
+       * 创建成功即使用服务端返回的数据更新列表，避免后续刷新失败被误报成创建失败，
+       * 导致管理员重复提交。请求期间切换会议时，不把旧会议的返回值放进当前列表。
+       */
+      if (this.currentMeetingId === targetMeetingId) {
+        this.attendees = [created, ...this.attendees.filter((attendee) => attendee.id !== created.id)];
+        this.refreshMeetingCounters();
+      }
+      return created;
     },
     async loadAttendees(meetingId?: string) {
       meetingId = requireMeetingId(meetingId || this.currentMeetingId);

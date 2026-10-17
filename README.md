@@ -63,6 +63,7 @@ cd deploy
 
 1. 部署 TDuck 后端和前端，推荐同域暴露为 `/tduck/` 与 `/tduck-api/`。
 2. 在 TDuck 后台创建报名表，确认表单发布页可访问 `/tduck/s/{formKey}`。
+   使用仓库提供的远程预检查时，TDuck 前端必须通过 `deploy/tduck-front/Dockerfile` 构建；执行 `TDUCK_FRONTEND_IMAGE=meetingos-tduck-front:1.0.0 ./deploy/scripts/build-tduck-images.sh` 会自动应用填写页补丁。
 3. 配置 MeetingOS 后端的 `TDUCK_ADMIN_EMAIL`、`TDUCK_ADMIN_PASSWORD`，容器部署时同时配置后端可访问的 `TDUCK_ADMIN_API_URL`。
 4. 在 MeetingOS「报名配置」中从 TDuck 表单下拉列表选择已发布表单；后端会保存前校验表单真实存在、已发布且字段可读。
 5. 报名 URL 由 MeetingOS 根据 `TDUCK_PUBLIC_URL + /s/{formKey}` 自动生成，不在前端手填。
@@ -102,6 +103,8 @@ TDuck 社区版若无法配置自定义请求头或 HMAC，可把 `MEETINGOS_WEB
 - 同一会议内默认以手机号做重复报名校验。
 - 保存 TDuck 原始 payload 快照和同步日志。
 - 必填缺失、字段映射缺失、手机号异常、重复报名等情况不直接丢弃，进入同步日志待人工处理。
+
+TDuck 填写页通过部署补丁调用 MeetingOS `/api/public/tduck/precheck-token` 和 `/api/public/tduck/phone-precheck` 做提交前手机号重复预检查；需在 TDuck 表单编辑器的手机号字段上开启“手机号重复预检查”。预检查调用同域 `/api` 路由，因此 TDuck 前端应按上述 Nginx 同域方式部署。预检查令牌只绑定当前 TDuck 表单和会议并短期有效；接口异常时不阻断正常报名，Webhook 同步与数据库唯一约束仍是最终校验。
 
 ## 字段映射
 

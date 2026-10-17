@@ -297,6 +297,323 @@ function assertWritePageAttributionPatch() {
   }
 }
 
+function patchWritePagePhonePrecheck() {
+  const file = "src/views/form/write/index.vue";
+  let source = fs.readFileSync(file, "utf8");
+
+  if (source.includes("markMeetingOsPrecheckFieldsReady()")) {
+    return;
+  }
+
+  const dataBefore =
+    "      formKey: '',\n" +
+    "      meetingOsAttributionToken: '',\n" +
+    "      writePassword: '',\n";
+  const dataAfter =
+    "      formKey: '',\n" +
+    "      meetingOsAttributionToken: '',\n" +
+    "      meetingOsPrecheckReady: null,\n" +
+    "      meetingOsPrecheck: {\n" +
+    "        enabled: false,\n" +
+    "        token: '',\n" +
+    "        phoneFieldKey: ''\n" +
+    "      },\n" +
+    "      meetingOsPrecheckFieldsReady: false,\n" +
+    "      writePassword: '',\n";
+  if (!source.includes(dataBefore)) {
+    throw new Error("TDuck write page precheck data shape changed");
+  }
+  source = source.replace(dataBefore, dataAfter);
+
+  const formBefore =
+    "      <biz-project-form v-if=\"formConfig.formKey\" ref=\"bizProjectForm\" :form-config=\"formConfig\" @submit=\"submitForm\" />";
+  const formAfter =
+    "      <biz-project-form v-if=\"formConfig.formKey\" ref=\"bizProjectForm\" :form-config=\"formConfig\" @submit=\"submitForm\" @completed=\"markMeetingOsPrecheckFieldsReady\" />";
+  if (!source.includes(formBefore)) {
+    throw new Error("TDuck write page precheck form component shape changed");
+  }
+  source = source.replace(formBefore, formAfter);
+
+  const createdBefore =
+    "    this.formKey = this.$route.query.key || this.$route.params.key\n" +
+    "    this.captureMeetingOsAttribution()\n";
+  const createdAfter =
+    "    this.formKey = this.$route.query.key || this.$route.params.key\n" +
+    "    this.captureMeetingOsAttribution()\n" +
+    "    this.meetingOsPrecheckReady = this.loadMeetingOsPrecheck()\n";
+  if (!source.includes(createdBefore)) {
+    throw new Error("TDuck write page precheck created shape changed");
+  }
+  source = source.replace(createdBefore, createdAfter);
+
+  const methodsBefore = "  methods: {\n";
+  const precheckMethods = String.raw`  methods: {
+    markMeetingOsPrecheckFieldsReady() {
+      this.meetingOsPrecheckFieldsReady = true
+    },
+    async loadMeetingOsPrecheck() {
+      this.meetingOsPrecheck = {
+        enabled: false,
+        token: '',
+        phoneFieldKey: ''
+      }
+      if (!this.formKey) {
+        return this.meetingOsPrecheck
+      }
+      const controller = typeof AbortController === 'function' ? new AbortController() : null
+      const timeoutId = setTimeout(() => {
+        if (controller) {
+          controller.abort()
+        }
+      }, 5000)
+      try {
+        const response = await fetch(
+          '/api/public/tduck/precheck-token?formKey=' + encodeURIComponent(this.formKey),
+          {
+            method: 'GET',
+            credentials: 'same-origin',
+            cache: 'no-store',
+            headers: { Accept: 'application/json' },
+            signal: controller ? controller.signal : undefined
+          }
+        )
+        if (!response.ok) {
+          return this.meetingOsPrecheck
+        }
+        const payload = await response.json()
+        const config = payload && payload.success === true ? payload.data : null
+        if (!config || config.enabled !== true || !config.token || !config.phoneFieldKey) {
+          return this.meetingOsPrecheck
+        }
+        this.meetingOsPrecheck = {
+          enabled: true,
+          token: String(config.token),
+          phoneFieldKey: String(config.phoneFieldKey)
+        }
+      } catch (error) {
+        // 预检查是提交前增强能力，接口异常时仍允许 TDuck 提交，由 MeetingOS Webhook 最终兜底。
+        console.warn('加载 MeetingOS 手机号重复校验失败:', error)
+      } finally {
+        clearTimeout(timeoutId)
+      }
+      return this.meetingOsPrecheck
+    },
+    async runMeetingOsPhonePrecheck(formModel, allowRefresh = true) {
+      if (this.meetingOsPrecheckReady) {
+        await this.meetingOsPrecheckReady
+      }
+      const config = this.meetingOsPrecheck || {}
+      if (!config.enabled || !config.token || !config.phoneFieldKey) {
+        return true
+      }
+      if (!this.isMeetingOsPhonePrecheckEnabled(config.phoneFieldKey)) {
+        return true
+      }
+      const phone = this.readMeetingOsPhone(formModel, config.phoneFieldKey)
+      // 手机号为空时交给 TDuck 原有的“必填”校验处理，避免重复提示。
+      if (!phone) {
+        return true
+      }
+      const controller = typeof AbortController === 'function' ? new AbortController() : null
+      const timeoutId = setTimeout(() => {
+        if (controller) {
+          controller.abort()
+        }
+      }, 5000)
+      try {
+        const response = await fetch('/api/public/tduck/phone-precheck', {
+          method: 'POST',
+          credentials: 'same-origin',
+          cache: 'no-store',
+          headers: {
+            Accept: 'application/json',
+            'Content-Type': 'application/json'
+          },
+          signal: controller ? controller.signal : undefined,
+          body: JSON.stringify({
+            formKey: this.formKey,
+            token: config.token,
+            phone
+          })
+        })
+        const payload = await response.json().catch(() => null)
+        const result = payload && payload.success === true ? payload.data : null
+        if (result && result.available === false && result.code === 'DUPLICATE') {
+          this.$message.error(result.message || '该手机号已报名，请勿重复提交')
+          return false
+        }
+        if (result && result.available === false && result.code === 'INVALID_TOKEN' && allowRefresh) {
+          // 令牌过期时刷新一次配置；刷新失败则按可用放行，让 Webhook 继续兜底。
+          this.meetingOsPrecheckReady = this.loadMeetingOsPrecheck()
+          await this.meetingOsPrecheckReady
+          return this.runMeetingOsPhonePrecheck(formModel, false)
+        }
+        if (result && result.available === true) {
+          return true
+        }
+        // 网络抖动、服务暂时不可用或表单未完成映射时不阻断报名主流程。
+        return true
+      } catch (error) {
+        console.warn('MeetingOS 手机号重复校验失败:', error)
+        return true
+      } finally {
+        clearTimeout(timeoutId)
+      }
+    },
+    isMeetingOsPhonePrecheckEnabled(fieldKey) {
+      const form = this.$refs.bizProjectForm
+      const fields = form && form.formConf && Array.isArray(form.formConf.fields)
+        ? form.formConf.fields
+        : []
+      const field = this.findMeetingOsField(fields, fieldKey)
+      return Boolean(field && field.config && field.config.meetingOsPhonePrecheckEnabled === true)
+    },
+    findMeetingOsField(fields, fieldKey) {
+      for (const field of fields || []) {
+        const config = field && field.config ? field.config : {}
+        if (
+          String(field && field.vModel || '') === String(fieldKey) ||
+          String(field && field.formItemId || '') === String(fieldKey) ||
+          String(config.formId || '') === String(fieldKey)
+        ) {
+          return field
+        }
+        const child = this.findMeetingOsField(field && field.childList, fieldKey)
+        if (child) {
+          return child
+        }
+      }
+      return null
+    },
+    readMeetingOsPhone(formModel, fieldKey) {
+      if (!formModel || !fieldKey) {
+        return ''
+      }
+      const value = formModel[fieldKey]
+      if (value === null || value === undefined) {
+        return ''
+      }
+      if (typeof value === 'object') {
+        return String(value.value || value.label || '').trim()
+      }
+      return String(value).trim()
+    },
+`;
+  if (!source.includes(methodsBefore)) {
+    throw new Error("TDuck write page precheck methods shape changed");
+  }
+  source = source.replace(methodsBefore, precheckMethods);
+
+  const submitBefore = "    async submitForm(data) {\n";
+  const submitAfter =
+    "    async submitForm(data) {\n" +
+    "      if (!(await this.runMeetingOsPhonePrecheck(data.formModel))) {\n" +
+    "        return\n" +
+    "      }\n";
+  if (!source.includes(submitBefore)) {
+    throw new Error("TDuck write page precheck submit shape changed");
+  }
+  source = source.replace(submitBefore, submitAfter);
+
+  fs.writeFileSync(file, source);
+}
+
+function assertWritePagePhonePrecheckPatch() {
+  const source = fs.readFileSync("src/views/form/write/index.vue", "utf8");
+  const requiredMarkers = [
+    "meetingOsPrecheckReady",
+    "markMeetingOsPrecheckFieldsReady()",
+    "isMeetingOsPhonePrecheckEnabled(fieldKey)",
+    "loadMeetingOsPrecheck()",
+    "'/api/public/tduck/precheck-token?formKey='",
+    "'/api/public/tduck/phone-precheck'",
+    "runMeetingOsPhonePrecheck(data.formModel)"
+  ];
+  for (const marker of requiredMarkers) {
+    if (!source.includes(marker)) {
+      throw new Error("TDuck phone precheck patch self-check failed: " + marker);
+    }
+  }
+}
+
+function patchFormGeneratorPhonePrecheckSetting() {
+  const file = "node_modules/tduck-form-generator/dist/TduckForm.common.js";
+  let source = fs.readFileSync(file, "utf8");
+
+  if (source.includes("meetingOsPhonePrecheckEnabled")) {
+    return;
+  }
+
+  const templateBefore =
+    "  })], 1) : _vm._e(), _vm.getComponent ? _c(_vm.getComponent, {";
+  const templateAfter = String.raw`  })], 1) : _vm._e(), _vm.isMeetingOsPhonePrecheckField ? _c('el-form-item', {
+    attrs: {
+      "label": "手机号重复预检查"
+    }
+  }, [_c('span', {
+    attrs: {
+      "slot": "label"
+    },
+    slot: "label"
+  }, [_vm._v(" 手机号重复预检查 "), _c('el-tooltip', {
+    staticClass: "item",
+    attrs: {
+      "content": "开启后，公开填写页会先向 MeetingOS 查询该手机号是否已报名；需先在 MeetingOS 完成表单绑定和手机号字段映射。",
+      "effect": "dark",
+      "placement": "top-start"
+    }
+  }, [_c('i', {
+    staticClass: "el-icon-question"
+  })])], 1), _c('el-switch', {
+    model: {
+      value: _vm.activeData.config.meetingOsPhonePrecheckEnabled,
+      callback: function callback($$$$v) {
+        _vm.$set(_vm.activeData.config, "meetingOsPhonePrecheckEnabled", $$$$v);
+      },
+      expression: "activeData.config.meetingOsPhonePrecheckEnabled"
+    }
+  })], 1) : _vm._e(), _vm.getComponent ? _c(_vm.getComponent, {`;
+  if (!source.includes(templateBefore)) {
+    throw new Error("TDuck form generator precheck setting template shape changed");
+  }
+  source = source.replace(templateBefore, templateAfter);
+
+  const computedBefore =
+    "      return prefix + lodash_default.a.lowerCase(typeId).replaceAll(' ', '-');\n" +
+    "    }\n" +
+    "  },\n" +
+    "  watch: {\n";
+  const computedAfter =
+    "      return prefix + lodash_default.a.lowerCase(typeId).replaceAll(' ', '-');\n" +
+    "    },\n" +
+    "    isMeetingOsPhonePrecheckField: function isMeetingOsPhonePrecheckField() {\n" +
+    "      var config = this.activeData && this.activeData.config;\n" +
+    "      return this.activeData && this.activeData.typeId === 'INPUT' && config && config.dataType && config.dataType.type === 'phone';\n" +
+    "    }\n" +
+    "  },\n" +
+    "  watch: {\n";
+  if (!source.includes(computedBefore)) {
+    throw new Error("TDuck form generator precheck setting computed shape changed");
+  }
+  source = source.replace(computedBefore, computedAfter);
+
+  fs.writeFileSync(file, source);
+}
+
+function assertFormGeneratorPhonePrecheckSettingPatch() {
+  const source = fs.readFileSync("node_modules/tduck-form-generator/dist/TduckForm.common.js", "utf8");
+  const requiredMarkers = [
+    "手机号重复预检查",
+    "meetingOsPhonePrecheckEnabled",
+    "isMeetingOsPhonePrecheckField"
+  ];
+  for (const marker of requiredMarkers) {
+    if (!source.includes(marker)) {
+      throw new Error("TDuck form generator precheck setting patch self-check failed: " + marker);
+    }
+  }
+}
+
 function patchHomeFooterCopyright() {
   const file = "src/views/home/index.vue";
   let source = fs.readFileSync(file, "utf8");
@@ -918,6 +1235,10 @@ patchProjectMyAiCreate();
 patchWritePageSupportText();
 patchWritePageAttribution();
 assertWritePageAttributionPatch();
+patchWritePagePhonePrecheck();
+assertWritePagePhonePrecheckPatch();
+patchFormGeneratorPhonePrecheckSetting();
+assertFormGeneratorPhonePrecheckSettingPatch();
 patchHomeFooterCopyright();
 patchHomeSystemNameBranding();
 patchFormSystemNameBranding();

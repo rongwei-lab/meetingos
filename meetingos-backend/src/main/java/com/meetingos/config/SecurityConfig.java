@@ -35,7 +35,12 @@ public class SecurityConfig {
                         .requestMatchers(HttpMethod.GET, "/uploads/images/**").permitAll()
                         // 公开入口常被监控、curl -I 或链接预览用 HEAD 探测；权限应与 GET 保持一致。
                         .requestMatchers(HttpMethod.HEAD, "/uploads/images/**", "/r/**", "/api/public/**").permitAll()
-                        .requestMatchers(HttpMethod.POST, "/api/tduck/webhook", "/api/public/tduck/webhook", "/api/integrations/tduck/webhook").permitAll()
+                        .requestMatchers(HttpMethod.POST,
+                                "/api/tduck/webhook",
+                                "/api/public/tduck/webhook",
+                                "/api/integrations/tduck/webhook",
+                                "/api/public/tduck/phone-precheck"
+                        ).permitAll()
                         .requestMatchers(HttpMethod.POST, "/api/public/invitations/**").permitAll()
                         .requestMatchers(
                                 HttpMethod.POST,
