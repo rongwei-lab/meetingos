@@ -121,6 +121,18 @@
             clearable
             :max-tag-count="1"
           />
+          <n-date-picker
+            v-model:value="registrationTimeRange"
+            class="registration-time-filter"
+            type="datetimerange"
+            format="yyyy-MM-dd HH:mm:ss"
+            :default-time="['00:00:00', '23:59:59']"
+            start-placeholder="报名开始时间"
+            end-placeholder="报名结束时间"
+            separator="至"
+            aria-label="报名时间范围"
+            clearable
+          />
         </div>
       </div>
       <n-data-table
@@ -155,6 +167,10 @@
             <div class="mobile-field">
               <span>类型</span>
               <strong>{{ attendeeTypeLabel(attendee.attendeeType) }}</strong>
+            </div>
+            <div v-if="isSystemFieldVisible('registeredAt')" class="mobile-field">
+              <span>报名时间</span>
+              <strong>{{ formatDateTimeLabel(attendee.registeredAt) }}</strong>
             </div>
             <div v-if="isSystemFieldVisible('unregistered')" class="mobile-field">
               <span>记录来源</span>
@@ -672,7 +688,7 @@
 
 <script setup lang="ts">
 import type { DataTableBaseColumn, DataTableColumnKey, SelectOption, UploadCustomRequestOptions } from "naive-ui";
-import { NButton, NCheckbox, NCheckboxGroup, NDataTable, NDivider, NDynamicTags, NForm, NFormItem, NModal, NPagination, NPopover, NSpace, NSwitch, NTag, NUpload, useDialog, useMessage } from "naive-ui";
+import { NButton, NCheckbox, NCheckboxGroup, NDataTable, NDatePicker, NDivider, NDynamicTags, NForm, NFormItem, NModal, NPagination, NPopover, NSpace, NSwitch, NTag, NUpload, useDialog, useMessage } from "naive-ui";
 import { AddOutline, SettingsOutline, TimeOutline } from "@vicons/ionicons5";
 import { computed, defineAsyncComponent, h, nextTick, onBeforeUnmount, onMounted, ref, watch } from "vue";
 import { useRoute } from "vue-router";
@@ -690,6 +706,7 @@ import { useIsMobile } from "@/composables/useResponsive";
 import type { MeetingPrintFieldSettingsDto, TduckFieldMappingDto, UnregisteredAttendeeProfileInput } from "@/stores/meeting";
 import { useMeetingStore } from "@/stores/meeting";
 import { attendeeFieldLabel, normalizedAttendeeFieldText } from "@/utils/attendeeFields";
+import { isRegistrationTimeInRange } from "@/utils/attendeeFilters";
 import { attendeeTypeLabel, formatDateLikeValue, formatDateTimeLabel, seatTypeLabel } from "@/utils/meetingDisplay";
 import { PAGINATION_PAGE_SIZES, paginationSummary } from "@/utils/pagination";
 import { isAllowedUploadImage, sanitizeImageUrl } from "@/utils/safeUrl";
@@ -707,6 +724,7 @@ const auditStatus = ref<AuditStatus | null>(null);
 const hasSeat = ref<boolean | null>(null);
 const unregistered = ref<boolean | null>(null);
 const selectedTags = ref<string[]>([]);
+const registrationTimeRange = ref<[number, number] | null>(null);
 const remoteFilteredAttendees = ref<Attendee[] | null>(null);
 const checkedKeys = ref<string[]>([]);
 const attendeeTableColumnWidths = ref<Record<string, number>>({});
@@ -818,6 +836,7 @@ const attendeeSourceOptions = [
 ];
 
 type SystemColumnKey =
+  | "registeredAt"
   | "tags"
   | "auditStatus"
   | "unregistered"
@@ -932,7 +951,11 @@ const localFilteredAttendees = computed(() =>
   })
 );
 
-const filteredAttendees = computed(() => remoteFilteredAttendees.value || localFilteredAttendees.value);
+const filteredAttendees = computed(() => {
+  const attendees = remoteFilteredAttendees.value || localFilteredAttendees.value;
+  if (!registrationTimeRange.value) return attendees;
+  return attendees.filter((attendee) => isRegistrationTimeInRange(attendee.registeredAt, registrationTimeRange.value));
+});
 const {
   page: mobileAttendeePage,
   pageSize: mobileAttendeePageSize,
@@ -941,7 +964,7 @@ const {
 } = useClientPagination(
   filteredAttendees,
   20,
-  computed(() => [routeMeetingId.value, keyword.value, auditStatus.value, hasSeat.value, unregistered.value, selectedTags.value.join("|")])
+  computed(() => [routeMeetingId.value, keyword.value, auditStatus.value, hasSeat.value, unregistered.value, selectedTags.value.join("|"), registrationTimeRange.value?.join("|")])
 );
 
 const defaultNameplateSizePreset = nameplateSizePresets.find((size) => size.value === "100x220") || nameplateSizePresets[0];
@@ -1228,6 +1251,16 @@ const formColumns = computed(() =>
 );
 
 const systemColumnDefinitions = computed(() => [
+  {
+    title: "报名时间",
+    key: "registeredAt" as const,
+    minWidth: 180,
+    maxWidth: MAX_PERSISTED_TABLE_COLUMN_WIDTH,
+    width: storedAttendeeColumnWidth("registeredAt", 180),
+    resizable: true,
+    sorter: (left: Attendee, right: Attendee) => compareAttendeeText(left.registeredAt, right.registeredAt),
+    render: (row: Attendee) => formatDateTimeLabel(row.registeredAt)
+  },
   {
     title: "标签",
     key: "tags" as const,
@@ -3107,6 +3140,12 @@ function reconcileVisibleFields(mappings: TduckFieldMappingDto[]) {
   gap: 12px;
 }
 
+.registration-time-filter {
+  width: 100%;
+  min-width: 0;
+  grid-column: span 2;
+}
+
 .field-visibility-button {
   flex: 0 0 auto;
 }
@@ -3593,6 +3632,10 @@ function reconcileVisibleFields(mappings: TduckFieldMappingDto[]) {
   .filter-main {
     width: 100%;
     grid-template-columns: 1fr;
+  }
+
+  .registration-time-filter {
+    grid-column: auto;
   }
 
   .field-visibility-list {

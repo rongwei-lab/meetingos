@@ -55,13 +55,14 @@ class AttendeeExportDataTest {
         assertThat(row).hasSameSizeAs(headers);
         assertThat(headers).containsExactly(
                 "姓名", "联系电话", "自定义字段",
-                "标签", "审核", "座位", "房间", "座位查询", "住宿查询", "签到", "参会人备注"
+                "报名时间", "标签", "审核", "座位", "房间", "座位查询", "住宿查询", "签到", "参会人备注"
         );
         assertThat(values)
                 .containsEntry("姓名", "张三")
                 .containsEntry("联系电话", "13900001234")
                 .containsEntry("自定义字段", "展示值");
         assertThat(values)
+                .containsEntry("报名时间", now)
                 .containsEntry("标签", "嘉宾,重点接待")
                 .containsEntry("审核", ReviewStatus.APPROVED)
                 .containsEntry("座位", "A区 3排8座")
@@ -97,6 +98,23 @@ class AttendeeExportDataTest {
         assertThat(String.valueOf(values.get("联系电话"))).contains("****");
         assertThat(String.valueOf(values.get("证件号"))).contains("****");
         assertThat(String.valueOf(values.get("邮箱"))).contains("***");
+        assertThat(values.get("报名时间")).isEqualTo(attendee.getRegisteredAt());
+    }
+
+    @Test
+    void leavesRegistrationTimeEmptyForUnregisteredAttendees() {
+        Attendee attendee = attendee(new Meeting(), LocalDateTime.of(2026, 11, 7, 10, 0));
+        attendee.setUnregistered(true);
+        attendee.setRegisteredAt(null);
+        var related = new AttendeeExportData.RelatedData(null, false, false);
+
+        for (boolean masked : List.of(false, true)) {
+            List<String> headers = AttendeeExportData.headers(List.of());
+            List<Object> row = AttendeeExportData.row(attendee, related, List.of(), masked);
+
+            assertThat(row).hasSameSizeAs(headers);
+            assertThat(valuesByHeader(headers, row)).containsEntry("报名时间", "");
+        }
     }
 
     private Attendee attendee(Meeting meeting, LocalDateTime now) {

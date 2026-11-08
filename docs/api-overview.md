@@ -50,9 +50,17 @@
 | `GET` | `/api/admin/tduck/sync/pull/tasks/{taskId}?meetingId={meetingId}` | 查询全量拉取同步任务进度和有限失败样例 |
 | `GET` | `/api/public/tduck/precheck-token?formKey={formKey}` | TDuck 填写页获取绑定会议的短期手机号预检查令牌和字段 key |
 | `POST` | `/api/public/tduck/phone-precheck` | TDuck 提交前检查手机号是否已在当前会议报名 |
+| `GET` | `/api/public/tduck/organization-lookup-token?formKey={formKey}` | 已绑定且开放报名、单位字段已启用联想的表单获取 10 分钟查询令牌 |
+| `POST` | `/api/public/tduck/organization-suggestions` | 请求 `formKey`、`token`、`word`，返回单位名称候选，不修改其他字段 |
 | `POST` | `/api/integrations/tduck/webhook` | 接收 TDuck Webhook |
 
 TDuck 填写页在加载时可调用 `GET /api/public/tduck/precheck-token?formKey={formKey}` 获取绑定会议的短期预检查令牌和手机号字段 key；提交前调用 `POST /api/public/tduck/phone-precheck`，请求体为 `formKey`、`token` 和 `phone`。部署补丁构建的 TDuck 表单编辑器提供手机号重复预检查开关，仅开启该开关的字段会触发提交前检查。令牌有效期 10 分钟，接口禁用缓存，只返回 `AVAILABLE`、`DUPLICATE` 等状态，不返回参会人资料，并按公开接口限流。预检查失败时 TDuck 前端会放行提交，最终唯一性仍由 Webhook 同步事务和 `meeting_id + phone` 唯一约束保证。
+
+单位名称联想由 TDuck 单行文本的“格式校验 → 单位名称”和“启用天眼查单位联想”开关控制，默认关闭。
+输入至少 3 字并停顿 500ms 后查询，只取上游第一页、最多展示 10 个名称相关候选；只回填当前单位名称字符串，单位类型、所在地和其他字段保持原样。
+候选列表仅显示单位名称，不展示省份、经营状态；无匹配结果时不显示额外提示文字。
+字段配置随原有 `scheme.config` 保存，不新增强制匹配校验；查询无结果、未配置 Token、限流或接口失败时允许手工填写与提交。
+供应商 Token 仅在后端使用，前端只持有绑定表单和会议的短期令牌；两个接口均禁止 HTTP 缓存，不持久缓存上游结果。
 
 Webhook 优先校验基于原始 body 的 `X-TDuck-Signature`，兼容 `X-MeetingOS-Webhook-Token` 和仅内网 fallback 的 query token。校验失败不应返回具体密钥错误细节。
 `form_data_delete` 以及删除/撤回类事件会按 `formKey + dataId` 定位原参会人并自动置为 `CANCELLED`，保留参会人记录和同步日志用于审计，不做物理删除。

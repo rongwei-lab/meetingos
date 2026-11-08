@@ -7,7 +7,7 @@ RUN npm ci --legacy-peer-deps
 RUN npm install --no-save --legacy-peer-deps html-webpack-plugin@4.5.2
 
 COPY vendor/tduck-front/ .
-COPY deploy/tduck-front/patch-tduck-front.js /tmp/patch-tduck-front.js
+COPY deploy/tduck-front/*.js /tmp/
 
 # TDuck 官方前端生产配置默认挂根路径，MeetingOS 统一通过 /tduck/ 暴露。
 # 这里在镜像构建阶段做部署侧适配，避免修改 vendor/tduck-front 源码。

@@ -1,5 +1,7 @@
 package com.meetingos.tduck;
 
+import com.fasterxml.jackson.databind.JsonNode;
+import com.fasterxml.jackson.databind.ObjectMapper;
 import com.meetingos.security.TduckProperties;
 import com.meetingos.settings.SystemSettingsService;
 import org.springframework.http.MediaType;
@@ -147,6 +149,35 @@ public class TduckClient {
                 .map(this::toFieldOption)
                 .filter(field -> StringUtils.hasText(field.fieldKey()))
                 .toList();
+    }
+
+    public boolean organizationLookupEnabled(String formKey) {
+        Map<String, Object> response = withTokenRetry(token -> requestGet(apiUrl("/user/form/details/" + formKey), token));
+        Object data = unwrapTduckData(response);
+        if (!(data instanceof Map<?, ?> dataMap)) return false;
+        ObjectMapper mapper = new ObjectMapper();
+        return firstList(dataMap, "formItems", "items", "itemList", "formItemList", "components").stream()
+                .anyMatch(item -> containsOrganizationLookup(mapper.valueToTree(item), mapper, 0));
+    }
+
+    private boolean containsOrganizationLookup(JsonNode node, ObjectMapper mapper, int depth) {
+        if (node == null || depth > 30) return false;
+        if (node.isTextual()) {
+            // 不同 TDuck 版本会将 scheme 保存为对象或 JSON 字符串。
+            String text = node.asText().strip();
+            if (!text.startsWith("{")) return false;
+            try { return containsOrganizationLookup(mapper.readTree(text), mapper, depth + 1); }
+            catch (java.io.IOException exception) { return false; }
+        }
+        if (!node.isContainerNode()) return false;
+        JsonNode config = node.path("config");
+        if ("INPUT".equals(node.path("typeId").asText())
+                && "organization".equals(config.path("dataType").path("type").asText())
+                && config.path("meetingOsTianyanchaEnabled").asBoolean(false)) return true;
+        for (JsonNode child : node) {
+            if (containsOrganizationLookup(child, mapper, depth + 1)) return true;
+        }
+        return false;
     }
 
     public void configureWebhook(String formKey) {

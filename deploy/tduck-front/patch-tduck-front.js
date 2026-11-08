@@ -1,4 +1,5 @@
 const fs = require("fs");
+const { patchOrganizationField } = require("./patch-organization-field");
 
 function patchProjectMyAiCreate() {
   const file = "src/views/project/my/index.vue";
@@ -1239,6 +1240,7 @@ patchWritePagePhonePrecheck();
 assertWritePagePhonePrecheckPatch();
 patchFormGeneratorPhonePrecheckSetting();
 assertFormGeneratorPhonePrecheckSettingPatch();
+patchOrganizationField();
 patchHomeFooterCopyright();
 patchHomeSystemNameBranding();
 patchFormSystemNameBranding();

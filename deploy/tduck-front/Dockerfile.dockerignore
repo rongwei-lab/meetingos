@@ -1,0 +1,14 @@
+# TDuck 从仓库根目录构建，只传所需源码，防止本机依赖覆盖容器内安装结果。
+**
+!vendor/
+!vendor/tduck-front/
+!vendor/tduck-front/**
+!deploy/
+!deploy/tduck-front/
+!deploy/tduck-front/*.js
+**/node_modules
+**/.git
+**/dist
+**/coverage
+**/.env
+**/.env.*

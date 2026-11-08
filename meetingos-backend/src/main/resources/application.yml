@@ -63,6 +63,11 @@ meetingos:
     admin-password: "${TDUCK_ADMIN_PASSWORD:}"
     connect-timeout: ${TDUCK_CONNECT_TIMEOUT:3s}
     read-timeout: ${TDUCK_READ_TIMEOUT:10s}
+  tianyancha:
+    token: "${TIANYANCHA_TOKEN:}"
+    max-calls-per-day: ${TIANYANCHA_MAX_CALLS_PER_DAY:1000}
+    per-client-per-minute: ${TIANYANCHA_PER_CLIENT_PER_MINUTE:20}
+    timeout: ${TIANYANCHA_TIMEOUT:3s}
   public-query:
     rate-limit-per-minute: ${PUBLIC_QUERY_RATE_LIMIT_PER_MINUTE:30}
     captcha-enabled: ${PUBLIC_QUERY_CAPTCHA_ENABLED:false}

@@ -39,7 +39,8 @@ public class SecurityConfig {
                                 "/api/tduck/webhook",
                                 "/api/public/tduck/webhook",
                                 "/api/integrations/tduck/webhook",
-                                "/api/public/tduck/phone-precheck"
+                                "/api/public/tduck/phone-precheck",
+                                "/api/public/tduck/organization-suggestions"
                         ).permitAll()
                         .requestMatchers(HttpMethod.POST, "/api/public/invitations/**").permitAll()
                         .requestMatchers(

@@ -14,7 +14,7 @@ import java.util.Map;
 public final class AttendeeExportData {
 
     private static final List<String> SYSTEM_HEADERS = List.of(
-            "标签", "审核", "座位", "房间", "座位查询", "住宿查询", "签到", "参会人备注"
+            "报名时间", "标签", "审核", "座位", "房间", "座位查询", "住宿查询", "签到", "参会人备注"
     );
 
     private AttendeeExportData() {
@@ -43,6 +43,7 @@ public final class AttendeeExportData {
                     : value));
         }
         row.addAll(List.of(
+                nullable(attendee.getRegisteredAt()),
                 nullable(attendee.getTags()),
                 attendee.getReviewStatus(),
                 nullable(seatLabel(seat)),

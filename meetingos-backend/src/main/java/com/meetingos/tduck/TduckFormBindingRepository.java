@@ -12,6 +12,9 @@ public interface TduckFormBindingRepository extends JpaRepository<TduckFormBindi
 
     Optional<TduckFormBinding> findByFormKey(String formKey);
 
+    @Query("select b from TduckFormBinding b join fetch b.meeting where b.formKey = :formKey")
+    Optional<TduckFormBinding> findWithMeetingByFormKey(@Param("formKey") String formKey);
+
     @Query("select b.meeting.id from TduckFormBinding b where b.formKey = :formKey")
     Optional<Long> findMeetingIdByFormKey(@Param("formKey") String formKey);
 }

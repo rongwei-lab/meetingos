@@ -1324,6 +1324,7 @@ class MeetingOsServiceIntegrationTest {
     void exportTaskDownloadStillSupportsExplicitCsvContent() {
         Attendee attendee = attendeeRepository.findById(1L).orElseThrow();
         attendee.setRawDataSnapshot(tduckSnapshot(attendee));
+        attendee.setRegisteredAt(LocalDateTime.of(2026, 11, 7, 9, 30, 15, 123456000));
         attendeeRepository.saveAndFlush(attendee);
 
         ExportFile attendeeFile = exportTaskService.build(1L, "attendees", "csv", null, null);
@@ -1332,7 +1333,7 @@ class MeetingOsServiceIntegrationTest {
         String seatCsv = new String(seatFile.content(), StandardCharsets.UTF_8);
 
         assertThat(attendeeFile.filename()).isEqualTo("meetingos-attendees.csv");
-        assertThat(attendeeCsv).contains("姓名", "陈嘉宁", "****0001", "VIP", "已通过", "未签到");
+        assertThat(attendeeCsv).contains("姓名", "陈嘉宁", "****0001", "VIP", "已通过", "未签到", "报名时间", "2026-11-07 09:30:15");
         assertThat(attendeeCsv).doesNotContain("APPROVED", "NOT_CHECKED_IN");
         assertThat(attendeeCsv).doesNotContain("13800000001");
         assertThat(seatCsv).contains("座位码", "A区-1-1", "VIP", "嘉宾");
@@ -1343,6 +1344,7 @@ class MeetingOsServiceIntegrationTest {
     void exportTaskDownloadBuildsXlsxAndStatisticsContent() throws Exception {
         Attendee attendee = attendeeRepository.findById(1L).orElseThrow();
         attendee.setRawDataSnapshot(tduckSnapshot(attendee));
+        attendee.setRegisteredAt(LocalDateTime.of(2026, 11, 7, 9, 30, 15, 123456000));
         attendeeRepository.saveAndFlush(attendee);
 
         ExportFile attendeeXlsx = exportTaskService.build(1L, "attendees");
@@ -1360,7 +1362,7 @@ class MeetingOsServiceIntegrationTest {
             assertThat(sheetText(workbook.getSheetAt(0)))
                     .contains(
                             "姓名", "手机号", "单位", "职务", "参会类型", "陈嘉宁",
-                            "标签", "审核", "座位", "房间", "座位查询", "住宿查询", "签到", "参会人备注",
+                            "报名时间", "2026-11-07 09:30:15", "标签", "审核", "座位", "房间", "座位查询", "住宿查询", "签到", "参会人备注",
                             "已通过", "未签到"
                     )
                     .doesNotContain("会议ID", "会议编码", "晚宴桌号", "审核人", "签到时间");
@@ -1413,6 +1415,7 @@ class MeetingOsServiceIntegrationTest {
         attendee.setRawDataSnapshot(snapshot);
         attendee.setTags("重点接待");
         attendee.setRemark("参会人导出备注");
+        attendee.setRegisteredAt(LocalDateTime.of(2026, 11, 7, 9, 30, 15, 123456000));
         attendeeRepository.saveAndFlush(attendee);
         Long seatId = seatRepository.findByMeetingIdAndAreaNameOrderByRowNoAscSeatNoAsc(1L, "A区").get(0).getId();
         seatingService.manualAssign(new ManualAssignSeatRequest(attendee.getId(), seatId));
@@ -1468,7 +1471,7 @@ class MeetingOsServiceIntegrationTest {
             assertThat(sheetText(workbook.getSheet("参会名单")))
                     .contains(
                             "姓名", "手机号", "TDuck扩展值",
-                            "标签", "审核", "座位", "房间", "座位查询", "住宿查询", "签到", "参会人备注",
+                            "报名时间", "2026-11-07 09:30:15", "标签", "审核", "座位", "房间", "座位查询", "住宿查询", "签到", "参会人备注",
                             "重点接待", "已通过", "A区 1排1座", "1908", "已查询", "未签到", "参会人导出备注"
                     )
                     .doesNotContain("会议编码", "晚宴桌号", "酒店名称", "审核人", "签到时间");

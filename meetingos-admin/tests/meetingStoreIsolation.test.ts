@@ -2,6 +2,7 @@ import { createPinia, setActivePinia } from "pinia";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { http } from "../src/api/http";
 import { clearMeetingRuntimeCaches, useMeetingStore, type StatisticsOverviewDto } from "../src/stores/meeting";
+import { isRegistrationTimeInRange } from "../src/utils/attendeeFilters";
 import type { Attendee } from "../src/utils/types";
 
 function statistics(registrationCount: number): StatisticsOverviewDto {
@@ -148,6 +149,84 @@ describe("meeting store 会议隔离", () => {
       tags: "嘉宾"
     });
     expect(requestConfig.params).not.toHaveProperty("attendeeType");
+  });
+
+  it("搜索读取全部分页，时间筛选不会遗漏第 200 条之后的参会人", async () => {
+    const get = vi.spyOn(http, "get").mockImplementation(async (_url, config) => {
+      const page = Number(config?.params.page || 0);
+      const ids = page === 0 ? Array.from({ length: 200 }, (_, index) => index + 1) : [201, 202, 203];
+      return {
+        data: {
+          success: true,
+          code: "OK",
+          message: "success",
+          data: {
+            content: ids.map((id) => ({
+              id,
+              name: `张${id}`,
+              reviewStatus: "APPROVED",
+              registeredAt: id <= 200 ? "2026-09-14T23:10:02" : id === 203 ? "2026-09-16T00:00:00" : "2026-09-15T23:10:17.999999"
+            })),
+            page,
+            size: 200,
+            totalElements: 203,
+            totalPages: 2
+          }
+        }
+      } as never;
+    });
+    const store = useMeetingStore();
+    store.setCurrentMeetingId("1");
+
+    const result = await store.searchAttendees({ keyword: "张", auditStatus: "APPROVED", tags: ["嘉宾"] });
+    const range: [number, number] = [
+      new Date(2026, 8, 15, 0, 0, 0).getTime(),
+      new Date(2026, 8, 15, 23, 59, 59).getTime()
+    ];
+
+    expect(result).toHaveLength(203);
+    expect(result.filter((attendee) => isRegistrationTimeInRange(attendee.registeredAt, range)).map((attendee) => attendee.id))
+      .toEqual(["201", "202"]);
+    expect(get.mock.calls.map(([, config]) => config?.params.page)).toEqual([0, 1]);
+    for (const [, config] of get.mock.calls) {
+      expect(config?.params).toMatchObject({ meetingId: 1, keyword: "张", reviewStatus: "APPROVED", tags: "嘉宾", size: 200 });
+      expect(config?.signal).toBe(get.mock.calls[0]?.[1]?.signal);
+    }
+  });
+
+  it("取消分页搜索后，晚返回的页面不会写入会议缓存", async () => {
+    let completeSecondPage: (() => void) | undefined;
+    const response = (page: number) => ({
+      data: {
+        success: true,
+        code: "OK",
+        message: "success",
+        data: {
+          content: [{ id: page + 1, name: "旧搜索结果", reviewStatus: "APPROVED" }],
+          page,
+          size: 200,
+          totalElements: 2,
+          totalPages: 2
+        }
+      }
+    });
+    const get = vi.spyOn(http, "get").mockImplementation(async (_url, config) => {
+      if (config?.params.page === 0) return response(0) as never;
+      return new Promise((resolve) => {
+        completeSecondPage = () => resolve(response(1) as never);
+      });
+    });
+    const store = useMeetingStore();
+    store.setCurrentMeetingId("1");
+    const search = store.searchAttendees({ keyword: "旧" });
+    await vi.waitFor(() => expect(completeSecondPage).toBeDefined());
+
+    store.cancelAttendeeSearch("1");
+    completeSecondPage?.();
+
+    expect(await search).toEqual([]);
+    expect(get.mock.calls[0]?.[1]?.signal?.aborted).toBe(true);
+    expect(store.attendees).toEqual([]);
   });
 
   it("参会人分页请求限制并发并只缓存最近两个会议", async () => {

@@ -2019,7 +2019,7 @@ export const useMeetingStore = defineStore("meeting", {
       const keyword = filters.keyword?.trim();
       const tags = filters.tags?.filter(Boolean) || [];
       try {
-        const page = unwrapApi(
+        const loadPage = async (page: number) => unwrapApi(
           await http.get<PagePayload<AttendeeDto>>("/admin/attendees", {
             params: {
               meetingId: backendId(meetingId),
@@ -2028,14 +2028,19 @@ export const useMeetingStore = defineStore("meeting", {
               hasSeat: filters.hasSeat == null ? undefined : filters.hasSeat,
               unregistered: filters.unregistered == null ? undefined : filters.unregistered,
               tags: tags.length ? tags.join(",") : undefined,
-              page: 0,
+              page,
               size: ADMIN_PAGE_SIZE
             },
             signal: request.signal
           })
         );
+        const firstPage = await loadPage(0);
         if (!requestRuntime.requests.isCurrent(request)) return [] as Attendee[];
-        const mapped = page.content.map((item) => mapAttendee(item, meetingId));
+        // 页面在本地继续按报名时间筛选，必须读完搜索结果，避免遗漏后续分页中的参会人。
+        const remainingPages = Array.from({ length: Math.max(0, firstPage.totalPages - 1) }, (_, index) => index + 1);
+        const extraPages = await mapWithConcurrency(remainingPages, PAGE_LOAD_CONCURRENCY, loadPage);
+        if (!requestRuntime.requests.isCurrent(request)) return [] as Attendee[];
+        const mapped = [firstPage, ...extraPages].flatMap((page) => page.content.map((item) => mapAttendee(item, meetingId)));
         for (const attendee of mapped) {
           const index = this.attendees.findIndex((item) => item.id === attendee.id);
           if (index >= 0) this.attendees[index] = { ...this.attendees[index], ...attendee };

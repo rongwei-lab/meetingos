@@ -134,6 +134,17 @@ TDUCK_ADMIN_PASSWORD=your-password \
 
 ## TDuck 注意事项
 
+- 单位名称联想需重新构建 TDuck 前端和 MeetingOS 后端。在后端环境设置 `TIANYANCHA_TOKEN`，
+  并在已绑定会议的 TDuck 表单中，将目标单行文本的“格式校验”设为“单位名称”，开启“启用天眼查单位联想”后保存。
+  仅该字段显示候选并回填名称，不联动单位类型或所在地；未绑定、未开放报名或未配置 Token 时回退手工填写。
+  上游固定使用 HTTPS 的 816 搜索接口；实际权限、价格、IP 白名单和 HTTPS 可用性需通过已开通账号验证。
+- 联想默认每 IP 每分钟最多 20 次、单实例每秒最多 2 次、每天最多 1000 次上游请求尝试。
+  可通过 `TIANYANCHA_PER_CLIENT_PER_MINUTE`、`TIANYANCHA_MAX_CALLS_PER_DAY` 和 `TIANYANCHA_TIMEOUT` 调整，
+  额度用完仍可手填，不自动重试、翻页或缓存供应商数据。计数保存在进程内，按北京时间跨日重置；
+  重启会重置额度，多副本额度会叠加，严格账单上限应同时在供应商账户侧设置，或接入共享持久化计数。
+- 单位字段补丁测试：`node --test deploy/tduck-front/tests/organization-field.test.cjs`。
+  测试完整生成器适配需要准备 `vendor/tduck-front/node_modules`；部署构建会校验补丁结构，升级生成器时结构不兼容将停止构建。
+
 - TDuck 社区版默认管理员常见为 `admin@tduckcloud.com / 123456`，生产上线前必须修改。
 - MeetingOS 后端会使用 `TDUCK_ADMIN_EMAIL`、`TDUCK_ADMIN_PASSWORD` 登录 TDuck 拉取表单列表并做保存前校验；这两个变量只配置在后端环境里，不会暴露给前端。
 - `TDUCK_API_PUBLIC_URL` 是浏览器访问 TDuck API 的公开地址，`TDUCK_ADMIN_API_URL` 是 MeetingOS 后端访问 TDuck API 的内部地址。Docker Compose 本地部署时，公开地址通常是 `http://127.0.0.1/tduck-api`，内部地址应为 `http://tduck-backend:8999`，否则后端容器会把 `127.0.0.1` 解析到自己身上。

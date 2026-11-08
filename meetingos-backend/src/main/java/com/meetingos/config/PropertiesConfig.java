@@ -7,6 +7,7 @@ import com.meetingos.security.SecurityProperties;
 import com.meetingos.security.TduckProperties;
 import com.meetingos.invitation.InvitationProperties;
 import com.meetingos.operationlog.OperationLogRetentionProperties;
+import com.meetingos.tduck.TianyanchaProperties;
 import org.springframework.boot.context.properties.EnableConfigurationProperties;
 import org.springframework.context.annotation.Configuration;
 
@@ -14,6 +15,7 @@ import org.springframework.context.annotation.Configuration;
 @EnableConfigurationProperties({
         SecurityProperties.class,
         TduckProperties.class,
+        TianyanchaProperties.class,
         PublicQueryProperties.class,
         AppProperties.class,
         InvitationProperties.class,
